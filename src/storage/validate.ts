@@ -18,6 +18,7 @@ import type {
 import { SchemaError } from './errors'
 import { normaliseAnnotation } from '../model/annotations'
 import { DEFAULT_LABEL_SIZE } from '../model/groups'
+import { normaliseDisplay, storedDisplay } from '../model/display'
 
 type Obj = Record<string, unknown>
 
@@ -115,6 +116,12 @@ function validateImage(v: unknown, path: string): ImageRecord {
     str(src, 'fileId', `${path}.source`)
     optStr(src, 'version', `${path}.source`)
     optStr(src, 'md5Checksum', `${path}.source`)
+  }
+  // Display adjustment is a view setting: repaired leniently (defaults + clamping), never rejected.
+  if (o.display !== undefined) {
+    const display = storedDisplay(normaliseDisplay(o.display))
+    if (display) o.display = display
+    else delete o.display
   }
   return o as unknown as ImageRecord
 }

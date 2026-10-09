@@ -55,6 +55,34 @@ export interface ImageRecord {
    * The UI must warn before letting the user rely on existing coordinates.
    */
   sourceMismatch?: SourceMismatch
+  /**
+   * Display-only adjustment of how this image is shown in the viewport
+   * (model/display.ts). Never changes image bytes, coordinates, counts or
+   * detector input. Absent = unadjusted.
+   */
+  display?: ImageDisplayAdjust
+}
+
+/** Which colour information the viewport shows. `luma` = greyscale luminance (Rec. 709). */
+export type DisplayChannel = 'rgb' | 'red' | 'green' | 'blue' | 'luma'
+
+/**
+ * Display adjustment of one image (view setting, editor-owned, stored in project.json).
+ * Ranges and defaults: model/display.ts.
+ */
+export interface ImageDisplayAdjust {
+  /** -1..1; adds brightness/2 to the 0..1 value (0 = unchanged). */
+  brightness: number
+  /** -1..1; slope 2^(2·contrast) around mid-grey (0 = unchanged). */
+  contrast: number
+  /** 0.2..5; output = v^(1/gamma), > 1 brightens midtones (1 = unchanged). */
+  gamma: number
+  /** 0..3; 0 = grey, 1 = unchanged. Only applies to the `rgb` channel view. */
+  saturation: number
+  invert: boolean
+  channel: DisplayChannel
+  /** Stretch the 0.5 %–99.5 % percentiles of the displayed values to full range. */
+  autoContrast: boolean
 }
 
 export interface SourceMismatch {

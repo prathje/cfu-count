@@ -88,6 +88,7 @@ describe('archive round trip', () => {
     p.images[0].fingerprint = await sha256Hex(PNG_1x1)
     p.images[1].fingerprint = await sha256Hex(PNG_1x1)
     p.storage = { kind: 'drive', folderId: 'F', folderName: 'Folder', account: 'me@example.com' }
+    p.images[0].display = { brightness: 0.1, contrast: 0.35, gamma: 1.4, saturation: 1, invert: true, channel: 'luma', autoContrast: true }
     const docs = new Map([['i1', doc(p, 'i1', [annotation('a1', 'g1'), annotation('a2', 'g1', { origin: 'automated', reviewStatus: 'accepted', manuallyAdjusted: true, detector: { name: 'd', version: '1', runId: 'r', confidence: null } })])]])
     const zip = await encodeArchive({ project: p, annotations: docs, images: new Map([['i1', new Blob([PNG_1x1], { type: 'image/png' })]]) })
     const out = await decodeArchive(zip)
@@ -152,6 +153,18 @@ describe('archive round trip', () => {
 })
 
 describe('validateProject', () => {
+  it('normalises image display adjustments leniently and drops defaults', () => {
+    const p = JSON.parse(JSON.stringify(project()))
+    p.images[0].display = { brightness: 5, contrast: 0.2, gamma: 'x', saturation: 1, invert: true, channel: 'green', autoContrast: true }
+    p.images[1].display = { brightness: 0, contrast: 0, gamma: 1, saturation: 1, invert: false, channel: 'rgb', autoContrast: false }
+    const v = validateProject(p)
+    expect(v.images[0].display).toEqual({ brightness: 1, contrast: 0.2, gamma: 1, saturation: 1, invert: true, channel: 'green', autoContrast: true })
+    expect('display' in v.images[1]).toBe(false)
+    const q = JSON.parse(JSON.stringify(project()))
+    q.images[0].display = 'bright'
+    expect('display' in validateProject(q).images[0]).toBe(false)
+  })
+
   it('defaults a missing labelSize to 12', () => {
     const p = JSON.parse(JSON.stringify(project()))
     delete p.annotationGroups[0].labelSize
