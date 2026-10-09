@@ -338,6 +338,7 @@
   min-width: 0;
   /* Wrap to a second line rather than cut the hint off. */
   white-space: normal;
+  text-wrap: balance;
   display: -webkit-box;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
