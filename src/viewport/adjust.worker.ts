@@ -5,7 +5,7 @@
  * Protocol: adjust-protocol.ts. Replies `{ id, error }` when OffscreenCanvas 2D
  * is unavailable, so the caller can fall back to the main thread.
  */
-import { applyStage, stageHistogram } from './image-adjust'
+import { applyStage, finishStage, stageHistogram } from './image-adjust'
 import type { WorkerReply, WorkerRequest } from './adjust-protocol'
 
 interface WorkerScope {
@@ -32,6 +32,7 @@ scope.onmessage = (e) => {
       return
     }
     applyStage(image.data, req.stage, req.lut)
+    finishStage(image.data, canvas.width, canvas.height, req.stage)
     ctx.putImageData(image, 0, 0)
     const out = canvas.transferToImageBitmap()
     scope.postMessage({ id: req.id, bitmap: out }, [out])

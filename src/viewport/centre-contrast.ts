@@ -188,6 +188,37 @@ export function applyColourLut(data: Uint8ClampedArray, clut: ColourLut, lut1d: 
   }
 }
 
+/**
+ * 3×3 box blur of a grey RGBA image (reads R, writes R = G = B; alpha kept),
+ * edges clamped. Run after the colour LUT: the centre axis is only a few ΔE
+ * long, so JPEG noise would otherwise show as speckle. One pixel of reach fits
+ * inside the adjusted layer's tile padding, so tiles stay seamless.
+ */
+export function smoothGrey(data: Uint8ClampedArray, width: number, height: number): void {
+  if (width < 2 || height < 2) return
+  const row = new Uint16Array(width * height) // horizontal 3-sums
+  for (let y = 0; y < height; y++) {
+    const o = y * width
+    for (let x = 0; x < width; x++) {
+      const l = x > 0 ? x - 1 : 0
+      const r = x < width - 1 ? x + 1 : x
+      row[o + x] = data[(o + l) * 4] + data[(o + x) * 4] + data[(o + r) * 4]
+    }
+  }
+  for (let y = 0; y < height; y++) {
+    const up = (y > 0 ? y - 1 : 0) * width
+    const mid = y * width
+    const dn = (y < height - 1 ? y + 1 : y) * width
+    for (let x = 0; x < width; x++) {
+      const v = ((row[up + x] + row[mid + x] + row[dn + x]) * 7282 + 32768) >> 16 // ≈ /9, rounded
+      const i = (mid + x) * 4
+      data[i] = v
+      data[i + 1] = v
+      data[i + 2] = v
+    }
+  }
+}
+
 // ------------------------------------------------------------------ eyedropper
 
 /** Mean colour of the (2·radius+1)² patch around (cx, cy) in an RGBA buffer (clipped to it). */
@@ -224,7 +255,8 @@ export interface RimEstimate {
 /**
  * Estimate the rim colour of the colony whose centre (cx, cy) the user picked,
  * from an RGBA buffer around it. Along each of 32 rays, the colony edge is the
- * steepest rise of colour distance from the centre (smoothed); the median of
+ * first strong rise (a local peak at least half the ray's steepest) of colour
+ * distance from the centre (smoothed); the median of
  * those is the radius R, and the rim is the mean colour of the ring at
  * 0.65–0.85 R. When that ring barely differs from the centre (uniform
  * colonies), the rim is moved toward the background just outside R, so the
@@ -254,14 +286,20 @@ export function estimateRim(data: Uint8ClampedArray, width: number, height: numb
       return s / n
     })
     const gap = Math.max(2, w * 2)
+    const rise: number[] = []
+    for (let r = 0; r + gap < sm.length; r++) rise.push(r < 3 ? 0 : sm[r + gap] - sm[r])
+    let top = 0
+    for (const v of rise) top = Math.max(top, v)
+    // The FIRST strong edge: in a dense cluster the largest rise is often the
+    // cluster's outer edge, several colonies away.
     let best = 0
     let bestR = -1
-    for (let r = 3; r + gap < sm.length; r++) {
-      const rise = sm[r + gap] - sm[r]
-      if (rise > best) {
-        best = rise
-        bestR = r + gap / 2
-      }
+    for (let r = 3; r < rise.length; r++) {
+      if (rise[r] < Math.max(2, top * 0.5)) continue
+      if (r + 1 < rise.length && rise[r + 1] >= rise[r]) continue // climb to the local peak
+      best = rise[r]
+      bestR = r + gap / 2
+      break
     }
     if (bestR > 0 && best > 2) edges.push(bestR)
   }

@@ -13,6 +13,7 @@ import {
   lookupColour,
   patchMean,
   rgbToLab,
+  smoothGrey,
   type Rgb,
 } from './centre-contrast'
 
@@ -99,6 +100,20 @@ describe('colour LUT', () => {
   })
 })
 
+describe('smoothGrey', () => {
+  it('box-blurs the grey value with clamped edges, keeping flat areas and alpha', () => {
+    const w = 4
+    const h = 3
+    const data = new Uint8ClampedArray(w * h * 4)
+    for (let i = 0; i < w * h; i++) data.set([90, 0, 0, 77], i * 4)
+    data.set([180, 0, 0, 77], (1 * w + 1) * 4) // one bright pixel
+    smoothGrey(data, w, h)
+    expect(Array.from(data.slice((1 * w + 1) * 4, (1 * w + 1) * 4 + 4))).toEqual([100, 100, 100, 77]) // (8·90 + 180) / 9
+    expect(data[(1 * w + 3) * 4]).toBe(90) // out of reach
+    expect(data[0]).toBe(100) // corner: clamped neighbourhood still sees it once
+  })
+})
+
 /** RGBA buffer with a radial colony: centre colour → edge colour inside R, background outside. */
 function colony(w: number, R: number, centre: Rgb, edge: Rgb, bg: Rgb) {
   const data = new Uint8ClampedArray(w * w * 4)
@@ -128,6 +143,20 @@ describe('eyedropper', () => {
     expect(Math.abs(est.radius - 40)).toBeLessThanOrEqual(3)
     // Ring at 0.65..0.85 R: about 75 % of the way from centre to edge colour.
     close(est.rim, [155, 155, 142.5], 6)
+  })
+  it('takes the first edge in a dense cluster, not the cluster’s outer edge', () => {
+    const w = 240
+    const data = new Uint8ClampedArray(w * w * 4)
+    for (let y = 0; y < w; y++) {
+      for (let x = 0; x < w; x++) {
+        const d = Math.hypot(x - w / 2, y - w / 2)
+        // colony (R 30), a narrow dark gap, neighbours (similar colour) out to 90, then agar
+        const col = d <= 30 ? [150 - d, 150 - d, 140 - d] : d <= 36 ? [62, 62, 64] : d <= 90 ? [125, 125, 118] : [40, 40, 45]
+        data.set([...col, 255], (y * w + x) * 4)
+      }
+    }
+    const est = estimateRim(data, w, w, w / 2, w / 2, [150, 150, 140])!
+    expect(Math.abs(est.radius - 32)).toBeLessThanOrEqual(4)
   })
   it('points a uniform colony’s rim toward the background', () => {
     const { data, c } = colony(200, 40, [180, 170, 120], [180, 170, 120], [60, 60, 60])

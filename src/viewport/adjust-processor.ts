@@ -5,7 +5,7 @@
  * no canvas backing store kept alive), or a canvas where createImageBitmap is
  * missing.
  */
-import { applyStage, stageHistogram, type ColourStage } from './image-adjust'
+import { applyStage, finishStage, stageHistogram, type ColourStage } from './image-adjust'
 import type { WorkerReply, WorkerRequest } from './adjust-protocol'
 import type { ImageSourceLike } from './render'
 
@@ -103,6 +103,7 @@ export function createAdjustProcessor(): AdjustProcessor {
       applyStage(image.data, stage, lut, start, start + MAIN_CHUNK_PX)
       if (start + MAIN_CHUNK_PX < total) await nextTick()
     }
+    finishStage(image.data, rect.w, rect.h, stage)
     ctx.putImageData(image, 0, 0)
     if (typeof createImageBitmap !== 'function') return canvas
     try {

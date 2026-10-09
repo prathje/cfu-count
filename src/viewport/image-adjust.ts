@@ -9,7 +9,7 @@
  */
 import type { ImageDisplayAdjust } from '../model/types'
 import { centreKey, effectiveRim } from '../model/display'
-import { applyColourLut, buildCentreLut, lookupColour, type ColourLut } from './centre-contrast'
+import { applyColourLut, buildCentreLut, lookupColour, smoothGrey, type ColourLut } from './centre-contrast'
 
 /** Rec. 709 luma weights (applied to the encoded sRGB values: a display approximation). */
 export const LUMA = [0.2126, 0.7152, 0.0722] as const
@@ -58,6 +58,11 @@ export function colourStage(a: Pick<ImageDisplayAdjust, 'channel' | 'saturation'
 export function applyStage(data: Uint8ClampedArray, stage: ColourStage, lut: Uint8ClampedArray, start = 0, end = data.length >> 2): void {
   if (stage.kind === 'clut') applyColourLut(data, stage.clut, lut, start, end)
   else applyAdjust(data, stage.matrix, lut, start, end)
+}
+
+/** Whole-image finishing step after applyStage (needs neighbours, so not chunked): denoise the centre view. */
+export function finishStage(data: Uint8ClampedArray, width: number, height: number, stage: ColourStage): void {
+  if (stage.kind === 'clut') smoothGrey(data, width, height)
 }
 
 /** Histogram of a colour stage's output (see `histogram`). */
