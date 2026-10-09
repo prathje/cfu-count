@@ -10,12 +10,12 @@ the modules, the seams between them and how data flows.
 | Folder | Role | Depends on |
 | --- | --- | --- |
 | `src/model` | Data contract (`types.ts`, schema v1) and pure domain rules: edit policy (`policy.ts`), annotation ops, counts and the one `isConfirmed` (`annotations.ts`), groups (`groups.ts`), image order, documents and the storage-owned merge (`project.ts`), tools and their keys (`tool.ts`). No Solid, no I/O. | nothing |
-| `src/storage` | Persistence behind a framework-free contract (`api.ts`): IndexedDB working copy (`localStore.ts`), codecs (zip, CSV, validation, image decode), Google Drive (`drive/`: HTTP client, auth session, picker, pure sync engine `sync.ts`, per-project orchestration `projectSync.ts`, status + autosave scheduler). | model |
+| `src/storage` | Persistence behind a framework-free contract (`api.ts`): IndexedDB working copy (`localStore.ts`), local version history (`versionHistory.ts`, pure rules in `versions.ts`), codecs (zip, CSV, validation, image decode), Google Drive (`drive/`: HTTP client, auth session, picker, pure sync engine `sync.ts`, per-project orchestration `projectSync.ts`, status + autosave scheduler). | model |
 | `src/state` | The editor: one Solid store split into slices (`editor/`), debounced autosave, undo history, messages, repository choice. Adapts storage's `subscribe` to signals. | model, storage contract |
 | `src/detection` | Colony detector (pure TS) and its module Worker + typed client. Framework-free; imports model types only. | model (types) |
 | `src/state/assist` | Assisted counting ("Find similar"): pure review rules (`review.ts`: suggestion layer, derived pending view, accept plan), seed selection (`seeds.ts`) and the controller (`index.ts`) owning one detector client and the in-memory suggestion store. | model, detection contract, editor |
 | `src/viewport` | Canvas viewport: rendering, gestures, pen/touch policy, spatial index. A pure view: it reports intents (`onAdd`, `onErase`, `onBlocked`) and never edits data. | model |
-| `src/ui` | Containers (`AppShell`, `WorkspaceContainer`, `SidebarContainer`, `createProjectActions`) wire editor slices to presentational components (app bar, sidebar, toolbar, workspace, primitives). CSS lives next to each feature. | state, viewport, model |
+| `src/ui` | Containers (`AppShell`, `WorkspaceContainer`, `SidebarContainer`, `VersionHistoryContainer`, `createProjectActions`) wire editor slices to presentational components (app bar, sidebar, toolbar, workspace, primitives). CSS lives next to each feature. | state, viewport, model |
 | `src/demo` | In-memory demo repository + sample plates. Loaded with a dynamic import only for `?demoStorage` or when real storage cannot start, so it is a separate chunk. | model, storage codecs |
 
 `App.tsx` is the composition root: it chooses the repository, creates the editor,
@@ -45,6 +45,51 @@ never reloads the project, so edits made during the first upload survive.
 bytes, annotation documents or Drive files. `model/project.ts` (`displayOrder`,
 `imagesInGroup`, `activeImages`, `removedImages`) is the one place that hides
 removed images from lists, navigation, counts and the CSV.
+
+**Version history (local snapshots).** `session.history` (`VersionHistory` in
+`api.ts`) lists, creates, loads, restores and deletes versions of the open project:
+`project.json` plus every annotation document, never image bytes. The IndexedDB
+implementation (`storage/versionHistory.ts`) stores deflated JSON parts keyed by content
+hash (unchanged documents are shared between versions) and runs inside the repository
+lock, so a version requested before a save captures the state before it. Pure rules
+(counts, retention, quota relief, the restored working copy) are in `storage/versions.ts`;
+`storage/memoryHistory.ts` is the same contract in memory (demo repository, editor tests).
+A restore first stores a `before-restore` version, then writes the version with
+storage-owned fields kept and, when linked, marks everything pending for Drive. Quota
+errors remove the oldest automatic versions and retry; a version failure never changes
+the save status. Layout and retention: `docs/schema.md`.
+
+The editor's `versions` slice (`state/editor/versions.ts`) takes automatic versions (the
+state as opened, before the first change of a session; then every 10 minutes while there
+are changes), "Save version now", whole-project restore (reloads the project like taking
+the Drive version) and per-image restore (one undoable `applyBatch` on that image).
+
+**`editor.versions.beforeDestructive(label)` — the hook for destructive changes.** Call
+and await it right before any change that removes or replaces annotations in bulk, then
+apply the change:
+
+```ts
+const saved = await editor.versions.beforeDestructive('Before clearing “Colonies” in the selected region')
+if (!saved.ok && isBulk) { /* ask: refuse, or "… anyway" with an extra confirm */ }
+editor.annotations.applyBatch(imageId, ops, { label: 'Clear in region' })
+```
+
+- It flushes pending edits, then stores a `before-destructive` version of the saved
+  state labelled `label` ("Before …", shown in Version history and its list).
+- Edits are frozen (`state.busy`, blocking) while it runs; it usually takes well under
+  100 ms.
+- It never throws. It resolves `{ ok: true, version }` or `{ ok: false, reason }`
+  (`reason` is user-facing: storage full, local save failed, …).
+- The caller decides what a failure means. Changes that undo cannot fully reverse (clear
+  a group on all images, delete a group) are refused unless the user confirms "… anyway";
+  a one-image change that is one undo step may go ahead.
+- After a successful bulk change, mention it in the toast: `VERSION_SAVED_DETAIL`
+  ("A version was saved — restore it from Version history.") with a
+  `Version history` action (`actions.showVersionHistory`, `ui/projectActions.ts`).
+
+Wired today: clear a group (this image / all images), delete a group with annotations,
+take the Drive version. Accepting assisted batches is not destructive and takes no
+version. Importing a `.zip` always creates a new project, so it needs none.
 
 **Drive bookkeeping** (output file IDs and the md5 last read/written per file, for
 conflict checks) lives in the local `SyncState`, not in the model.
@@ -173,11 +218,11 @@ flowchart LR
 
 ## Operations that replace the project
 
-Opening another project, importing a `.zip`, opening a Drive folder and taking the
-Drive version first flush the autosaver. If that save fails the user is asked
+Opening another project, importing a `.zip`, opening a Drive folder, taking the
+Drive version and restoring a version first flush the autosaver. If that save fails the user is asked
 before anything is discarded. While such an operation runs, `state.busy.blocking`
 is set: edits are refused with a notice, the UI shows a scrim, and taking the Drive
-version also suspends the autosaver until the new state is loaded.
+version or restoring a version also suspends the autosaver until the new state is loaded.
 
 ## Testing
 

@@ -147,6 +147,18 @@ The product treats the entire Drive folder as the project, so `full` is the defa
 `drive.file` remains available as a least-privilege fallback (with an extra picker step)
 if restricted-scope verification is not feasible for a public deployment. Details and sources: `docs/research/google-drive.md`.
 
+## Version history and Drive revisions
+
+The app's **Version history** (project menu) is stored in the browser only: versions are
+not uploaded to Drive and do not follow the project to another computer. For a linked
+project, Google Drive additionally keeps revisions of each file the app overwrites
+(`project.json`, `summary.csv`, `annotations/<imageId>.json`). Open the file in Drive and
+choose *Manage versions* to download or restore one; Google keeps revisions of such files
+for a limited time (documented as 30 days or 100 revisions). Restoring a Drive revision
+changes the folder behind the app's back, so the next save from a browser reports a
+conflict and asks which copy to keep. Restoring Drive revisions from inside the app is a
+planned follow-up.
+
 ## Troubleshooting
 
 | Symptom | Likely cause |

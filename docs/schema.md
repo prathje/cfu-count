@@ -329,3 +329,39 @@ so no annotation is silently dropped. There is no per-image total column; sum
 Automated annotations with `reviewStatus = rejected` are not counted in any column.
 `origin` never changes when an automated mark is accepted, moved or regrouped, so the
 CSV and the JSON agree on manual versus automated counts.
+
+## Version history (browser only)
+
+Versions are **not** part of the folder or `.zip` layout. They live in this browser's
+IndexedDB next to the working copy (`src/storage/localStore.ts`, database version 2):
+
+| Store | Key | Value |
+| --- | --- | --- |
+| `versions` | `id` (index `byProject`) | metadata (`createdAt`, `reason`, `label`, counts per group, image count, compressed bytes added) plus the content key of `project.json` and of each annotation document |
+| `versionParts` | `[projectId, key]` | deflated UTF-8 JSON of one `project.json` (without `revision` / `updatedAt`) or one annotation document |
+
+`key` is a content hash of the JSON, so a document that did not change between versions
+is stored once per project; deleting a version deletes the parts no other version uses.
+A version never contains image bytes: images are only ever soft-deleted, and their
+bytes stay in the `blobs` store. Deleting a project from this browser deletes its
+versions too. Reasons: `session-start`, `periodic`, `manual`, `before-destructive`,
+`before-restore`. Retention: every version from the last 24 hours, then the newest per
+hour for 7 days, then the newest per day for 30 days, at most 200 per project; the newest
+3 and the most recent safety version (`before-destructive` / `before-restore`) younger
+than 7 days are always kept. Inside an hour or day bucket a safety version wins over a
+manual one, and a manual one over an automatic one.
+
+Restoring a version writes it as the working copy: editor-owned data (name, groups,
+images, annotations) comes from the version, storage-owned fields (`storage`,
+`revision`, image `source`) stay as they are, images added after the version are
+soft-deleted (with their documents kept), and images without a document in the version
+get an empty one. For a Drive-linked project every document and `project.json` are then
+pending, and the next save uploads them under the usual conflict rules.
+
+**Google Drive revisions.** Drive keeps its own revision history of every file the app
+overwrites (`project.json`, `summary.csv`, `annotations/<imageId>.json`), visible under
+*Manage versions* in Drive. Google keeps revisions of such non-Google-Docs files for a
+limited time (Google documents 30 days or 100 revisions, whichever comes first, unless a
+revision is marked *Keep forever*). This is a secondary safety net that also works across
+browsers; the app does not read or restore Drive revisions yet (follow-up).
+

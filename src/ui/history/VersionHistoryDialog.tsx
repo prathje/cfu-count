@@ -136,6 +136,7 @@ export function VersionHistoryDialog(props: VersionHistoryDialogProps) {
                                     <span class="vh-item__meta">
                                       <span class={`vh-tag vh-tag--${tag.tone}`}>{tag.text}</span>
                                       {plural(v.counts.annotations, 'annotation')} · {deltaText(v.counts.annotations, props.now.annotations)}
+                                      <Show when={v.counts.images !== props.now.images}> · {plural(v.counts.images, 'image')}</Show>
                                     </span>
                                   </span>
                                 </button>

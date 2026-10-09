@@ -295,7 +295,8 @@ export function createVersions(ctx: EditorContext, annotations: AnnotationComman
     commands,
     noteChange() {
       changedSinceVersion = true
-      if (sessionStarted) return
+      // A project without images has nothing worth restoring yet: wait for a later change.
+      if (sessionStarted || !state.project?.images.length) return
       sessionStarted = true
       auto('session-start')
     },
