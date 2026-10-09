@@ -15,22 +15,33 @@
  *   --methods <list>      fitter,watershed,log (default all)
  *   --sensitivity <0..1>  detector sensitivity (default 0.5)
  *   --only <names>        comma-separated substrings of image names
- *   --single-pass         skip the second pass at the seed-derived analysis scale
+ *   --single-pass         analyse at the preliminary scale only (no seed-derived scale, no plate crop)
  *   --target-r <px>       typical colony radius at analysis scale for the second pass (default 8)
  *   --weights k=v,...     fitter weight overrides (alpha, beta, gamma, lambda, wFP, huber)
  *   --no-overlays         skip overlay images
+ *   --rerun               also time a slider-like re-run (sensitivity + 0.1) on cached planes
+ *   --max-pixels <n>      explicit analysis pixel cap (default none, as in the app)
+ *   --suspect-crops       write crops of possible under-split clusters (fitter)
  *   --out <dir>           output directory (default .eval-out/<timestamp>)
+ *
+ * Runs through the real worker handler (src/detection/worker-core.ts) with a
+ * sharp decoder, so the analysis plan, plate crop, caches and re-run path are
+ * exactly what the app executes. Methods run in the order given; the first
+ * one pays for the preliminary pass and calibration, later ones reuse them.
  *
  * Writes report.json, report.md and overlay JPEGs. Never writes outside --out.
  */
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
-import { detect, chooseAnalysisScale } from '../../src/detection/index.ts'
-import type { DetectMethod, DetectResult, ExistingAnnotation, SeedInput } from '../../src/detection/types.ts'
+import sharp from 'sharp'
+import { chooseAnalysisScale, detect } from '../../src/detection/index.ts'
+import type { DetectRequest, FromWorker } from '../../src/detection/protocol.ts'
+import type { DetectMethod, DetectResult, ExistingAnnotation } from '../../src/detection/types.ts'
+import { createWorkerHandler, type Decoder } from '../../src/detection/worker-core.ts'
 import { parseArgs } from './args.ts'
-import { cropPatch, decodeAt, originalSize } from './decode.ts'
-import { findGt, loadGtZip, type GtImage } from './gt.ts'
-import { centreError, duplicateRate, matchPoints, perClusterCountError, prf, rng, sample, spread, type Pt } from './metrics.ts'
+import { decodeAt, originalSize } from './decode.ts'
+import { findGt, loadGtZip, sha256Hex, type GtImage } from './gt.ts'
+import { centreError, duplicateRate, matchPoints, perClusterCountError, prf, reviewShare, rng, sample, spread, underSplitSuspects, type Pt } from './metrics.ts'
 import { renderOverlay } from './overlay.ts'
 
 const args = parseArgs(process.argv.slice(2))
@@ -43,6 +54,8 @@ const jitter = Number(args['seed-jitter'] ?? 0)
 const resampleN = Number(args.resample ?? 0)
 const seedSpec = String(args.seeds ?? 'auto')
 const targetR = Number(args['target-r'] ?? 8)
+const rerun = !!args.rerun
+const maxPixels = args['max-pixels'] ? Number(args['max-pixels']) : undefined
 /** --weights beta=1,huber=2 (fitter tuning) */
 const fitWeights = args.weights ? Object.fromEntries(String(args.weights).split(',').map((kv) => [kv.split('=')[0], Number(kv.split('=')[1])])) : undefined
 mkdirSync(outDir, { recursive: true })
@@ -125,24 +138,71 @@ function jittered(p: Pt, rand: () => number): Pt {
   return { x: p.x + d * Math.cos(a), y: p.y + d * Math.sin(a) }
 }
 
-async function buildSeeds(it: Item, plan: SeedPlan, scale: number, rand: () => number): Promise<{ seeds: SeedInput[]; existing: ExistingAnnotation[] }> {
-  const seeds: SeedInput[] = []
+/** Node decoder with the browser decoder's contract (sharp/libvips; EXIF orientation applied first). */
+const nodeDecoder: Decoder = {
+  async decode(source, w, h, crop) {
+    const buf = Buffer.from(await (source as Blob).arrayBuffer())
+    let img = sharp(buf).rotate()
+    if (crop) img = img.extract({ left: Math.round(crop.x), top: Math.round(crop.y), width: Math.round(crop.w), height: Math.round(crop.h) })
+    const { data, info } = await img.resize(w, h, { kernel: 'linear', fit: 'fill' }).ensureAlpha().raw().toBuffer({ resolveWithObject: true })
+    return { width: info.width, height: info.height, data: new Uint8ClampedArray(data.buffer, data.byteOffset, data.length) }
+  },
+}
+
+/** One "worker" per image session: the real handler (plan, plate crop, caches) driven in-process. */
+function makeRunner(): (req: DetectRequest) => Promise<DetectResult> {
+  let out: FromWorker[] = []
+  const handle = createWorkerHandler(nodeDecoder, (m) => void out.push(m))
+  let id = 0
+  return async (req) => {
+    out = []
+    await handle({ type: 'detect', id: ++id, request: req })
+    const last = out.at(-1)
+    if (last?.type === 'result') return last.result
+    throw new Error(last?.type === 'error' ? `${last.code}: ${last.message}` : String(last?.type))
+  }
+}
+
+async function buildRequest(it: Item, plan: SeedPlan, rand: () => number, method: DetectMethod, sens: number): Promise<DetectRequest> {
+  const size = await originalSize(it.bytes)
+  const seeds: DetectRequest['seeds'] = []
   const existing: ExistingAnnotation[] = []
   plan.local.forEach((p0, i) => {
     const p = jittered(p0, rand)
     seeds.push({ annotationId: `seed-${i}`, imageId: it.name, x: p.x, y: p.y })
     existing.push({ id: `seed-${i}`, x: p.x, y: p.y, groupId: 'target', origin: 'manual' })
   })
-  if (plan.remote) {
-    const size = await originalSize(plan.remote.item.bytes)
-    const half = 0.05 * Math.max(size.width, size.height)
-    for (let i = 0; i < plan.remote.pts.length; i++) {
-      const p = jittered(plan.remote.pts[i], rand)
-      const patch = await cropPatch(plan.remote.item.bytes, p.x, p.y, half, scale)
-      seeds.push({ annotationId: `ref-seed-${i}`, imageId: plan.remote.item.name, x: p.x, y: p.y, patch })
-    }
+  const req: DetectRequest = {
+    source: { kind: 'blob', blob: new Blob([new Uint8Array(it.bytes)]) },
+    originalWidth: size.width,
+    originalHeight: size.height,
+    imageId: it.name,
+    imageFingerprint: fingerprint(it),
+    targetGroupId: 'target',
+    seeds,
+    existing,
+    settings: { method, sensitivity: sens, fitWeights },
+    includeClusterLabels: !!it.gt,
+    analysis: twoPass ? { targetTypicalRadius: targetR, ...(maxPixels ? { maxPixels } : {}) } : { scale: chooseAnalysisScale({ ...size, maxPixels }).scale },
   }
-  return { seeds, existing }
+  if (plan.remote) {
+    const ref = plan.remote.item
+    const rs = await originalSize(ref.bytes)
+    req.remoteSeeds = plan.remote.pts.map((p0, i) => {
+      const p = jittered(p0, rand)
+      return { annotationId: `ref-seed-${i}`, imageId: ref.name, x: p.x, y: p.y, imageWidth: rs.width, imageHeight: rs.height }
+    })
+    req.remoteSources = { [ref.name]: new Blob([new Uint8Array(ref.bytes)]) }
+    req.remoteFingerprints = { [ref.name]: fingerprint(ref) }
+  }
+  return req
+}
+
+const fingerprints = new Map<string, string>()
+function fingerprint(it: Item): string {
+  let f = fingerprints.get(it.name)
+  if (!f) fingerprints.set(it.name, (f = sha256Hex(it.bytes)))
+  return f
 }
 
 // ---------------------------------------------------------------- run
@@ -156,6 +216,12 @@ interface MethodRecord {
   ms: number
   timings: Record<string, number>
   peakRasterMB: number
+  /** Share of suggestions inside review regions (UI rule), number of regions, largest region. */
+  review: { share: number; regions: number; largestRegion: number }
+  /** Clusters with area ≥ 1.8 × (placed colonies) × typical colony area (possible under-splits). */
+  underSplit: number
+  /** Re-run with sensitivity +0.1 on cached planes (ms), like a slider move. */
+  rerunMs?: number
   gt?: Record<string, unknown>
 }
 interface ImageRecord {
@@ -165,8 +231,10 @@ interface ImageRecord {
   seeds: number
   calibration: DetectResult['calibration'] & { seeds: unknown }
   roi: { source: string; shape: string; marginPx: number }
+  /** Preliminary pass is now inside the first method's time (worker path). */
   pass1Ms: number
   scale: number
+  analysis?: unknown
   methods: MethodRecord[]
   agreement: Record<string, number>
   resample?: Record<string, unknown>
@@ -174,55 +242,30 @@ interface ImageRecord {
 
 const records: ImageRecord[] = []
 for (const it of selected) {
-  const rand = rng(1234)
   const size = await originalSize(it.bytes)
-  const plan = await seedPlan(it, rand)
-  // pass 1: preliminary scale, calibration only (cheapest method)
-  let scale = chooseAnalysisScale(size).scale
-  let dec = await decodeAt(it.bytes, scale)
-  const t1 = performance.now()
-  let s1 = await buildSeeds(it, plan, scale, rng(99))
-  const pass1 = await detect({ image: dec.image, scale: dec.scale, originalWidth: size.width, originalHeight: size.height, imageId: it.name, targetGroupId: 'target', seeds: s1.seeds, existing: s1.existing, settings: { method: 'log', sensitivity } })
-  const pass1Ms = performance.now() - t1
-  const prior = pass1.calibration.prior
-  if (twoPass && prior) {
-    const s2 = chooseAnalysisScale({ ...size, minRadiusOriginal: prior.rRange[0], typicalRadiusOriginal: prior.rMedian, targetTypicalRadius: targetR }).scale
-    if (Math.abs(s2 - scale) / scale > 0.15) {
-      scale = s2
-      dec = await decodeAt(it.bytes, scale)
-      s1 = await buildSeeds(it, plan, dec.scale, rng(99))
-    }
-  }
+  const plan = await seedPlan(it, rng(1234))
+  const run = makeRunner()
   const results = new Map<DetectMethod, DetectResult>()
-  const rec: ImageRecord = {
-    name: it.name,
-    size,
-    seedSource: plan.source,
-    seeds: s1.seeds.length,
-    calibration: pass1.calibration,
-    roi: { source: pass1.roi.source, shape: pass1.roi.shape, marginPx: Math.round(pass1.roi.marginPx) },
-    pass1Ms: Math.round(pass1Ms),
-    scale: Math.round(dec.scale * 1e4) / 1e4,
-    methods: [],
-    agreement: {},
-  }
+  let rec: ImageRecord | null = null
   for (const m of methods) {
+    const req = await buildRequest(it, plan, rng(99), m, sensitivity)
     const t = performance.now()
-    const r = await detect({
-      image: dec.image,
-      scale: dec.scale,
-      originalWidth: size.width,
-      originalHeight: size.height,
-      imageId: it.name,
-      targetGroupId: 'target',
-      seeds: s1.seeds,
-      existing: s1.existing,
-      settings: { method: m, sensitivity, fitWeights },
-      includeClusterLabels: !!it.gt,
-    })
+    const r = await run(req)
     const ms = performance.now() - t
     results.set(m, r)
-    rec.calibration = r.calibration
+    rec ??= {
+      name: it.name,
+      size,
+      seedSource: plan.source,
+      seeds: req.seeds.length + (req.remoteSeeds?.length ?? 0),
+      calibration: r.calibration,
+      roi: { source: r.roi.source, shape: r.roi.shape, marginPx: Math.round(r.roi.marginPx) },
+      pass1Ms: 0,
+      scale: Math.round(r.run.analysisScale * 1e4) / 1e4,
+      analysis: r.run.diagnostics?.analysis,
+      methods: [],
+      agreement: {},
+    }
     const mr: MethodRecord = {
       method: m,
       count: r.suggestions.length,
@@ -233,9 +276,28 @@ for (const it of selected) {
       ms: Math.round(ms),
       timings: Object.fromEntries(Object.entries(r.timingsMs).map(([k, v]) => [k, Math.round(v)])),
       peakRasterMB: Math.round(r.peakRasterBytes / 1e5) / 10,
+      review: roundAll(reviewShare(r.suggestions, r.clusters)),
+      underSplit: 0,
     }
-    if (it.gt) mr.gt = gtMetrics(it.gt, s1.existing, r)
+    const suspects = underSplitSuspects(r.clusters, r.calibration.prior?.rMedian ?? 25)
+    mr.underSplit = suspects.length
+    if (rerun) {
+      // a slider move: same image and seeds, sensitivity + 0.1, through the same worker
+      const t2 = performance.now()
+      await run(await buildRequest(it, plan, rng(99), m, Math.min(1, sensitivity + 0.1)))
+      mr.rerunMs = Math.round(performance.now() - t2)
+    }
+    if (it.gt) mr.gt = gtMetrics(it.gt, req.existing, r)
     rec.methods.push(mr)
+    if (args['suspect-crops'] && m === 'fitter') {
+      for (const [k, c] of suspects.slice(0, 12).entries()) {
+        const pad = Math.max(c.bbox[2], c.bbox[3]) * 0.4 + 20
+        const x0 = Math.max(0, c.bbox[0] - pad)
+        const y0 = Math.max(0, c.bbox[1] - pad)
+        const side = Math.min(Math.max(c.bbox[2], c.bbox[3]) + 2 * pad, size.width - x0, size.height - y0)
+        await renderOverlay(it.bytes, size, r, join(outDir, `${stem(it.name)}-suspect${k}.jpg`), { crop: [x0, y0, side, side], longSide: 360, title: `K=${c.chosenK}+${c.fixedIds.length} area/A0=${(c.area / (Math.PI * (r.calibration.prior?.rMedian ?? 25) ** 2)).toFixed(1)}` })
+      }
+    }
     if (overlays) {
       const title = `${it.name} · ${m} · ${r.suggestions.length} suggested · ${r.calibration.summary}`
       await renderOverlay(it.bytes, size, r, join(outDir, `${stem(it.name)}-${m}.jpg`), { title, gt: it.gt?.points })
@@ -254,6 +316,7 @@ for (const it of selected) {
       }
     }
   }
+  if (!rec) continue
   // inter-method agreement (no GT needed): F1 of matching at the typical radius
   const rMatch = rec.calibration.prior?.rMedian ?? 0.004 * Math.max(size.width, size.height)
   for (let a = 0; a < methods.length; a++)
@@ -275,17 +338,17 @@ for (const it of selected) {
         const rr = rng(1000 + i)
         const sub = sample(pool, k, rr)
         const sp: SeedPlan = plan.local.length ? { local: sub, source: 'resample' } : { local: [], remote: { item: plan.remote!.item, pts: sub }, source: 'resample' }
-        const sd = await buildSeeds(it, sp, dec.scale, rr)
-        const r = await detect({ image: dec.image, scale: dec.scale, originalWidth: size.width, originalHeight: size.height, imageId: it.name, targetGroupId: 'target', seeds: sd.seeds, existing: sd.existing, settings: { method: m, sensitivity } })
-        counts.push(r.suggestions.length + sd.existing.length)
-        if (it.gt) f1s.push((gtMetrics(it.gt, sd.existing, r).f1 as number) ?? NaN)
+        const req = await buildRequest(it, sp, rr, m, sensitivity)
+        const r = await run(req)
+        counts.push(r.suggestions.length + req.existing.length)
+        if (it.gt) f1s.push((gtMetrics(it.gt, req.existing, r).f1 as number) ?? NaN)
       }
       out[m] = { totalCount: roundAll(spread(counts)), ...(f1s.length ? { f1: roundAll(spread(f1s)) } : {}) }
     }
     rec.resample = out
   }
   records.push(rec)
-  const line = rec.methods.map((m) => `${m.method}=${m.count} (${m.ms} ms)`).join('  ')
+  const line = rec.methods.map((m) => `${m.method}=${m.count} (${m.ms} ms${m.rerunMs !== undefined ? `, re-run ${m.rerunMs}` : ''}; review ${Math.round(m.review.share * 100)} %)`).join('  ')
   console.log(`${it.name}: ${rec.calibration.summary}; scale ${rec.scale}; ${line}`)
 }
 
@@ -311,9 +374,11 @@ function gtMetrics(gt: GtImage, existing: ExistingAnnotation[], r: DetectResult)
   }
   if (r.clusterLabels) {
     const L = r.clusterLabels
+    const ox = L.origin?.x ?? 0
+    const oy = L.origin?.y ?? 0
     const lab = (p: Pt) => {
-      const x = Math.floor(p.x * L.scale)
-      const y = Math.floor(p.y * L.scale)
+      const x = Math.floor((p.x - ox) * L.scale)
+      const y = Math.floor((p.y - oy) * L.scale)
       return x >= 0 && y >= 0 && x < L.width && y < L.height ? L.labels[y * L.width + x] : 0
     }
     const predLabel = pred.map((s) => (s.clusterId.startsWith('c') ? Number(s.clusterId.slice(1)) : 0))
@@ -332,12 +397,12 @@ console.log(`\nWrote ${join(outDir, 'report.md')}`)
 function markdown(rs: ImageRecord[]): string {
   const L: string[] = []
   L.push(`# Detection evaluation`, '', `Seeds: \`${seedSpec}\`${jitter ? `, jitter ${jitter} px` : ''}; sensitivity ${sensitivity}; methods ${methods.join(', ')}.`, '')
-  L.push(`| image | seeds (usable) | r̃ px | scale | ${methods.map((m) => `${m} n`).join(' | ')} | fitter review cl. | ${methods.map((m) => `${m} ms`).join(' | ')} | agreement F1 |`)
-  L.push(`|${'---|'.repeat(5 + 2 * methods.length + 1)}`)
+  L.push(`| image | seeds (usable) | r̃ px | scale | ${methods.map((m) => `${m} n`).join(' | ')} | fitter in review % (regions, largest) | fitter under-split? | ${methods.map((m) => `${m} ms`).join(' | ')} | fitter re-run ms | agreement F1 |`)
+  L.push(`|${'---|'.repeat(7 + 2 * methods.length + 1)}`)
   for (const r of rs) {
     const by = (m: DetectMethod) => r.methods.find((x) => x.method === m)
     L.push(
-      `| ${r.name} | ${r.calibration.nTotal} (${r.calibration.nUsable}) | ${r.calibration.prior ? r.calibration.prior.rMedian.toFixed(1) : '–'} | ${r.scale} | ${methods.map((m) => by(m)?.count ?? '–').join(' | ')} | ${by('fitter')?.reviewClusters ?? '–'} | ${methods.map((m) => by(m)?.ms ?? '–').join(' | ')} | ${Object.entries(r.agreement).map(([k, v]) => `${k} ${v}`).join(', ')} |`,
+      `| ${r.name} | ${r.calibration.nTotal} (${r.calibration.nUsable}) | ${r.calibration.prior ? r.calibration.prior.rMedian.toFixed(1) : '–'} | ${r.scale} | ${methods.map((m) => by(m)?.count ?? '–').join(' | ')} | ${fmtReview(by('fitter'))} | ${by('fitter')?.underSplit ?? '–'} | ${methods.map((m) => by(m)?.ms ?? '–').join(' | ')} | ${by('fitter')?.rerunMs ?? '–'} | ${Object.entries(r.agreement).map(([k, v]) => `${k} ${v}`).join(', ')} |`,
     )
   }
   if (rs.some((r) => r.methods.some((m) => m.gt))) {
@@ -364,6 +429,9 @@ function markdown(rs: ImageRecord[]): string {
   return L.join('\n') + '\n'
 }
 
+function fmtReview(m: MethodRecord | undefined): string {
+  return m ? `${Math.round(m.review.share * 100)} (${m.review.regions}, ${m.review.largestRegion})` : '–'
+}
 function stem(n: string): string {
   return basename(n).replace(/\..*$/, '')
 }

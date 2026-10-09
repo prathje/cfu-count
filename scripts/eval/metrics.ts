@@ -170,3 +170,45 @@ export function sample<T>(xs: T[], k: number, rand: () => number): T[] {
   }
   return a.slice(0, Math.min(k, a.length))
 }
+
+/** Minimal shapes of detector output used by the audits (keeps metrics.ts free of src imports). */
+export interface AuditSuggestion {
+  clusterId: string
+  status: string
+}
+export interface AuditCluster {
+  clusterId: string
+  status: string
+  area: number
+  chosenK: number
+  fixedIds: string[]
+  bbox: [number, number, number, number]
+}
+
+/**
+ * Share of suggestions the review UI shows inside review regions. Same rule as
+ * src/state/assist/review.ts: a cluster is a review region if its status is
+ * 'review' or any of its suggestions is.
+ */
+export function reviewShare(suggestions: AuditSuggestion[], clusters: AuditCluster[]): { share: number; regions: number; largestRegion: number } {
+  const ids = new Set(clusters.filter((c) => c.status === 'review').map((c) => c.clusterId))
+  for (const s of suggestions) if (s.status === 'review') ids.add(s.clusterId)
+  const per = new Map<string, number>()
+  let n = 0
+  for (const s of suggestions) {
+    if (!ids.has(s.clusterId)) continue
+    n++
+    per.set(s.clusterId, (per.get(s.clusterId) ?? 0) + 1)
+  }
+  return { share: suggestions.length ? n / suggestions.length : 0, regions: ids.size, largestRegion: Math.max(0, ...per.values()) }
+}
+
+/**
+ * Clusters whose foreground area implies more colonies than were placed
+ * (new + fixed): area ≥ `factor` × count × π r̃². A heuristic for finding
+ * under-split clusters without ground truth; inspect the crops.
+ */
+export function underSplitSuspects<T extends AuditCluster>(clusters: T[], rMedian: number, factor = 1.8): T[] {
+  const a0 = Math.PI * rMedian * rMedian
+  return clusters.filter((c) => c.status !== 'too-large' && c.area >= factor * Math.max(1, c.chosenK + c.fixedIds.length) * a0)
+}
