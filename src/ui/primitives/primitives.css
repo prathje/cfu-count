@@ -756,6 +756,51 @@
   color: var(--c-text-2);
 }
 
+.dialog__choices {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.dialog__choice {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-md);
+  cursor: pointer;
+}
+
+.dialog__choice:has(input:checked) {
+  border-color: var(--c-accent);
+  background: var(--c-accent-soft);
+}
+
+.dialog__choice.is-disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.dialog__choice input {
+  margin-top: 3px;
+  accent-color: var(--c-accent);
+}
+
+.dialog__choice-label {
+  display: block;
+  font-weight: 600;
+}
+
+.dialog__choice-detail {
+  display: block;
+  font-size: var(--fs-sm);
+  color: var(--c-text-2);
+}
+
 .dialog__actions {
   display: flex;
   justify-content: flex-end;

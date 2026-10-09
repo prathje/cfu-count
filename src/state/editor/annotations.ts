@@ -11,15 +11,18 @@ import {
   checkDetectionRun,
   checkRunImage,
   checkOps,
+  clearGroupOps,
+  groupTally,
   confirmedCount,
   confirmedCountsByGroup,
   makeManualAnnotation,
   visibilitySplit,
   type AnnotationOp,
+  type GroupTally,
   type OpBlock,
 } from '../../model/annotations'
 import { editBlock, type EditBlockReason, type GroupBlockReason } from '../../model/policy'
-import { emptyDoc } from '../../model/project'
+import { displayOrder, emptyDoc } from '../../model/project'
 import { newId, now } from '../../model/ids'
 import { emptyHistory, planRedo, planUndo, record } from '../history'
 import { editBlockMessage, historyBlockMessage } from '../messages'
@@ -35,6 +38,14 @@ export interface BatchOptions {
    * must match the image and its targetGroupId must exist.
    */
   detectionRun?: DetectionRun
+}
+
+/** "Clear annotations" scope: the current image, or every image of the project (removed images excluded). */
+export type ClearScope = 'image' | 'project'
+
+/** What clearing a group removes (or removed): stored annotations by origin and the images touched. */
+export interface ClearSummary extends GroupTally {
+  images: number
 }
 
 export interface AnnotationCommands {
@@ -70,6 +81,17 @@ export interface AnnotationCommands {
   redo(): boolean
   /** Explain a viewport-reported refusal (toast with a fix-it action). */
   explainBlocked(reason: EditBlockReason | 'nothing-to-erase'): void
+  /** True, with an explanation and an Unlock / Show action, when the group can't be edited. */
+  explainGroupBlock(groupId: ID): boolean
+  /** What clearing a group's annotations in a scope would remove (all origins and review states). */
+  clearSummary(groupId: ID, scope: ClearScope): ClearSummary
+  /**
+   * Remove every annotation of a group on the current image or on every image.
+   * One undo step PER IMAGE (history is per image), labelled “Clear “name””.
+   * Detection-run records stay. Refused (null, with an explanation) on a locked or
+   * hidden group or while edits are frozen.
+   */
+  clearGroup(groupId: ID, scope: ClearScope): ClearSummary | null
 }
 
 export function createAnnotations(ctx: EditorContext, groups: GroupCommands): AnnotationCommands {
@@ -118,6 +140,57 @@ export function createAnnotations(ctx: EditorContext, groups: GroupCommands): An
           : 'Locked groups can’t be added to or erased. Visibility still works.',
       action: fixFor(reason, group),
     })
+  }
+
+  function explainGroupBlock(groupId: ID): boolean {
+    const group = groups.list().find((g) => g.id === groupId)
+    const reason = editBlock(group)
+    if (!reason) return false
+    if (reason === 'no-group' || !group) {
+      notify({ tone: 'warning', key: 'blocked', message: 'This annotation group no longer exists' })
+      return true
+    }
+    notify({
+      tone: 'warning',
+      key: 'blocked',
+      message: editBlockMessage(reason, group),
+      detail: reason === 'hidden' ? 'Hidden groups can’t be edited, so no change happens out of sight.' : 'Locked groups can’t be added to or erased. Visibility still works.',
+      action: fixFor(reason, group),
+    })
+    return true
+  }
+
+  function clearImageIds(scope: ClearScope): ID[] {
+    if (!state.project) return []
+    if (scope === 'image') return state.currentImageId && images().some((i) => i.id === state.currentImageId) ? [state.currentImageId] : []
+    return images().map((i) => i.id)
+  }
+  const images = () => (state.project ? displayOrder(state.project) : [])
+
+  function clearSummary(groupId: ID, scope: ClearScope): ClearSummary {
+    const sum: ClearSummary = { total: 0, manual: 0, automated: 0, images: 0 }
+    for (const id of clearImageIds(scope)) {
+      const t = groupTally(state.docs[id]?.annotations, groupId)
+      if (!t.total) continue
+      sum.total += t.total
+      sum.manual += t.manual
+      sum.automated += t.automated
+      sum.images++
+    }
+    return sum
+  }
+
+  function clearGroup(groupId: ID, scope: ClearScope): ClearSummary | null {
+    if (!state.project || ctx.editsFrozen() || explainGroupBlock(groupId)) return null
+    const name = groups.list().find((g) => g.id === groupId)!.name
+    const summary = clearSummary(groupId, scope)
+    batch(() => {
+      for (const id of clearImageIds(scope)) {
+        const ops = clearGroupOps(unwrap(state.docs[id]?.annotations), groupId)
+        if (ops.length) applyBatch(id, ops, { label: `Clear “${name}”` })
+      }
+    })
+    return summary
   }
 
   function explainOpBlock(block: OpBlock, message: string, detail: string) {
@@ -268,5 +341,8 @@ export function createAnnotations(ctx: EditorContext, groups: GroupCommands): An
     undo: () => stepHistory('undo'),
     redo: () => stepHistory('redo'),
     explainBlocked,
+    explainGroupBlock,
+    clearSummary,
+    clearGroup,
   }
 }

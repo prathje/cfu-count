@@ -4,7 +4,7 @@
  * app bar, sidebar, empty states and workspace containers.
  */
 import type { ID } from '../model/types'
-import type { Editor } from '../state/editor'
+import type { ClearScope, ClearSummary, Editor } from '../state/editor'
 import { downloadBlob, IMAGE_ACCEPT, pickFiles, safeFilename } from './download'
 import type { Dialogs } from './primitives'
 import type { Notify } from '../state/messages'
@@ -23,6 +23,8 @@ export interface ProjectActions {
   removeImage(imageId: ID): Promise<void>
   deleteImageGroup(id: ID): Promise<void>
   deleteAnnotationGroup(id: ID): Promise<void>
+  /** "Clear annotations…" of a group: on this image or on every image, after a confirmation. */
+  clearGroupAnnotations(id: ID): Promise<void>
 }
 
 export function defaultProjectName(date = new Date()): string {
@@ -40,6 +42,15 @@ export function removeImageBody(annotationCount: number, fromDrive: boolean): st
     fromDrive ? 'the file in Google Drive' : 'the image file',
   ].filter(Boolean)
   return `It’s hidden from the image list, counts and the CSV summary. Nothing is erased: ${kept.join(' and ')} ${kept.length > 1 ? 'are' : 'is'} kept, and you can restore it from “Recently removed” in the sidebar.`
+}
+
+/** One scope option's detail line in the "Clear annotations" dialog (exported for tests). */
+export function clearScopeDetail(s: ClearSummary, scope: ClearScope): string {
+  const origin = `${s.manual.toLocaleString()} manual, ${s.automated.toLocaleString()} automated`
+  if (scope === 'image') return s.total ? `${plural(s.total, 'annotation')} on this image (${origin}).` : 'No annotations of this group on this image.'
+  return s.total
+    ? `${plural(s.total, 'annotation')} on ${plural(s.images, 'image')} (${origin}). Undo works per image.`
+    : 'No annotations of this group on any image.'
 }
 
 export function createProjectActions(editor: Editor, dialogs: Dialogs, notify: Notify): ProjectActions {
@@ -142,6 +153,56 @@ export function createProjectActions(editor: Editor, dialogs: Dialogs, notify: N
         confirmLabel: 'Delete group',
       })
       if (ok) editor.imageGroups.remove(id)
+    },
+
+    async clearGroupAnnotations(id) {
+      const g = editor.groups.byId(id)
+      if (!g || editor.annotations.explainGroupBlock(id)) return
+      const here = editor.annotations.clearSummary(id, 'image')
+      const all = editor.annotations.clearSummary(id, 'project')
+      if (all.total === 0) {
+        notify({ tone: 'info', key: 'clear-group', message: `“${g.name}” has no annotations to clear` })
+        return
+      }
+      const scope = await dialogs.choose<ClearScope>({
+        title: `Clear annotations in “${g.name}”?`,
+        body: here.total
+          ? `Remove ${plural(here.total, 'annotation')} from “${g.name}” on this image, or from every image. The group itself and records of Find similar runs are kept.`
+          : `There are none on this image. Remove them from every image? The group itself and records of Find similar runs are kept.`,
+        options: [
+          { value: 'image', label: 'This image', detail: clearScopeDetail(here, 'image'), disabled: here.total === 0 },
+          { value: 'project', label: 'All images in the project', detail: clearScopeDetail(all, 'project') },
+        ],
+        value: here.total ? 'image' : 'project',
+        confirmLabel: 'Clear annotations',
+        danger: true,
+      })
+      if (!scope) return
+      const imageId = state.currentImageId
+      const done = editor.annotations.clearGroup(id, scope)
+      if (!done || done.total === 0) return
+      if (scope === 'project') {
+        notify({
+          tone: 'success',
+          key: 'clear-group',
+          message: `Removed ${plural(done.total, 'annotation')} from “${g.name}” on ${plural(done.images, 'image')}`,
+          detail: 'Undo works per image: open an image and press Undo to bring its marks back.',
+        })
+        return
+      }
+      const entryId = imageId ? state.history[imageId]?.undo.at(-1)?.id : undefined
+      notify({
+        tone: 'success',
+        key: 'clear-group',
+        message: `Removed ${plural(done.total, 'annotation')} from “${g.name}”`,
+        action: {
+          label: 'Undo',
+          run: () => {
+            if (imageId && state.currentImageId === imageId && state.history[imageId]?.undo.at(-1)?.id === entryId) editor.annotations.undo()
+            else notify({ tone: 'info', key: 'clear-group', message: 'Use Undo in the toolbar', detail: 'Other changes were made after clearing.' })
+          },
+        },
+      })
     },
 
     async deleteAnnotationGroup(id) {

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { AnnotationGroup } from '../model/types'
 import { makeGroup } from '../model/groups'
 import { saveStatusLabel } from './format'
-import { removeImageBody } from './projectActions'
+import { clearScopeDetail, removeImageBody } from './projectActions'
 import { toolbarModeFor } from './toolbar/layout'
 import { groupTallies, interactionHint, nearDuplicateMessage, sizeMismatchMessage } from './workspace/hints'
 import type { SaveStatus } from '../storage/api'
@@ -81,3 +81,14 @@ describe('nearDuplicateMessage', () => {
     expect(nearDuplicateMessage({ groupName: 'Small', number: null, sameGroup: true })).toBe('Added close to an existing marker')
   })
 })
+
+describe('clear annotations dialog', () => {
+  it('states counts by origin per scope and that undo works per image', () => {
+    expect(clearScopeDetail({ total: 143, manual: 120, automated: 23, images: 1 }, 'image')).toBe('143 annotations on this image (120 manual, 23 automated).')
+    expect(clearScopeDetail({ total: 1204, manual: 1000, automated: 204, images: 12 }, 'project')).toBe(
+      `${(1204).toLocaleString()} annotations on 12 images (${(1000).toLocaleString()} manual, 204 automated). Undo works per image.`,
+    )
+    expect(clearScopeDetail({ total: 0, manual: 0, automated: 0, images: 0 }, 'image')).toMatch(/No annotations/)
+  })
+})
+

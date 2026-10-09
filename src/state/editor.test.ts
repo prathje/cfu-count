@@ -310,6 +310,61 @@ describe('editor', () => {
     expect(editor.images.removed().map((i) => i.id)).toEqual(['i2'])
   })
 
+  it('clearing a group on this image is one undo step and keeps other groups and detection runs', async () => {
+    const { editor } = await setup()
+    const g = editor.groups.active()!.id
+    const run = { runId: 'run1', method: 'test', version: '0', createdAt: '', imageFingerprint: 'fp-i1', analysisScale: 1, targetGroupId: g, seeds: [], prior: {}, settings: {} }
+    editor.annotations.add(1, 1)
+    editor.annotations.applyBatch('i1', [{ kind: 'add', annotation: automated('auto1', g) }], { label: 'Accept', detectionRun: run })
+    const other = editor.groups.create('Other')!
+    editor.annotations.add(5, 5)
+    editor.images.select('i2')
+    editor.view.setActiveGroup(g)
+    editor.annotations.add(2, 2)
+    editor.images.select('i1')
+    expect(editor.annotations.clearSummary(g, 'image')).toEqual({ total: 2, manual: 1, automated: 1, images: 1 })
+    expect(editor.annotations.clearSummary(g, 'project')).toEqual({ total: 3, manual: 2, automated: 1, images: 2 })
+    expect(editor.annotations.clearGroup(g, 'image')).toMatchObject({ total: 2 })
+    expect(editor.annotations.current().map((a) => a.groupId)).toEqual([other])
+    expect(editor.images.confirmedCount('i2')).toBe(1)
+    expect(editor.state.docs['i1'].detectionRuns.map((r) => r.runId)).toEqual(['run1'])
+    expect(editor.state.history['i1'].undo.at(-1)!.label).toBe('Clear “Colonies”')
+    expect(editor.annotations.undo()).toBe(true)
+    expect(editor.annotations.total()).toBe(3)
+  })
+
+  it('clearing a group on all images records one undo step per image', async () => {
+    const { editor } = await setup()
+    const g = editor.groups.active()!.id
+    editor.annotations.add(1, 1)
+    editor.images.select('i2')
+    editor.annotations.add(2, 2)
+    editor.annotations.add(3, 3)
+    expect(editor.annotations.clearGroup(g, 'project')).toEqual({ total: 3, manual: 3, automated: 0, images: 2 })
+    expect(editor.images.confirmedCount('i1') + editor.images.confirmedCount('i2')).toBe(0)
+    expect(editor.annotations.undo()).toBe(true)
+    expect(editor.images.confirmedCount('i2')).toBe(2)
+    expect(editor.images.confirmedCount('i1')).toBe(0) // i1 has its own undo step
+    editor.images.select('i1')
+    expect(editor.annotations.undo()).toBe(true)
+    expect(editor.images.confirmedCount('i1')).toBe(1)
+  })
+
+  it('refuses to clear a locked or hidden group and offers the fix', async () => {
+    const { editor, notices } = await setup()
+    const g = editor.groups.active()!.id
+    editor.annotations.add(1, 1)
+    editor.groups.setLocked(g, true)
+    expect(editor.annotations.clearGroup(g, 'image')).toBeNull()
+    expect(notices.at(-1)).toMatchObject({ message: expect.stringMatching(/locked/), action: { label: 'Unlock' } })
+    expect(editor.annotations.total()).toBe(1)
+    notices.at(-1)!.action!.run()
+    editor.groups.setHidden(g, true)
+    expect(editor.annotations.clearGroup(g, 'project')).toBeNull()
+    expect(notices.at(-1)?.action?.label).toBe('Show group')
+    expect(editor.annotations.total()).toBe(1)
+  })
+
   it('reassigning images keeps annotations; deleting an image group ungroups images', async () => {
     const { editor } = await setup()
     editor.annotations.add(5, 5)

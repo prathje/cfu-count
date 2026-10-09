@@ -88,6 +88,29 @@ export function countBreakdownByGroup(annotations: readonly Annotation[] | undef
   return out
 }
 
+/** Stored annotations of one group by origin (every review state), e.g. for "Clear annotations". */
+export interface GroupTally {
+  total: number
+  manual: number
+  automated: number
+}
+
+export function groupTally(annotations: readonly Annotation[] | undefined, groupId: ID): GroupTally {
+  const t: GroupTally = { total: 0, manual: 0, automated: 0 }
+  for (const a of annotations ?? []) {
+    if (a.groupId !== groupId) continue
+    t.total++
+    if (a.origin === 'manual') t.manual++
+    else t.automated++
+  }
+  return t
+}
+
+/** Ops that remove every annotation of a group from one image (one batch = one undo step). */
+export function clearGroupOps(annotations: readonly Annotation[] | undefined, groupId: ID): AnnotationOp[] {
+  return (annotations ?? []).filter((a) => a.groupId === groupId).map((annotation) => ({ kind: 'remove', annotation }))
+}
+
 /** Confirmed annotations split by the visibility of their group. */
 export function visibilitySplit(
   annotations: readonly Annotation[] | undefined,

@@ -50,6 +50,8 @@ export interface FloatingToolbarProps {
   onRenameGroup(id: ID, name: string): void
   onDeleteGroup(id: ID): void
   onMoveGroup(id: ID, delta: number): void
+  /** "Clear annotations…" of a group (in the group selector's management area). */
+  onClearGroup(id: ID): void
   onToggleHidden(): void
   onToggleLocked(): void
   onStyleChange(patch: GroupStylePatch): void
@@ -99,6 +101,7 @@ export function FloatingToolbar(props: FloatingToolbarProps) {
         onRename={props.onRenameGroup}
         onDelete={props.onDeleteGroup}
         onMove={props.onMoveGroup}
+        onClear={props.onClearGroup}
       />
       {/* 2. Visibility  3. Lock */}
       <ToggleButton

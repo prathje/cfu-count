@@ -3,9 +3,12 @@ import type { Annotation, AnnotationGroup, Project } from '../model/types'
 import {
   applyOps,
   checkOps,
+  checkRunImage,
+  clearGroupOps,
   confirmedCount,
   confirmedCountsByGroup,
   countBreakdownByGroup,
+  groupTally,
   invertOps,
   labelNumber,
   makeManualAnnotation,
@@ -232,3 +235,25 @@ describe('labelNumber', () => {
     expect(labelNumber(list, 'zzz')).toBeNull()
   })
 })
+
+describe('clearing a group', () => {
+  it('tallies a group by origin (every review state) and removes exactly its annotations', () => {
+    const list = [ann('a'), ann('b', 'g2'), ann('c', 'g1', { origin: 'automated', reviewStatus: 'unreviewed' }), ann('d', 'g1', { origin: 'automated' })]
+    expect(groupTally(list, 'g1')).toEqual({ total: 3, manual: 1, automated: 2 })
+    expect(groupTally(undefined, 'g1')).toEqual({ total: 0, manual: 0, automated: 0 })
+    const ops = clearGroupOps(list, 'g1')
+    expect(ops.map((o) => o.kind)).toEqual(['remove', 'remove', 'remove'])
+    expect(applyOps(list, ops).map((a) => a.id)).toEqual(['b'])
+    expect(clearGroupOps(list, 'none')).toEqual([])
+  })
+})
+
+describe('checkRunImage', () => {
+  const run = { runId: 'r', imageFingerprint: 'fp' } as Parameters<typeof checkRunImage>[0]
+  it('accepts the analysed bytes only', () => {
+    expect(checkRunImage(run, { fingerprint: 'fp' })).toBeNull()
+    expect(checkRunImage(run, { fingerprint: 'other' })).toMatch(/fingerprint/)
+    expect(checkRunImage(run, { fingerprint: 'fp', sourceMismatch: { detectedAt: '', message: '' } })).toMatch(/changed/)
+  })
+})
+

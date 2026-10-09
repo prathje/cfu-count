@@ -29,7 +29,7 @@ import { createProjects, type ProjectCommands } from './projects'
 import { createView, type ViewCommands } from './view'
 
 export type { EditorState } from './context'
-export type { AnnotationCommands, BatchOptions } from './annotations'
+export type { AnnotationCommands, BatchOptions, ClearScope, ClearSummary } from './annotations'
 export type { GroupCommands } from './groups'
 export type { ImageCommands } from './images'
 export type { ImageGroupCommands } from './imageGroups'

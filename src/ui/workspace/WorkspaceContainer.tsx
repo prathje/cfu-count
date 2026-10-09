@@ -272,6 +272,7 @@ export function WorkspaceContainer(props: WorkspaceContainerProps) {
                   onRenameGroup={groups.rename}
                   onDeleteGroup={(id) => void actions.deleteAnnotationGroup(id)}
                   onMoveGroup={groups.move}
+                  onClearGroup={(id) => void actions.clearGroupAnnotations(id)}
                   onToggleHidden={() => state.activeGroupId && groups.toggleHidden(state.activeGroupId)}
                   onToggleLocked={() => state.activeGroupId && groups.toggleLocked(state.activeGroupId)}
                   onStyleChange={(patch) => state.activeGroupId && groups.setStyle(state.activeGroupId, patch)}

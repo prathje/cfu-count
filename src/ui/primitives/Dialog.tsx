@@ -1,4 +1,4 @@
-import { createEffect, createSignal, Show } from 'solid-js'
+import { createEffect, createSignal, For, Show } from 'solid-js'
 import { Button } from './Button'
 
 /** Options for a confirmation dialog. */
@@ -20,15 +20,29 @@ export interface PromptOptions {
   body?: string
 }
 
+/** Options for a confirmation with one choice among a few options (radio buttons). */
+export interface ChooseOptions<T extends string = string> {
+  title: string
+  body?: string
+  options: { value: T; label: string; detail?: string; disabled?: boolean }[]
+  /** Initially selected option. */
+  value: T
+  confirmLabel: string
+  danger?: boolean
+}
+
 /** Promise-based modal dialogs (native <dialog>: focus trap, Escape and inert background for free). */
 export interface Dialogs {
   confirm(opts: ConfirmOptions): Promise<boolean>
   prompt(opts: PromptOptions): Promise<string | null>
+  /** Resolves with the chosen option, or null when cancelled. */
+  choose<T extends string>(opts: ChooseOptions<T>): Promise<T | null>
 }
 
 type Pending =
   | { kind: 'confirm'; opts: ConfirmOptions; resolve(v: boolean): void }
   | { kind: 'prompt'; opts: PromptOptions; resolve(v: string | null): void }
+  | { kind: 'choose'; opts: ChooseOptions; resolve(v: string | null): void }
 
 /** Dialogs plus the state DialogHost renders (created once by the composition root). */
 export interface DialogController extends Dialogs {
@@ -58,6 +72,11 @@ export function createDialogs(): DialogController {
         settle(null)
         setPending({ kind: 'prompt', opts, resolve })
       }),
+    choose: <T extends string>(opts: ChooseOptions<T>) =>
+      new Promise<T | null>((resolve) => {
+        settle(null)
+        setPending({ kind: 'choose', opts: opts as ChooseOptions, resolve: resolve as (v: string | null) => void })
+      }),
   }
 }
 
@@ -71,7 +90,7 @@ export function DialogHost(props: { dialogs: DialogController }) {
     const p = props.dialogs.pending()
     if (!dialog) return
     if (p) {
-      setValue(p.kind === 'prompt' ? (p.opts.value ?? '') : '')
+      setValue(p.kind === 'prompt' ? (p.opts.value ?? '') : p.kind === 'choose' ? p.opts.value : '')
       if (!dialog.open) dialog.showModal()
       queueMicrotask(() => (p.kind === 'prompt' ? input?.select() : dialog?.querySelector<HTMLElement>('[data-autofocus]')?.focus()))
     } else if (dialog.open) {
@@ -102,6 +121,7 @@ export function DialogHost(props: { dialogs: DialogController }) {
               e.preventDefault()
               const cur = pending()
               if (cur.kind === 'confirm') props.dialogs.settle(true)
+              else if (cur.kind === 'choose') props.dialogs.settle(value())
               else if (value().trim()) props.dialogs.settle(value().trim())
             }}
           >
@@ -126,6 +146,26 @@ export function DialogHost(props: { dialogs: DialogController }) {
                 </label>
               )}
             </Show>
+            <Show when={pending().kind === 'choose' ? (pending().opts as ChooseOptions) : null}>
+              {(opts) => (
+                <fieldset class="dialog__choices">
+                  <legend class="sr-only">{opts().title}</legend>
+                  <For each={opts().options}>
+                    {(o) => (
+                      <label class="dialog__choice" classList={{ 'is-disabled': o.disabled }}>
+                        <input type="radio" name="dialog-choice" value={o.value} checked={value() === o.value} disabled={o.disabled} onChange={() => setValue(o.value)} />
+                        <span>
+                          <span class="dialog__choice-label">{o.label}</span>
+                          <Show when={o.detail}>
+                            <span class="dialog__choice-detail">{o.detail}</span>
+                          </Show>
+                        </span>
+                      </label>
+                    )}
+                  </For>
+                </fieldset>
+              )}
+            </Show>
             <div class="dialog__actions">
               <Button variant="ghost" onClick={() => props.dialogs.settle(null)}>
                 {(pending().kind === 'confirm' && (pending().opts as ConfirmOptions).cancelLabel) || 'Cancel'}
@@ -133,7 +173,7 @@ export function DialogHost(props: { dialogs: DialogController }) {
               <Button
                 type="submit"
                 data-autofocus
-                variant={pending().kind === 'confirm' && (pending().opts as ConfirmOptions).danger ? 'danger' : 'primary'}
+                variant={pending().kind !== 'prompt' && (pending().opts as ConfirmOptions).danger ? 'danger' : 'primary'}
                 disabled={pending().kind === 'prompt' && !value().trim()}
               >
                 {pending().opts.confirmLabel}

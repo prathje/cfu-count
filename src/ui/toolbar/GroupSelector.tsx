@@ -1,6 +1,6 @@
 import { createSignal, For, Show } from 'solid-js'
 import type { AnnotationGroup, ID } from '../../model/types'
-import { ChevronDown, ChevronUp, EyeOff, Lock, Plus, Trash, Check, Pencil } from '../icons'
+import { ChevronDown, ChevronUp, EyeOff, Lock, Plus, Trash, Check, Pencil, Eraser } from '../icons'
 import { Popover, InlineEdit, Button, createPopoverState } from '../primitives'
 import { GroupSwatch } from '../shared/GroupSwatch'
 
@@ -18,6 +18,8 @@ export interface GroupSelectorProps {
   onRename(id: ID, name: string): void
   onDelete(id: ID): void
   onMove(id: ID, delta: number): void
+  /** "Clear annotations…": asks for the scope (this image / all images) first. */
+  onClear(id: ID): void
 }
 
 export function GroupSelector(props: GroupSelectorProps) {
@@ -165,6 +167,17 @@ export function GroupSelector(props: GroupSelectorProps) {
                   Down
                 </Button>
                 <span class="group-manage__spacer" />
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  icon={Eraser}
+                  onClick={() => {
+                    pop.close()
+                    props.onClear(g().id)
+                  }}
+                >
+                  Clear…
+                </Button>
                 <Button
                   size="sm"
                   variant="ghost"
