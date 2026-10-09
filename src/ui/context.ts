@@ -10,6 +10,9 @@ import type { Assist } from '../state/assist'
 import type { ThumbnailCache } from './images'
 import type { DialogController, Toaster } from './primitives'
 import type { ProjectActions } from './projectActions'
+import type { Cue } from '../state/feedback'
+import type { SoundSettingsStore } from '../state/soundSettings'
+import type { AudioStatus } from './sound'
 
 export interface AppServices {
   editor: Editor
@@ -22,6 +25,12 @@ export interface AppServices {
   actions: ProjectActions
   /** True when the in-memory demo repository is active (nothing persists). */
   isDemo: boolean
+  /** Sound feedback settings (per device) and a preview for the settings menu. */
+  sound: {
+    settings: SoundSettingsStore
+    preview(cue: Cue): void
+    status(): AudioStatus
+  }
 }
 
 export const AppContext = createContext<AppServices>()

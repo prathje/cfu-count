@@ -5,7 +5,9 @@ import { createDetectorClient } from './detection/client'
 import { chooseRepository, type RepositoryChoice } from './state/repository'
 import { AppContext, type AppServices } from './ui/context'
 import { createThumbnailCache } from './ui/images'
-import { createDialogs, createToaster } from './ui/primitives'
+import { createDialogs, createToaster, type Toaster } from './ui/primitives'
+import { createSoundSettings } from './state/soundSettings'
+import { createSoundFeedback } from './ui/sound'
 import { createProjectActions } from './ui/projectActions'
 import { shouldWarnBeforeUnload } from './state/unload'
 import { AppShell } from './ui/AppShell'
@@ -18,18 +20,40 @@ export default function App() {
 
 function AppRoot(props: { choice: RepositoryChoice }) {
   const { repo, isDemo } = props.choice
-  const toaster = createToaster()
+  // Sound cues: per-device settings; the editor and assist report edit events through `feedback`.
+  const soundSettings = createSoundSettings()
+  const sound = createSoundFeedback({ settings: soundSettings.get })
+  onCleanup(sound.dispose)
+  const { feedback } = sound
+  // Every toast also reaches feedback (error toasts play the error cue).
+  const baseToaster = createToaster()
+  const toaster: Toaster = {
+    ...baseToaster,
+    push(notice) {
+      baseToaster.push(notice)
+      feedback({ type: 'notice', tone: notice.tone })
+    },
+  }
   const dialogs = createDialogs()
-  const editor = createEditor(repo, { notify: toaster.push, confirm: dialogs.confirm })
+  const editor = createEditor(repo, { notify: toaster.push, confirm: dialogs.confirm, feedback })
   onCleanup(editor.dispose)
   // One detector client (Worker) per app session, created on the first run.
-  const assist = createAssist({ editor, notify: toaster.push, createClient: () => createDetectorClient() })
+  const assist = createAssist({ editor, notify: toaster.push, feedback, createClient: () => createDetectorClient() })
   onCleanup(assist.dispose)
   const thumbnails = createThumbnailCache(() => (editor.state.project ? editor.images.blob : null))
   // Thumbnails of Drive images fail while Drive is disconnected: retry once it connects.
   createEffect(on(() => editor.drive.state().state, (s) => s === 'connected' && thumbnails.retryFailed(), { defer: true }))
   const actions = createProjectActions(editor, dialogs, toaster.push)
-  const services: AppServices = { editor, assist, toaster, dialogs, thumbnails, actions, isDemo }
+  const services: AppServices = {
+    editor,
+    assist,
+    toaster,
+    dialogs,
+    thumbnails,
+    actions,
+    isDemo,
+    sound: { settings: soundSettings, preview: sound.preview, status: sound.status },
+  }
 
   onMount(() => void editor.projects.init())
 
