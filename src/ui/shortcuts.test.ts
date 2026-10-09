@@ -40,6 +40,8 @@ describe('resolveShortcut', () => {
     expect(resolveShortcut(k(']'), true)).toEqual({ type: 'image', delta: 1 })
     expect(resolveShortcut(k('?', { shiftKey: true }), true)).toEqual({ type: 'help' })
     expect(resolveShortcut(k('0', { metaKey: true }), true)).toBeNull() // browser zoom reset stays intact
+    expect(resolveShortcut(k('i'), true)).toEqual({ type: 'image-adjust' })
+    expect(resolveShortcut(k('\\'), true)).toBeNull() // hold-to-compare is handled by the workspace
   })
 })
 

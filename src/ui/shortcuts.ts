@@ -16,6 +16,7 @@ export type ShortcutCommand =
   | { type: 'zoom-in' }
   | { type: 'zoom-out' }
   | { type: 'fit' }
+  | { type: 'image-adjust' }
   | { type: 'image'; delta: -1 | 1 }
   | { type: 'help' }
 
@@ -41,6 +42,8 @@ export interface ShortcutBinding {
 }
 
 const TOOL_LABEL: Record<Tool, string> = { add: 'Add colonies', erase: 'Erase colonies', pan: 'Pan' }
+/** Hold to show the unadjusted image (KeyboardEvent.key). */
+export const COMPARE_KEY = '\\'
 const DIGITS = ['1', '2', '3', '4', '5', '6', '7', '8', '9']
 
 export const SHORTCUTS: readonly ShortcutBinding[] = [
@@ -64,6 +67,9 @@ export const SHORTCUTS: readonly ShortcutBinding[] = [
   { section: 'View', label: 'Zoom out', keys: ['-', '_'], display: ['−'], command: () => ({ type: 'zoom-out' }) },
   { section: 'View', label: 'Fit image', keys: ['0'], display: ['0'], command: () => ({ type: 'fit' }) },
   { section: 'View', label: 'Pan (image focused)', keys: [], display: ['←', '↑', '→', '↓'] },
+  { section: 'View', label: 'Image adjustments (display only)', keys: ['i'], display: ['I'], command: () => ({ type: 'image-adjust' }) },
+  // Hold-to-compare is handled by the workspace (needs key up as well as key down).
+  { section: 'View', label: 'Show original image while held', keys: [], display: [COMPARE_KEY] },
   { section: 'Images', label: 'Previous image', keys: ['['], display: ['['], command: () => ({ type: 'image', delta: -1 }) },
   { section: 'Images', label: 'Next image', keys: [']'], display: [']'], command: () => ({ type: 'image', delta: 1 }) },
   { section: 'Help', label: 'Keyboard shortcuts', keys: ['?'], display: ['?'], command: () => ({ type: 'help' }) },

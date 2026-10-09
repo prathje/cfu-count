@@ -372,3 +372,48 @@
   box-shadow: var(--shadow-pop);
   border: 1px solid var(--c-warn-border);
 }
+
+/* Image adjustments trigger, next to zoom. */
+.vp-footer__left {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--s-2);
+  flex: none;
+  pointer-events: none;
+}
+
+.vp-footer__left > * {
+  pointer-events: auto;
+}
+
+.vp-adjust {
+  position: relative;
+  height: var(--footer-h);
+  min-width: var(--footer-h);
+  border-radius: var(--r-lg);
+}
+
+.vp-adjust.btn--icon {
+  width: var(--footer-h);
+}
+
+.vp-adjust.is-pressed,
+.vp-adjust.is-comparing {
+  background: var(--c-accent-soft);
+}
+
+/* Subtle "adjustments on" indicator: an accent dot after the label (top-right on the icon-only button). */
+.vp-adjust__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--c-accent);
+  box-shadow: 0 0 0 2px var(--c-surface);
+  flex: none;
+}
+
+.vp-adjust.btn--icon .vp-adjust__dot {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+}

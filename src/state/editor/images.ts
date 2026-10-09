@@ -1,7 +1,8 @@
 /** Images of the open project: selection, naming, grouping, import and removal. */
 import { batch, createMemo, type Accessor } from 'solid-js'
 import { produce, unwrap } from 'solid-js/store'
-import type { ID, ImageRecord } from '../../model/types'
+import type { ID, ImageDisplayAdjust, ImageRecord } from '../../model/types'
+import { storedDisplay } from '../../model/display'
 import { confirmedCount } from '../../model/annotations'
 import { displayOrder } from '../../model/project'
 import type { ImportResult } from '../../storage/api'
@@ -28,6 +29,11 @@ export interface ImageCommands {
   remove(imageId: ID): Promise<void>
   /** Original bytes of an image in the open project. */
   blob(imageId: ID): Promise<Blob>
+  /**
+   * Set how images are DISPLAYED (view setting: allowed while groups are locked,
+   * not undoable, dirties project.json only). null/default removes the field.
+   */
+  setDisplay(imageIds: readonly ID[], display: ImageDisplayAdjust | null): void
 }
 
 export function createImages(ctx: EditorContext): ImageCommands {
@@ -148,6 +154,20 @@ export function createImages(ctx: EditorContext): ImageCommands {
     return session ? session.images.blob(imageId) : Promise.reject(new Error('No project open.'))
   }
 
+  function setDisplay(imageIds: readonly ID[], display: ImageDisplayAdjust | null) {
+    if (!state.project || imageIds.length === 0 || ctx.editsFrozen()) return
+    const ids = new Set(imageIds)
+    const value = storedDisplay(display)
+    setImages((imgs) =>
+      imgs.map((img) => {
+        if (!ids.has(img.id)) return img
+        const { display: _old, ...rest } = img
+        return value ? { ...rest, display: { ...value } } : rest
+      }),
+    )
+    ctx.touchProject()
+  }
+
   return {
     current,
     order,
@@ -160,5 +180,6 @@ export function createImages(ctx: EditorContext): ImageCommands {
     importFromDrive,
     remove,
     blob,
+    setDisplay,
   }
 }

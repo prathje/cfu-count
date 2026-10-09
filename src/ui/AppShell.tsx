@@ -23,6 +23,7 @@ export function AppShell() {
   const phone = createMediaQuery('(max-width: 560px)')
   const [sidebarOpen, setSidebarOpen] = createSignal(!narrow())
   const [helpOpen, setHelpOpen] = createSignal(false)
+  const [adjustOpen, setAdjustOpen] = createSignal(false)
   let viewport: ViewportHandle | undefined
   const dragging = createFileDrop((files) => void actions.importFiles(files))
 
@@ -80,6 +81,8 @@ export function AppShell() {
           return viewport?.fit()
         case 'image':
           return editor.images.selectAdjacent(cmd.delta)
+        case 'image-adjust':
+          return setAdjustOpen((o) => !o)
         case 'help':
           return setHelpOpen(true)
       }
@@ -179,7 +182,12 @@ export function AppShell() {
               />
             </Match>
             <Match when={state.phase === 'ready'}>
-              <WorkspaceContainer dragging={dragging()} onViewport={(h) => (viewport = h)} />
+              <WorkspaceContainer
+                dragging={dragging()}
+                onViewport={(h) => (viewport = h)}
+                adjustOpen={adjustOpen()}
+                onAdjustOpen={setAdjustOpen}
+              />
             </Match>
           </Switch>
         </main>

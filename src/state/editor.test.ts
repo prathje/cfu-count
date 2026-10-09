@@ -321,6 +321,24 @@ describe('editor', () => {
     expect(last[1]).toEqual([])
   })
 
+  it('display adjustments save project.json only, work on locked groups and keep storage merges intact', async () => {
+    const { editor, session } = await setup()
+    editor.annotations.add(1, 1)
+    await editor.projects.flush()
+    editor.groups.toggleLocked(editor.groups.active()!.id)
+    const display = { brightness: 0.2, contrast: 0, gamma: 1, saturation: 1, invert: true, channel: 'green' as const, autoContrast: false }
+    editor.images.setDisplay(['i1', 'i2'], display)
+    await editor.projects.flush()
+    const last = session().save.mock.calls.at(-1)! as [Project, unknown[]]
+    expect(last[0].images.map((i) => i.display)).toEqual([display, display])
+    expect(last[1]).toEqual([])
+    session().emitUpdated(project()) // storage-owned merge must not drop editor-owned display
+    expect(editor.state.project!.images[0].display).toEqual(display)
+    editor.images.setDisplay(['i1'], { ...display, brightness: 0, invert: false, channel: 'rgb' })
+    expect('display' in editor.state.project!.images[0]).toBe(false)
+    expect(editor.state.project!.images[1].display).toEqual(display)
+  })
+
   it('merges storage-owned fields from session.onUpdated without touching edits', async () => {
     const { editor, session } = await setup()
     editor.projects.rename('Renamed')

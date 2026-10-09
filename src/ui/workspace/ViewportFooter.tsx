@@ -1,5 +1,5 @@
 import { Show } from 'solid-js'
-import { Maximize, Pointer, ZoomIn, ZoomOut } from '../icons'
+import { Contrast, Maximize, Pointer, ZoomIn, ZoomOut } from '../icons'
 import { IconButton, ToggleButton } from '../primitives'
 import '../shared/float-bar.css'
 
@@ -22,12 +22,22 @@ export interface ViewportFooterProps {
   /** Zoom to 100 % (1 image px = 1 screen px). */
   onActualSize(): void
   onTouchAnnotates(on: boolean): void
+  /** Display adjustments are set for this image (shows an indicator). */
+  adjustActive: boolean
+  /** The adjustments popover is open. */
+  adjustOpen: boolean
+  /** The original is being shown (hold-to-compare). */
+  comparing: boolean
+  onToggleAdjust(): void
+  /** Anchor element for the adjustments popover. */
+  adjustRef(el: HTMLButtonElement): void
 }
 
 export function ViewportFooter(props: ViewportFooterProps) {
   const percent = () => (props.scale == null ? '—' : `${Math.round(props.scale * 100)}%`)
   return (
     <div class="vp-footer">
+      <div class="vp-footer__left">
       <div class="float-bar vp-zoom" role="group" aria-label="Zoom">
         <IconButton icon={ZoomOut} label="Zoom out" shortcut="−" onClick={() => props.onZoomOut()} disabled={props.scale == null} />
         <button
@@ -42,6 +52,29 @@ export function ViewportFooter(props: ViewportFooterProps) {
         </button>
         <IconButton icon={ZoomIn} label="Zoom in" shortcut="+" onClick={() => props.onZoomIn()} disabled={props.scale == null} />
         <IconButton icon={Maximize} label="Fit" showLabel={!props.compact} shortcut="0" onClick={() => props.onFit()} disabled={props.scale == null} />
+      </div>
+      <ToggleButton
+        ref={(el) => props.adjustRef(el)}
+        icon={Contrast}
+        label={props.comparing ? 'Original' : props.compact ? `Image adjustments${props.adjustActive ? ' (on)' : ''}` : 'Adjust'}
+        showLabel={!props.compact}
+        shortcut="I"
+        hint={props.adjustActive ? 'Display adjustments are on for this image (display only)' : 'Brightness, contrast, channels (display only)'}
+        pressed={props.adjustOpen}
+        aria-haspopup="dialog"
+        aria-expanded={props.adjustOpen}
+        class="float-bar vp-adjust"
+        classList={{ 'is-active': props.adjustActive, 'is-comparing': props.comparing }}
+        onClick={() => props.onToggleAdjust()}
+        trailing={
+          props.adjustActive ? (
+            <>
+              <span class="vp-adjust__dot" aria-hidden="true" />
+              <span class="sr-only">(on)</span>
+            </>
+          ) : undefined
+        }
+      />
       </div>
 
       <div class="vp-footer__right">

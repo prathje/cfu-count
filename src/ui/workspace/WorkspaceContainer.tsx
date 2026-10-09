@@ -1,11 +1,16 @@
-import { createMemo, createSignal, Show } from 'solid-js'
+import { createMemo, createSignal, onCleanup, Show } from 'solid-js'
+import { normaliseDisplay, isDefaultDisplay } from '../../model/display'
+import { imagesInGroup } from '../../model/project'
+import type { ImageDisplayAdjust } from '../../model/types'
 import { isConfirmed, labelNumber } from '../../model/annotations'
 import type { AddInfo, BlockedReason, ViewportHandle } from '../../viewport/api'
 import { Viewport } from '../../viewport/Viewport'
 import { useApp } from '../context'
 import { bitmapError, bitmapSizeMismatch, createCurrentBitmap, readyImage, type BlobSource } from '../images'
 import { createElementWidth, createMediaQuery, MOD } from '../media'
-import { CANVAS_GUARD_ATTR } from '../primitives'
+import { CANVAS_GUARD_ATTR, Popover } from '../primitives'
+import { COMPARE_KEY, isTypingTarget } from '../shortcuts'
+import { AdjustPanel } from './AdjustPanel'
 import { FloatingToolbar, toolbarModeFor } from '../toolbar/FloatingToolbar'
 import { groupTallies, interactionHint, nearDuplicateMessage, sizeMismatchMessage, TOUCH_NAVIGATES_DETAIL, TOUCH_NAVIGATES_MESSAGE } from './hints'
 import { ImageHeader } from './ImageHeader'
@@ -19,6 +24,9 @@ export interface WorkspaceContainerProps {
   dragging: boolean
   /** Receives the viewport's zoom/fit handle (global shortcuts route through it). */
   onViewport?(handle: ViewportHandle): void
+  /** Image adjustments popover state (the "I" shortcut lives in the app shell). */
+  adjustOpen: boolean
+  onAdjustOpen(open: boolean): void
 }
 
 /** The "fingers only navigate" explanation is shown once per page session. */
@@ -50,6 +58,36 @@ export function WorkspaceContainer(props: WorkspaceContainerProps) {
   }
   const hint = () => interactionHint({ tool: state.tool, activeGroup: groups.active(), coarse: coarse(), touchAnnotates: state.touchAnnotates })
   const driveConnected = () => editor.drive.state().state === 'connected'
+
+  // ------------------------------------------------ display adjustments (view setting)
+  const [adjustAnchor, setAdjustAnchor] = createSignal<HTMLElement>()
+  const [comparing, setComparing] = createSignal(false)
+  const display = createMemo(() => normaliseDisplay(images.current()?.display))
+  const groupImages = () => {
+    const img = images.current()
+    return state.project && img ? imagesInGroup(state.project, img.imageGroupId) : []
+  }
+  function applyDisplayTo(ids: string[], what: string) {
+    const value: ImageDisplayAdjust = { ...display() }
+    images.setDisplay(ids, value)
+    toaster.push({ tone: 'success', key: 'display-apply', message: `${isDefaultDisplay(value) ? 'Reset display for' : 'Applied display settings to'} ${what}` })
+  }
+  // Hold "\\" to show the original (keyup ends it; so do blur and hiding the tab).
+  const onCompareKey = (e: KeyboardEvent) => {
+    if (e.key !== COMPARE_KEY || e.metaKey || e.ctrlKey || isTypingTarget(e.target) || document.querySelector('dialog[open]')) return
+    if (!images.current() || isDefaultDisplay(display())) return
+    e.preventDefault()
+    setComparing(e.type === 'keydown')
+  }
+  const endCompare = () => setComparing(false)
+  window.addEventListener('keydown', onCompareKey)
+  window.addEventListener('keyup', onCompareKey)
+  window.addEventListener('blur', endCompare)
+  onCleanup(() => {
+    window.removeEventListener('keydown', onCompareKey)
+    window.removeEventListener('keyup', onCompareKey)
+    window.removeEventListener('blur', endCompare)
+  })
 
   function onAdd(x: number, y: number, info: AddInfo) {
     const list = confirmed() // snapshot before the add: the near marker is in it
@@ -147,6 +185,8 @@ export function WorkspaceContainer(props: WorkspaceContainerProps) {
                 activeGroupId={state.activeGroupId}
                 tool={state.tool}
                 touchAnnotates={state.touchAnnotates}
+                adjust={image().display}
+                compareOriginal={comparing()}
                 onAdd={onAdd}
                 onErase={annotations.erase}
                 onBlocked={onBlocked}
@@ -194,7 +234,38 @@ export function WorkspaceContainer(props: WorkspaceContainerProps) {
                 onFit={() => handle?.fit()}
                 onActualSize={() => handle?.setScale(1)}
                 onTouchAnnotates={view.setTouchAnnotates}
+                adjustActive={!isDefaultDisplay(display())}
+                adjustOpen={props.adjustOpen}
+                comparing={comparing()}
+                onToggleAdjust={() => props.onAdjustOpen(!props.adjustOpen)}
+                adjustRef={setAdjustAnchor}
               />
+              <Popover
+                open={props.adjustOpen}
+                anchor={adjustAnchor()}
+                onClose={() => {
+                  setComparing(false)
+                  props.onAdjustOpen(false)
+                }}
+                label="Image adjustments"
+                placement="top-start"
+                width={320}
+                class={comparing() ? 'is-comparing' : ''}
+              >
+                <AdjustPanel
+                  value={display()}
+                  imageGroupName={imageGroupName()}
+                  imageCount={images.order().length}
+                  groupImageCount={groupImages().length}
+                  comparing={comparing()}
+                  compareKey={COMPARE_KEY}
+                  onChange={(next) => images.setDisplay([image().id], next)}
+                  onReset={() => images.setDisplay([image().id], null)}
+                  onApplyAll={() => applyDisplayTo(images.order().map((i) => i.id), `all ${images.order().length} images`)}
+                  onApplyGroup={() => applyDisplayTo(groupImages().map((i) => i.id), `“${imageGroupName()}”`)}
+                  onCompare={setComparing}
+                />
+              </Popover>
             </div>
           </>
         )}
