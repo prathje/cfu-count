@@ -9,7 +9,7 @@ read from Drive or a `.zip` lives in `src/storage/validate.ts`. JSON is the reco
 A Drive project folder and an exported `.zip` share one layout:
 
 ```
-project.json                 project, image list, groups, Drive file references
+project.json                 project, image list, groups (+ Drive file-ID hints in a Drive folder)
 summary.csv                  derived per-image × per-group counts
 annotations/<imageId>.json   one annotation document per image
 images/…                     Drive: local images uploaded by the app (original file name)
@@ -34,6 +34,10 @@ their identity, never the file name.
   measured colony size; a fitted colony radius is in `Annotation.geometry.r`
   (image pixels).
 - Extra unknown fields are preserved when reading; required fields must be present.
+- Readers repair what can be repaired instead of rejecting the file: an image whose
+  `imageGroupId` names no existing image group becomes ungrouped (`null`, with a
+  warning shown on open); a manual annotation whose `reviewStatus` is not `accepted`
+  is read as `accepted` (manual marks are always confirmed).
 
 ## project.json
 
@@ -46,8 +50,14 @@ their identity, never the file name.
 | `imageGroups` | `{id, name}[]` | user-defined image groups (Treatment A, Batch 2, …) |
 | `images` | ImageRecord[] | see below |
 | `annotationGroups` | AnnotationGroup[] | project-wide marker groups, in display order |
-| `storage` | `{kind:"local"}` or Drive link | Drive file IDs of the outputs |
+| `storage` | `{kind:"local"}` or Drive link | see below |
+| `excludedDriveFileIds` | string[] | Drive file IDs of images the user removed from the project; folder scans never re-add them. Readers default it to `[]` |
 | `revision` | number | incremented on every local save |
+
+`storage`, `revision`, `excludedDriveFileIds` and each image's `source` /
+`sourceMismatch` are *storage-owned*: the editor never changes them, and the app
+merges them with `applyStorageOwned` (src/model/project.ts) when storage reports a
+change.
 
 ImageRecord:
 
@@ -70,10 +80,13 @@ Drive link (`storage.kind = "drive"`):
 | Field | Notes |
 | --- | --- |
 | `folderId`, `folderName` | the project folder |
-| `files.projectJson`, `files.summaryCsv`, `files.annotationsFolder`, `files.imagesFolder` | Drive file IDs, so saves update files instead of creating new ones |
-| `files.annotations` | `imageId → Drive file ID` of `annotations/<imageId>.json` |
-| `remoteVersions` | local only: `fileId → md5Checksum` last read or written by this browser; written as `{}` in shared copies |
+| `files` | written to Drive only, as hints: `{projectJson?, summaryCsv?, annotationsFolder?, imagesFolder?, annotations: {imageId → fileId}}`. Lets another user on the narrow `drive.file` scope request access to files they cannot list yet. Not part of the app's data model; readers may ignore it |
 | `account` | local only: never written to Drive or exported |
+
+Sync bookkeeping is not part of the model. Each browser keeps the output file IDs
+and the Drive `md5Checksum` it last read or wrote for each of them (used for
+conflict checks) in its local sync state (`SyncState.drive` in
+`src/storage/localStore.ts`), never in `project.json`.
 
 Example:
 
@@ -113,9 +126,9 @@ Example:
       "annotationsFolder": "1AnNoTs",
       "imagesFolder": "1ImAgEs",
       "annotations": { "0d9a7c3e-5f0b-4c8e-a1d2-3e4f5a6b7c8d": "1AnNoTaTiOnDoC" }
-    },
-    "remoteVersions": {}
+    }
   },
+  "excludedDriveFileIds": [],
   "revision": 42
 }
 ```
@@ -127,10 +140,19 @@ Example:
 | `schemaVersion` | `1` | |
 | `projectId`, `imageId` | string | |
 | `imageFingerprint`, `width`, `height` | | the image these coordinates were made against |
-| `groups` | AnnotationGroup[] | snapshot of the project's groups, so the file stands alone |
+| `groups` | AnnotationGroup[] | snapshot of the project's groups, so the file stands alone (see below) |
 | `annotations` | Annotation[] | |
 | `detectionRuns` | DetectionRun[] | required; `[]` when nothing automated was accepted |
 | `updatedAt` | timestamp | |
+
+**Group snapshots.** `project.json` is the source of truth for annotation groups
+(names, colours, visibility, lock, order). A document's `groups` snapshot is
+refreshed only when that document is saved for its own reasons (an annotation on
+that image changed) and whenever the project is exported as a `.zip`. Changing a
+group's visibility, lock, style or order therefore rewrites `project.json` only and
+never re-uploads every annotation document (which would also cause spurious Drive
+conflicts). Readers resolve groups from `project.json` first and use a document's
+snapshot only for groups the project no longer has.
 
 Annotation:
 
@@ -141,7 +163,7 @@ Annotation:
 | `groupId` | string | |
 | `origin` | `"manual"` \| `"automated"` | immutable; never inferred from tool, group or colour |
 | `createdAt`, `updatedAt` | timestamp | |
-| `reviewStatus` | `"unreviewed"` \| `"accepted"` \| `"rejected"` | manual marks are created `accepted` |
+| `reviewStatus` | `"unreviewed"` \| `"accepted"` \| `"rejected"` | manual marks are always `accepted` (enforced on read) |
 | `reviewedAt` | timestamp? | |
 | `lastEditSource` | `"manual"` \| `"automated"` | |
 | `manuallyAdjusted` | boolean | a person moved or changed an automated mark |
@@ -225,8 +247,8 @@ so no annotation is silently dropped. There is no per-image total column; sum
 | `image_id`, `image_name` | |
 | `drive_file_id` | source image's Drive file ID (empty for local-only images) |
 | `annotation_group_id`, `annotation_group_name` | |
-| `confirmed_count` | `manual_count + automated_accepted_count` |
-| `manual_count` | annotations with `origin = manual` (manual marks always count as confirmed) |
+| `confirmed_count` | `manual_count + automated_accepted_count`; the same count the app shows (`isConfirmed` in src/model/annotations.ts) |
+| `manual_count` | annotations with `origin = manual` (manual marks are always `accepted`, so always confirmed) |
 | `automated_accepted_count` | `origin = automated` and `reviewStatus = accepted` |
 | `automated_unreviewed_count` | automated suggestions not yet reviewed; **not** in `confirmed_count` |
 | `group_hidden`, `group_locked` | `true`/`false`; metadata only, never changes counts |
