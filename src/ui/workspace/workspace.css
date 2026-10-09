@@ -335,7 +335,7 @@
 }
 
 .vp-status__hint {
-  min-width: 0;
+  min-width: 11em;
   /* Wrap to a second line rather than cut the hint off. */
   white-space: normal;
   text-wrap: balance;
@@ -480,4 +480,13 @@
 
 .stage:has(.cfu-viewport:focus-visible) .pick-reticle {
   display: block;
+}
+
+/* Touch layouts without room for the full hint: the "Touch annotates" toggle label and
+   the first-tap toast already explain finger vs Pencil, so drop the hint instead of
+   truncating it. */
+@media (any-pointer: coarse) and (max-width: 1180px) {
+  .vp-status__hint {
+    display: none;
+  }
 }

@@ -39,7 +39,10 @@ export function ViewportFooter(props: ViewportFooterProps) {
     <div class="vp-footer">
       <div class="vp-footer__left">
       <div class="float-bar vp-zoom" role="group" aria-label="Zoom">
-        <IconButton icon={ZoomOut} label="Zoom out" shortcut="−" onClick={() => props.onZoomOut()} disabled={props.scale == null} />
+        {/* Narrow touch layouts drop the ± buttons (pinch zooms); level and Fit stay. */}
+        <Show when={!(props.compact && props.showTouchToggle)}>
+          <IconButton icon={ZoomOut} label="Zoom out" shortcut="−" onClick={() => props.onZoomOut()} disabled={props.scale == null} />
+        </Show>
         <button
           type="button"
           class="vp-zoom__level"
@@ -50,7 +53,9 @@ export function ViewportFooter(props: ViewportFooterProps) {
         >
           {percent()}
         </button>
-        <IconButton icon={ZoomIn} label="Zoom in" shortcut="+" onClick={() => props.onZoomIn()} disabled={props.scale == null} />
+        <Show when={!(props.compact && props.showTouchToggle)}>
+          <IconButton icon={ZoomIn} label="Zoom in" shortcut="+" onClick={() => props.onZoomIn()} disabled={props.scale == null} />
+        </Show>
         <IconButton icon={Maximize} label="Fit" showLabel={!props.compact} shortcut="0" onClick={() => props.onFit()} disabled={props.scale == null} />
       </div>
       <ToggleButton
@@ -91,10 +96,15 @@ export function ViewportFooter(props: ViewportFooterProps) {
         </Show>
         <div class="float-bar vp-status" role="status" aria-live="off">
           <span class="vp-status__counts">
-            <strong>{props.visible.toLocaleString()}</strong> visible
+            <strong>{props.visible.toLocaleString()}</strong>
+            <span classList={{ 'sr-only': props.compact }}> visible</span>
             <Show when={props.hidden > 0}>
               <span class="vp-status__dot" aria-hidden="true">·</span>
-              <strong>{props.hidden.toLocaleString()}</strong> hidden
+              <strong>{props.hidden.toLocaleString()}</strong>
+              <span classList={{ 'sr-only': props.compact }}> hidden</span>
+              <Show when={props.compact}>
+                <span aria-hidden="true"> hid.</span>
+              </Show>
             </Show>
           </span>
           <Show when={!props.compact && props.hint}>
