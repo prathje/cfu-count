@@ -220,9 +220,14 @@ export function Viewport(props: ViewportProps) {
 
   // ------------------------------------------------------------- image input
 
+  // Compared by value: a parent re-reading an equal record (e.g. after a rename or a
+  // display-adjust change) must not rebuild the pyramid or re-fit the view.
+  const imageInput = createMemo(() => [props.image, props.imageWidth, props.imageHeight] as const, undefined, {
+    equals: (a, b) => a[0] === b[0] && a[1] === b[1] && a[2] === b[2],
+  })
   createEffect(
     on(
-      () => [props.image, props.imageWidth, props.imageHeight] as const,
+      imageInput,
       ([img]) => {
         pyramidSignal.aborted = true
         disposePyramid(levels)

@@ -5,8 +5,8 @@
  *   drawn, or for very large levels the visible 1024 px tiles over the next
  *   coarser level). Pan/zoom reuses cached results; new work happens only the
  *   first time a level or tile is needed.
- * - Responsive: after a settings change the coarsest level is redone first (a
- *   quick preview), finer work waits until the settings stop changing
+ * - Responsive: after a settings change the coarsest level (<= 1024 px) is redone
+ *   first as a quick preview, finer work waits until the settings stop changing
  *   (SETTLE_MS), and results of superseded settings are discarded.
  * - Bounded: one generation of results plus the previous one (shown until the
  *   new one has something to draw); full-resolution tiles are LRU-evicted past
@@ -24,8 +24,6 @@ export const TILE_PX = 1024
 export const TILE_LEVEL_MIN_PX = 8 * 1024 * 1024
 /** Max adjusted full-resolution tile pixels kept (16 MP ≈ 64 MB of bitmaps). */
 export const TILE_BUDGET_PX = 16 * 1024 * 1024
-/** Above this many pixels, the coarsest level is adjusted first as a quick preview. */
-export const PREVIEW_MAX_PX = 2 * 1024 * 1024
 /** Finer work starts once settings have been unchanged this long (slider drags). */
 export const SETTLE_MS = 150
 
@@ -37,14 +35,23 @@ export interface ImageRect {
   y1: number
 }
 
-/** An adjusted tile drawn at an image-px rectangle. */
+/** An adjusted tile: source sub-rectangle (tile px) drawn at an image-px rectangle. */
 export interface ImageTile {
   source: ImageSourceLike
+  sx: number
+  sy: number
+  sw: number
+  sh: number
   x: number
   y: number
   w: number
   h: number
 }
+
+/** Extra source px processed around each tile, so neighbours can overlap (no seams). */
+const TILE_PAD = 2
+/** Overlap drawn into each neighbour, in level px: hides anti-aliased tile edges. */
+const TILE_OVERLAP = 1
 
 export interface AdjustedDrawable {
   /** Adjusted whole levels (finest first), possibly empty while only tiles exist. */
@@ -76,9 +83,16 @@ interface Generation {
 type Job =
   | { key: string; kind: 'histogram'; level: PyramidLevel; quick: true }
   | { key: string; kind: 'level'; level: PyramidLevel; quick: boolean }
-  | { key: string; kind: 'tile'; level: PyramidLevel; rect: PixelRect; quick: false }
+  | { key: string; kind: 'tile'; level: PyramidLevel; rect: PixelRect; cell: PixelRect; quick: false }
 
 const pixels = (s: ImageSourceLike) => s.width * s.height
+
+/** `r` grown by `by` px on each side, clamped to a W x H level. */
+function expand(r: PixelRect, by: number, W: number, H: number): PixelRect {
+  const x = Math.max(0, r.x - by)
+  const y = Math.max(0, r.y - by)
+  return { x, y, w: Math.min(W, r.x + r.w + by) - x, h: Math.min(H, r.y + r.h + by) - y }
+}
 
 function release(s: ImageSourceLike) {
   if (typeof ImageBitmap !== 'undefined' && s instanceof ImageBitmap) s.close()
@@ -243,9 +257,12 @@ export class AdjustedLayer {
     const levelJob = (l: PyramidLevel, quick: boolean): Job => ({ key: `l:${this.id(l.source)}`, kind: 'level', level: l, quick })
     const coarseOk = !tiled(coarsest)
     if (g.adjust.autoContrast && !this.ranges.has(g.matrixKey)) {
+      // Only a small level gives a cheap histogram; wait for the pyramid otherwise.
+      if (!coarseOk) return []
       jobs.push({ key: `h:${this.id(coarsest.source)}:${g.matrixKey}`, kind: 'histogram', level: coarsest, quick: true })
     }
-    if (coarseOk && coarsest !== target && (tiled(target) || pixels(target.source) > PREVIEW_MAX_PX)) jobs.push(levelJob(coarsest, true))
+    // Quick preview: the coarsest level follows every change (also mid-drag); finer levels wait to settle.
+    if (coarseOk && coarsest !== target) jobs.push(levelJob(coarsest, true))
     if (!tiled(target)) {
       jobs.push(levelJob(target, target === coarsest))
     } else {
@@ -271,10 +288,11 @@ export class AdjustedLayer {
     const lid = this.id(level.source)
     for (let ty = ty0; ty < ty1; ty++) {
       for (let tx = tx0; tx < tx1; tx++) {
-        const r: PixelRect = { x: tx * TILE_PX, y: ty * TILE_PX, w: Math.min(TILE_PX, W - tx * TILE_PX), h: Math.min(TILE_PX, H - ty * TILE_PX) }
-        px += r.w * r.h
-        const d = Math.hypot(r.x + r.w / 2 - cx, r.y + r.h / 2 - cy)
-        jobs.push({ key: `t:${lid}:${tx}:${ty}`, kind: 'tile', level, rect: r, quick: false, d })
+        const cell: PixelRect = { x: tx * TILE_PX, y: ty * TILE_PX, w: Math.min(TILE_PX, W - tx * TILE_PX), h: Math.min(TILE_PX, H - ty * TILE_PX) }
+        const rect = expand(cell, TILE_PAD, W, H)
+        px += rect.w * rect.h
+        const d = Math.hypot(cell.x + cell.w / 2 - cx, cell.y + cell.h / 2 - cy)
+        jobs.push({ key: `t:${lid}:${tx}:${ty}`, kind: 'tile', level, rect, cell, quick: false, d })
       }
     }
     // Too much visible at full resolution to keep within budget: the base level is sharp enough there.
@@ -332,10 +350,21 @@ export class AdjustedLayer {
         this.dropStale()
       } else {
         const ls = job.level.scale
+        const draw = expand(job.cell, TILE_OVERLAP, src.width, src.height)
         g.tiles.set(job.key, {
           source: out,
           levelSource: src,
-          rect: { source: out, x: rect.x / ls, y: rect.y / ls, w: rect.w / ls, h: rect.h / ls },
+          rect: {
+            source: out,
+            sx: draw.x - rect.x,
+            sy: draw.y - rect.y,
+            sw: draw.w,
+            sh: draw.h,
+            x: draw.x / ls,
+            y: draw.y / ls,
+            w: draw.w / ls,
+            h: draw.h / ls,
+          },
           px: rect.w * rect.h,
           used: this.tick,
         })

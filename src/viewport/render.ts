@@ -65,9 +65,13 @@ export function visibleImageRect(imageSize: Size, view: ViewState, viewport: Siz
   }
 }
 
-/** A bitmap drawn over the level at an image-px rectangle (display-adjusted full-resolution tiles). */
+/** A bitmap region drawn over the level at an image-px rectangle (display-adjusted full-resolution tiles). */
 export interface ImageLayerTile {
   source: CanvasImageSource
+  sx: number
+  sy: number
+  sw: number
+  sh: number
   x: number
   y: number
   w: number
@@ -103,8 +107,8 @@ export function drawImageLayer(
   const sw = Math.min(level.source.width - sx, (x1 - x0) * ls)
   const sh = Math.min(level.source.height - sy, (y1 - y0) * ls)
   if (sw > 0 && sh > 0) ctx.drawImage(level.source, sx, sy, sw, sh, x0, y0, sw / ls, sh / ls)
-  // Tiles cover their exact rectangles; any anti-aliased seam shows the level underneath.
-  for (const t of tiles) ctx.drawImage(t.source, t.x, t.y, t.w, t.h)
+  // Tiles overlap their neighbours by a pixel of identical content, so edges don't show.
+  for (const t of tiles) ctx.drawImage(t.source, t.sx, t.sy, t.sw, t.sh, t.x, t.y, t.w, t.h)
 }
 
 /**

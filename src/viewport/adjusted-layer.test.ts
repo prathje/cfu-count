@@ -106,10 +106,11 @@ describe('AdjustedLayer', () => {
     expect(names.slice(0, 2)).toEqual(['L3', 'L1'])
     const tiles = calls.filter((c) => c.name === 'L0')
     expect(tiles.length).toBe(1) // 100..600 x 100..500 sits in tile (0,0)
-    expect(tiles[0].rect).toEqual({ x: 0, y: 0, w: TILE_PX, h: TILE_PX })
+    expect(tiles[0].rect).toEqual({ x: 0, y: 0, w: TILE_PX + 2, h: TILE_PX + 2 }) // padded for seamless overlap
     expect(calls.some((c) => c.name === 'L0' && c.rect!.w === 6016)).toBe(false)
     const d = layer.drawable(2, view)!
     expect(d.tiles).toHaveLength(1)
+    expect(d.tiles[0]).toMatchObject({ sx: 0, sy: 0, sw: TILE_PX + 1, sh: TILE_PX + 1, x: 0, y: 0, w: TILE_PX + 1, h: TILE_PX + 1 })
     expect(d.levels.map((l) => l.scale)).toEqual([0.5, 0.125])
   })
 
@@ -136,5 +137,15 @@ describe('AdjustedLayer', () => {
     layer.setLevels([{ source: src(800, 600, 'B'), scale: 1 }])
     expect(freed).toHaveLength(1)
     expect(layer.drawable(1, whole)).toBeNull()
+  })
+})
+
+describe('AdjustedLayer before the pyramid exists', () => {
+  it('does not read a huge single level for auto contrast', async () => {
+    const { layer, calls } = setup([{ source: src(6016, 4016, 'L0'), scale: 1 }])
+    layer.setAdjust(adj({ autoContrast: true }))
+    layer.drawable(0.1, whole)
+    await flush()
+    expect(calls).toEqual([])
   })
 })
