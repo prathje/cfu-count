@@ -17,7 +17,7 @@ import {
   type AnnotationOp,
   type OpBlock,
 } from '../../model/annotations'
-import { editBlock } from '../../model/policy'
+import { editBlock, type GroupBlockReason } from '../../model/policy'
 import { emptyDoc } from '../../model/project'
 import { newId, now } from '../../model/ids'
 import type { BlockedReason } from '../../viewport/api'
@@ -80,7 +80,7 @@ export function createAnnotations(ctx: EditorContext, groups: GroupCommands): An
   const canRedo = createMemo(() => (currentHistory()?.redo.length ?? 0) > 0)
 
   // ------------------------------------------------------------ notices
-  const fixFor = (reason: 'locked' | 'hidden', group: AnnotationGroup) =>
+  const fixFor = (reason: GroupBlockReason, group: AnnotationGroup) =>
     reason === 'locked'
       ? { label: 'Unlock', run: () => groups.setLocked(group.id, false) }
       : { label: 'Show group', run: () => groups.setHidden(group.id, false) }

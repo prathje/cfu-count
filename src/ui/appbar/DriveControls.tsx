@@ -1,6 +1,6 @@
 import { Match, Show, Switch as SolidSwitch } from 'solid-js'
 import type { ProjectStorageLink } from '../../model/types'
-import type { DriveState, SaveStatus } from '../../storage/api'
+import type { DriveLinkMode, DriveState, SaveStatus } from '../../storage/api'
 import { AlertTriangle, Check, Cloud, CloudAlert, CloudCheck, CloudOff, CloudUpload, FolderOpen, FolderPlus, HardDrive, Loader, LogOut, RefreshCw, type IconComponent } from '../icons'
 import { Button, Popover, createPopoverState } from '../primitives'
 import { driveLabel, saveStatusLabel, type StatusTone } from '../format'
@@ -9,7 +9,7 @@ import { driveLabel, saveStatusLabel, type StatusTone } from '../format'
 export interface DriveActions {
   onConnect(): void
   onDisconnect(): void
-  onLink(mode: 'create-folder' | 'pick-folder'): void
+  onLink(mode: DriveLinkMode): void
   onOpenFromDrive(): void
   onSaveNow(): void
   onKeepMine(): void

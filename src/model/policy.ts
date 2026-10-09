@@ -10,6 +10,8 @@
 import type { AnnotationGroup } from './types'
 
 export type EditBlockReason = 'no-group' | 'locked' | 'hidden'
+/** Reasons that belong to an existing group (and can be fixed by unlocking / showing it). */
+export type GroupBlockReason = Exclude<EditBlockReason, 'no-group'>
 
 export function editBlock(group: AnnotationGroup | undefined | null): EditBlockReason | null {
   if (!group) return 'no-group'

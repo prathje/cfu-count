@@ -7,7 +7,7 @@
  * `normaliseAnnotation`, which storage applies to everything it reads).
  */
 import type { Annotation, AnnotationGroup, DetectionRun, ID } from './types'
-import { editBlock } from './policy'
+import { editBlock, type GroupBlockReason } from './policy'
 
 // ---------------------------------------------------------------------------
 // Construction & normalisation
@@ -160,7 +160,7 @@ export function opGroupIds(op: AnnotationOp): ID[] {
 
 /** Why a batch of ops may not be applied. */
 export type OpBlock =
-  | { reason: 'locked' | 'hidden'; group: AnnotationGroup }
+  | { reason: GroupBlockReason; group: AnnotationGroup }
   | { reason: 'missing'; groupId: ID }
   /** A programming error in the batch itself (e.g. an update that rewrites `origin`). */
   | { reason: 'invalid'; detail: string }
