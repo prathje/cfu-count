@@ -49,6 +49,23 @@ export interface ImageRecord {
    * Unused in v1; coordinates are never shared across channels until alignment exists.
    */
   sampleId?: ID
+  /**
+   * Set by storage (never by the editor) when the source bytes no longer match the
+   * image the annotations were made against, e.g. the Drive file was replaced.
+   * The UI must warn before letting the user rely on existing coordinates.
+   */
+  sourceMismatch?: SourceMismatch
+}
+
+export interface SourceMismatch {
+  detectedAt: Timestamp
+  /** Human-readable explanation suitable for display. */
+  message: string
+  /** Drive md5Checksum of the current remote file, if known. */
+  remoteMd5?: string
+  /** Oriented dimensions of the current remote bytes, if they were decoded. */
+  remoteWidth?: number
+  remoteHeight?: number
 }
 
 export type MarkerRender = 'dot' | 'circle'
@@ -68,6 +85,8 @@ export interface AnnotationGroup {
   size: number
   /** Show per-group sequence numbers next to markers. */
   labels: boolean
+  /** Label font size in CSS px (screen space, like `size`). */
+  labelSize: number
   hidden: boolean
   locked: boolean
 }
@@ -100,7 +119,66 @@ export interface Annotation {
   lastEditSource: AnnotationOrigin
   /** True once a person moved/changed an automated annotation. */
   manuallyAdjusted: boolean
+  /** Automated annotations only. `detector.runId` references ImageAnnotations.detectionRuns. */
   detector?: DetectorProvenance
+  /**
+   * Inferred colony extent in original-image px (fitted by a detector or estimated
+   * for a seed). Distinct from AnnotationGroup.size, which is display-only.
+   * Setting it never changes origin / lastEditSource / manuallyAdjusted.
+   */
+  geometry?: AnnotationGeometry
+}
+
+export interface AnnotationGeometry {
+  kind: 'circle'
+  /** Radius in original-image px. */
+  r: number
+  /** 0..1 fit quality, if the method produces one. */
+  quality?: number
+  source: 'fit' | 'seed-estimate'
+}
+
+export type SeedQuality = 'ok' | 'touching' | 'edge' | 'glare' | 'weak'
+
+/** Snapshot of one example colony used to calibrate a run (coordinates copied for reproducibility). */
+export interface DetectionSeed {
+  annotationId: ID
+  /** Image the seed was taken from; may be another plate (reference plate) in the project. */
+  imageId: ID
+  x: number
+  y: number
+  radiusPx: number | null
+  quality: SeedQuality
+}
+
+/**
+ * Record of one automated detection run on this image. Stored in the image's
+ * annotation document; only runs referenced by at least one kept annotation
+ * need to be retained. Pending (unaccepted) suggestions are never stored here.
+ */
+export interface DetectionRun {
+  runId: ID
+  method: string
+  version: string
+  createdAt: Timestamp
+  /** Fingerprint of the image analysed (must equal ImageAnnotations.imageFingerprint). */
+  imageFingerprint: string
+  /** Fingerprints of other images seeds were drawn from, keyed by imageId. */
+  seedImageFingerprints?: Record<ID, string>
+  /** Analysis resolution relative to the original image (e.g. 0.5). */
+  analysisScale: number
+  targetGroupId: ID
+  /** Region analysed, in original-image coordinates; absent = whole image. */
+  roi?: { kind: 'circle'; cx: number; cy: number; r: number } | { kind: 'rect'; x: number; y: number; w: number; h: number }
+  seeds: DetectionSeed[]
+  /** Learned priors (e.g. log-radius mu/s, appearance ranges); method-specific. */
+  prior: Record<string, unknown>
+  /** User-adjustable and fixed settings for the run; method-specific. */
+  settings: Record<string, unknown>
+  /** Human-rejected suggestions recorded as negatives (image coordinates). */
+  negatives?: { x: number; y: number }[]
+  /** Summary diagnostics (cluster counts, review flags, timings). */
+  diagnostics?: Record<string, unknown>
 }
 
 /** One document per image: annotations/<imageId>.json */
@@ -115,6 +193,8 @@ export interface ImageAnnotations {
   /** Snapshot of project annotation groups at save time (self-contained document). */
   groups: AnnotationGroup[]
   annotations: Annotation[]
+  /** Automated detection runs whose results were (at least partly) accepted. */
+  detectionRuns: DetectionRun[]
   updatedAt: Timestamp
 }
 
@@ -133,7 +213,11 @@ export type ProjectStorageLink =
         /** imageId -> Drive file ID of annotations/<imageId>.json */
         annotations: Record<ID, string>
       }
-      /** Drive file `version` per output file ID when last read/written; used for conflict checks. */
+      /**
+       * Content token (Drive `md5Checksum`) per output file ID as last read/written by this
+       * browser; used for conflict checks. `version` is not used because it also changes on
+       * metadata-only edits (rename, sharing). Not uploaded in project.json.
+       */
       remoteVersions: Record<string, string>
       account?: string
     }

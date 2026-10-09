@@ -45,6 +45,8 @@ export interface OpenedProject {
   project: Project
   /** Keyed by imageId. Missing entries mean "no annotations yet". */
   annotations: Map<ID, ImageAnnotations>
+  /** Non-fatal problems found while opening/importing (missing files, replaced images, ...). */
+  warnings?: string[]
 }
 
 export interface ImportResult {
@@ -67,6 +69,14 @@ export interface ProjectRepository {
    * If the project is Drive-linked this marks it 'pending' and schedules a debounced Drive save.
    */
   saveLocal(project: Project, annotations: ImageAnnotations[]): Promise<void>
+  /**
+   * Storage owns `project.storage`, `project.revision` and each image's `source` /
+   * `sourceMismatch`: saveLocal keeps the repository's values for these fields, and
+   * the repository calls these listeners with the updated project whenever it changes
+   * them (Drive link created, image uploaded, replaced image detected, ...).
+   * Callers should merge those fields into editor state. Returns an unsubscribe function.
+   */
+  onProjectUpdated(listener: (project: Project) => void): () => void
 
   /** Decode, measure (EXIF-oriented), fingerprint and store images. Rejects unsupported formats clearly. */
   importImageFiles(project: Project, files: File[]): Promise<ImportResult>

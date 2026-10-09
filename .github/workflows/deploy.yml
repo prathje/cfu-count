@@ -31,6 +31,7 @@ jobs:
           VITE_GOOGLE_CLIENT_ID: ${{ vars.VITE_GOOGLE_CLIENT_ID }}
           VITE_GOOGLE_API_KEY: ${{ vars.VITE_GOOGLE_API_KEY }}
           VITE_GOOGLE_APP_ID: ${{ vars.VITE_GOOGLE_APP_ID }}
+          VITE_GOOGLE_DRIVE_SCOPE: ${{ vars.VITE_GOOGLE_DRIVE_SCOPE }}
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist
