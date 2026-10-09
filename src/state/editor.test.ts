@@ -3,6 +3,8 @@ import type { Annotation, ImageRecord, Project } from '../model/types'
 import { SCHEMA_VERSION } from '../model/types'
 import type { DriveState, ImportResult, ProjectRepository, ProjectSession, ProjectSnapshot, SaveStatus } from '../storage/api'
 import { createEditor } from './editor'
+import { createAssist } from './assist'
+import type { DetectRequest, DetectResult, DetectorClient } from '../detection'
 import type { ConfirmRequest, Notice } from './messages'
 
 const img = (id: string, imageGroupId: string | null): ImageRecord => ({
@@ -445,5 +447,202 @@ describe('editor', () => {
     editor.dispose()
     await repo.connectDrive() // emits; must not throw or update disposed signals
     expect(true).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Assisted counting (state/assist) on top of the real editor
+// ---------------------------------------------------------------------------
+
+function fakeDetector(make: (req: DetectRequest) => Partial<DetectResult>) {
+  const calls: DetectRequest[] = []
+  let gate: Promise<void> | null = null
+  const client: DetectorClient & { calls: DetectRequest[]; hold(): () => void; cleared: number } = {
+    calls,
+    cleared: 0,
+    hold() {
+      let release!: () => void
+      gate = new Promise((r) => (release = r))
+      return release
+    },
+    async detect(request, opts = {}) {
+      calls.push(request)
+      opts.onProgress?.({ stage: 'fit', fraction: 0.5 })
+      if (gate) await gate
+      if (opts.signal?.aborted) throw Object.assign(new Error('Detection cancelled'), { name: 'DetectionCancelled' })
+      const base = {
+        method: 'fitter' as const,
+        suggestions: [],
+        clusters: [],
+        calibration: { seeds: [], nTotal: request.seeds.length, nUsable: request.seeds.length, prior: null, appearance: {}, polarity: 1 as const, colorAxis: [1, 0, 0] as [number, number, number], summary: `${request.seeds.length} manual examples`, tentative: false, warnings: [] },
+        roi: { source: 'auto' as const, outline: [], shape: 'square' as const, marginPx: 2, area: 1 },
+        run: { runId: request.runId!, method: 'colony-fitter', version: '1', createdAt: '', imageFingerprint: '', analysisScale: 1, targetGroupId: request.targetGroupId, seeds: [], prior: {}, settings: {} },
+        timingsMs: {},
+        peakRasterBytes: 0,
+      }
+      return { ...base, ...make(request) } as DetectResult
+    },
+    clearCache() {
+      client.cleared++
+    },
+    dispose() {},
+  }
+  return client
+}
+
+const s = (x: number, y: number, clusterId: string, status: 'ok' | 'review' = 'ok') => ({ x, y, r: 3, score: 1, clusterId, status })
+
+async function setupAssist(make: (req: DetectRequest) => Partial<DetectResult> = () => ({
+  suggestions: [s(50, 50, 'c1'), s(70, 50, 'c2'), s(60, 70, 'c3', 'review'), s(66, 70, 'c3', 'review')],
+  clusters: [
+    { clusterId: 'c1', bbox: [47, 47, 6, 6], area: 28, fixedIds: [], chosenK: 1, runnerUpK: null, objectiveGap: null, status: 'ok' },
+    { clusterId: 'c2', bbox: [67, 47, 6, 6], area: 28, fixedIds: [], chosenK: 1, runnerUpK: null, objectiveGap: null, status: 'ok' },
+    { clusterId: 'c3', bbox: [57, 67, 12, 6], area: 50, fixedIds: [], chosenK: 2, runnerUpK: 1, objectiveGap: 0.1, status: 'review', alternative: { k: 1, colonies: [{ x: 63, y: 70, r: 5 }] } },
+  ],
+})) {
+  const env = await setup()
+  const detector = fakeDetector(make)
+  let ids = 0
+  const assist = createAssist({ editor: env.editor, notify: (n) => env.notices.push(n), createClient: () => detector, debounceMs: 0, newId: () => `id${++ids}` })
+  for (const [x, y] of [[10, 10], [20, 10], [30, 10]]) env.editor.annotations.add(x, y)
+  const settle = () => new Promise((r) => setTimeout(r, 0))
+  return { ...env, assist, detector, settle }
+}
+
+describe('assisted counting', () => {
+  it('runs on open with this image’s manual examples and never counts suggestions', async () => {
+    const { editor, assist, detector, settle } = await setupAssist()
+    expect(assist.block()).toBeNull()
+    assist.start()
+    expect(assist.phase()).toBe('running')
+    await settle()
+    expect(assist.phase()).toBe('ready')
+    expect(detector.calls[0].seeds).toHaveLength(3)
+    expect(detector.calls[0].existing).toHaveLength(3)
+    expect(assist.view()).toMatchObject({ suggested: 4, needReview: 2, rejected: 0 })
+    expect(editor.annotations.total()).toBe(3) // confirmed only
+    expect(editor.state.docs['i1'].annotations).toHaveLength(3) // suggestions never enter the document
+  })
+
+  it('accepting all OK is one undo step that stores the run; undo removes both and suggestions are pending again', async () => {
+    const { editor, assist, settle, notices } = await setupAssist()
+    assist.start()
+    await settle()
+    assist.toggleReject(1)
+    expect(assist.view()!.rejected).toBe(1)
+    expect(assist.accept({ kind: 'ok' })).toBe(true)
+    expect(notices.at(-1)).toMatchObject({ tone: 'success', message: 'Added 1 colony to “Colonies”' })
+    expect(editor.annotations.total()).toBe(4)
+    const added = editor.annotations.current().at(-1)!
+    expect(added).toMatchObject({ origin: 'automated', reviewStatus: 'accepted', geometry: { kind: 'circle', r: 3, source: 'fit' }, detector: { confidence: null } })
+    const runs = editor.state.docs['i1'].detectionRuns
+    expect(runs).toHaveLength(1)
+    expect(runs[0]).toMatchObject({ runId: added.detector!.runId, imageFingerprint: 'fp-i1', negatives: [{ x: 70, y: 50 }] })
+    expect(assist.view()!.okIndices).toEqual([])
+    notices.at(-1)!.action!.run() // toast Undo
+    expect(editor.annotations.total()).toBe(3)
+    expect(editor.state.docs['i1'].detectionRuns).toEqual([])
+    expect(assist.view()!.okIndices).toEqual([0])
+    editor.annotations.redo()
+    expect(editor.annotations.total()).toBe(4)
+    expect(editor.state.docs['i1'].detectionRuns).toHaveLength(1)
+  })
+
+  it('resolves a review cluster with the alternative count as its own undo step', async () => {
+    const { editor, assist, settle } = await setupAssist()
+    assist.start()
+    await settle()
+    expect(assist.accept({ kind: 'cluster', clusterId: 'c3', choice: 'alternative' })).toBe(true)
+    expect(editor.annotations.total()).toBe(4)
+    expect(assist.view()!.reviewClusters).toHaveLength(0)
+    editor.annotations.undo()
+    expect(assist.view()!.reviewClusters).toHaveLength(1)
+  })
+
+  it('refuses to accept into a locked or hidden group and offers the fix', async () => {
+    const { editor, assist, settle, notices } = await setupAssist()
+    assist.start()
+    await settle()
+    const id = editor.groups.active()!.id
+    editor.groups.setLocked(id, true)
+    expect(assist.accept({ kind: 'ok' })).toBe(false)
+    expect(notices.at(-1)).toMatchObject({ message: expect.stringMatching(/locked/), action: { label: 'Unlock' } })
+    expect(editor.annotations.total()).toBe(3)
+    expect(assist.block()?.reason).toBe('locked')
+    notices.at(-1)!.action!.run()
+    editor.groups.setHidden(id, true)
+    expect(assist.accept({ kind: 'ok' })).toBe(false)
+    expect(notices.at(-1)?.action?.label).toBe('Show group')
+  })
+
+  it('does not duplicate a colony marked by hand after the run', async () => {
+    const { editor, assist, settle } = await setupAssist()
+    assist.start()
+    await settle()
+    editor.annotations.add(50.5, 50.5)
+    expect(assist.view()!.okIndices).toEqual([1])
+    assist.accept({ kind: 'ok' })
+    expect(editor.annotations.current().filter((a) => Math.hypot(a.x - 50, a.y - 50) < 3)).toHaveLength(1)
+  })
+
+  it('cancels on image switch and keeps per-image layers; a project switch discards them', async () => {
+    const { editor, assist, detector, settle } = await setupAssist()
+    assist.start()
+    await settle()
+    expect(assist.layer()).not.toBeNull()
+    editor.images.select('i2')
+    expect(assist.layer()).toBeNull()
+    expect(assist.phase()).toBe('idle')
+    expect(detector.cleared).toBeGreaterThan(0)
+    editor.images.select('i1')
+    expect(assist.phase()).toBe('ready')
+    const release = detector.hold()
+    assist.run()
+    await settle()
+    expect(assist.phase()).toBe('running')
+    editor.images.select('i2')
+    release()
+    await settle()
+    expect(assist.phase()).toBe('idle')
+    await editor.projects.open('p2')
+    await settle()
+    editor.images.select('i1')
+    expect(assist.layer()).toBeNull()
+    expect(assist.open()).toBe(false)
+  })
+
+  it('borrows examples from a reference image and records its fingerprint on accept', async () => {
+    const { editor, assist, detector, settle } = await setupAssist()
+    editor.images.select('i2')
+    expect(assist.localSeeds()).toBe(0)
+    expect(assist.candidates()).toEqual([{ imageId: 'i1', name: 'i1.jpg', count: 3 }])
+    expect(assist.seedSource()).toEqual({ kind: 'reference', imageId: 'i1' })
+    assist.start()
+    expect(assist.phase()).toBe('idle') // a reference plate is confirmed by the user first
+    assist.run()
+    await settle()
+    const req = detector.calls.at(-1)!
+    expect(req.seeds).toHaveLength(0)
+    expect(req.remoteSeeds).toHaveLength(3)
+    expect(Object.keys(req.remoteSources ?? {})).toEqual(['i1'])
+    assist.accept({ kind: 'ok' })
+    expect(editor.state.docs['i2'].detectionRuns[0].seedImageFingerprints).toEqual({ i1: 'fp-i1' })
+  })
+
+  it('carries rejections over a settings re-run and blocks with no examples anywhere', async () => {
+    const { editor, assist, detector, settle } = await setupAssist()
+    assist.start()
+    await settle()
+    assist.toggleReject(0)
+    assist.setSettings({ sensitivity: 0.8 })
+    await new Promise((r) => setTimeout(r, 5))
+    await settle()
+    expect(detector.calls).toHaveLength(2)
+    expect(detector.calls[1].settings).toMatchObject({ sensitivity: 0.8 })
+    expect(assist.layer()!.rejected.has(0)).toBe(true)
+    editor.annotations.undo()
+    editor.annotations.undo()
+    editor.annotations.undo()
+    expect(assist.block()?.reason).toBe('no-seeds')
   })
 })
