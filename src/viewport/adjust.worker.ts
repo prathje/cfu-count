@@ -1,11 +1,11 @@
 /**
  * Display-adjust worker: receives an ImageBitmap (transferred), applies the
- * channel matrix + LUT on an OffscreenCanvas and transfers the adjusted bitmap
+ * colour stage (channel matrix or colour LUT) + LUT on an OffscreenCanvas and transfers the adjusted bitmap
  * back, or returns a histogram. Keeps the per-pixel loop off the main thread.
  * Protocol: adjust-protocol.ts. Replies `{ id, error }` when OffscreenCanvas 2D
  * is unavailable, so the caller can fall back to the main thread.
  */
-import { applyAdjust, histogram } from './image-adjust'
+import { applyStage, stageHistogram } from './image-adjust'
 import type { WorkerReply, WorkerRequest } from './adjust-protocol'
 
 interface WorkerScope {
@@ -26,12 +26,12 @@ scope.onmessage = (e) => {
     bitmap.close()
     const image = ctx.getImageData(0, 0, canvas.width, canvas.height)
     if (req.type === 'histogram') {
-      const hist = histogram(image.data, req.matrix)
+      const hist = stageHistogram(image.data, req.stage)
       canvas.width = canvas.height = 0
       scope.postMessage({ id: req.id, hist }, [hist.buffer])
       return
     }
-    applyAdjust(image.data, req.matrix, req.lut)
+    applyStage(image.data, req.stage, req.lut)
     ctx.putImageData(image, 0, 0)
     const out = canvas.transferToImageBitmap()
     scope.postMessage({ id: req.id, bitmap: out }, [out])

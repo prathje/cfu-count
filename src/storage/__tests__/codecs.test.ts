@@ -97,7 +97,17 @@ describe('archive round trip', () => {
     p.images[0].fingerprint = await sha256Hex(PNG_1x1)
     p.images[1].fingerprint = await sha256Hex(PNG_1x1)
     p.storage = { kind: 'drive', folderId: 'F', folderName: 'Folder', account: 'me@example.com' }
-    p.images[0].display = { brightness: 0.1, contrast: 0.35, gamma: 1.4, saturation: 1, invert: true, channel: 'luma', autoContrast: true }
+    p.images[0].display = {
+      brightness: 0.1,
+      contrast: 0.35,
+      gamma: 1.4,
+      saturation: 1,
+      invert: true,
+      channel: 'centre',
+      autoContrast: true,
+      centre: { centre: [150.5, 140, 100.2], rim: [120, 110, 90], pickedRim: [100, 100, 80] },
+      separation: 9,
+    }
     const docs = new Map([['i1', doc(p, 'i1', [annotation('a1', 'g1'), annotation('a2', 'g1', { origin: 'automated', reviewStatus: 'accepted', manuallyAdjusted: true, detector: { name: 'd', version: '1', runId: 'r', confidence: null } })])]])
     const zip = await encodeArchive({ project: p, annotations: docs, images: new Map([['i1', new Blob([PNG_1x1], { type: 'image/png' })]]) })
     const out = await decodeArchive(zip)
@@ -193,8 +203,15 @@ describe('validateProject', () => {
     p.images[0].display = { brightness: 5, contrast: 0.2, gamma: 'x', saturation: 1, invert: true, channel: 'green', autoContrast: true }
     p.images[1].display = { brightness: 0, contrast: 0, gamma: 1, saturation: 1, invert: false, channel: 'rgb', autoContrast: false }
     const v = validateProject(p)
-    expect(v.images[0].display).toEqual({ brightness: 1, contrast: 0.2, gamma: 1, saturation: 1, invert: true, channel: 'green', autoContrast: true })
+    expect(v.images[0].display).toEqual({ brightness: 1, contrast: 0.2, gamma: 1, saturation: 1, invert: true, channel: 'green', autoContrast: true, centre: null, separation: 6 })
     expect('display' in v.images[1]).toBe(false)
+    // Centre samples: bad colours drop the sample, numbers are clamped.
+    const c = JSON.parse(JSON.stringify(project()))
+    c.images[0].display = { channel: 'centre', separation: 40, centre: { centre: [300, 10, -4], rim: [1, 2, 3], pickedRim: 'no' } }
+    c.images[1].display = { channel: 'centre', centre: { centre: [1, 2], rim: [1, 2, 3] } }
+    const w = validateProject(c)
+    expect(w.images[0].display).toMatchObject({ channel: 'centre', separation: 16, centre: { centre: [255, 10, 0], rim: [1, 2, 3], pickedRim: null } })
+    expect(w.images[1].display).toMatchObject({ channel: 'centre', centre: null })
     const q = JSON.parse(JSON.stringify(project()))
     q.images[0].display = 'bright'
     expect('display' in validateProject(q).images[0]).toBe(false)

@@ -71,8 +71,24 @@ export interface ImageRecord {
   deletedAt?: Timestamp
 }
 
-/** Which colour information the viewport shows. `luma` = greyscale luminance (Rec. 709). */
-export type DisplayChannel = 'rgb' | 'red' | 'green' | 'blue' | 'luma'
+/**
+ * Which colour information the viewport shows. `luma` = greyscale luminance (Rec. 709);
+ * `centre` = centre contrast: grey by position between sampled rim and centre colours.
+ */
+export type DisplayChannel = 'rgb' | 'red' | 'green' | 'blue' | 'luma' | 'centre'
+
+/** An sRGB colour, 0..255 per channel (may be fractional: a sampled mean). */
+export type RgbColour = [number, number, number]
+
+/** Colours sampled with the eyedropper for the `centre` channel view. */
+export interface CentreSample {
+  /** Mean colour of a small patch at a colony centre. */
+  centre: RgbColour
+  /** Rest-of-the-disc colour estimated automatically around the picked centre. */
+  rim: RgbColour
+  /** Rim colour the user picked; overrides `rim` when set. */
+  pickedRim: RgbColour | null
+}
 
 /**
  * Display adjustment of one image (view setting, editor-owned, stored in project.json).
@@ -91,6 +107,10 @@ export interface ImageDisplayAdjust {
   channel: DisplayChannel
   /** Stretch the 0.5 %–99.5 % percentiles of the displayed values to full range. */
   autoContrast: boolean
+  /** Sampled colours for the `centre` channel; null until a centre is picked. */
+  centre: CentreSample | null
+  /** 2..16; steepness of the centre/rim split in the `centre` channel view. */
+  separation: number
 }
 
 export interface SourceMismatch {

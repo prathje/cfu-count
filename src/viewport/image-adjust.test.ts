@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_DISPLAY } from '../model/display'
 import type { ImageDisplayAdjust } from '../model/types'
-import { applyAdjust, buildLut, channelMatrix, histogram, percentileRange, HISTOGRAM_MAX_SAMPLES } from './image-adjust'
+import { applyAdjust, applyStage, buildLut, channelMatrix, colourStage, histogram, percentileRange, stageHistogram, HISTOGRAM_MAX_SAMPLES } from './image-adjust'
 
 const adj = (p: Partial<ImageDisplayAdjust> = {}): ImageDisplayAdjust => ({ ...DEFAULT_DISPLAY, ...p })
 const px = (...rgba: number[]) => new Uint8ClampedArray(rgba)
@@ -102,5 +102,37 @@ describe('auto contrast', () => {
     const n = HISTOGRAM_MAX_SAMPLES * 3
     const h = histogram(new Uint8ClampedArray(n * 4).fill(255), channelMatrix(adj({ channel: 'red' })))
     expect(h[255]).toBe(HISTOGRAM_MAX_SAMPLES)
+  })
+})
+
+describe('colour stage', () => {
+  const sample = { centre: [150, 150, 140] as [number, number, number], rim: [110, 115, 115] as [number, number, number], pickedRim: null }
+  it('uses the channel matrix outside the centre view and grey before a centre is picked', () => {
+    const a = colourStage(adj({ channel: 'green' }))
+    expect(a.stage).toEqual({ kind: 'matrix', matrix: channelMatrix(adj({ channel: 'green' })) })
+    const none = colourStage(adj({ channel: 'centre' }))
+    expect(none.stage).toEqual({ kind: 'matrix', matrix: channelMatrix(adj({ channel: 'luma' })) })
+    expect(colourStage(adj({ channel: 'centre', centre: sample })).stage.kind).toBe('clut')
+  })
+  it('keys equal stages equally', () => {
+    const k = (p: Partial<ImageDisplayAdjust>) => colourStage(adj(p)).key
+    expect(k({ channel: 'centre', centre: sample, brightness: 0.5 })).toBe(k({ channel: 'centre', centre: sample }))
+    expect(k({ channel: 'centre', centre: sample, separation: 3 })).not.toBe(k({ channel: 'centre', centre: sample }))
+    expect(k({ channel: 'centre', centre: sample })).not.toBe(k({ channel: 'luma' }))
+  })
+  it('centre view: centre colour bright, agar dark, through the 1D LUT, alpha kept', () => {
+    const a = adj({ channel: 'centre', centre: sample })
+    const { stage } = colourStage(a)
+    const data = px(150, 150, 140, 255, 84, 88, 90, 128)
+    applyStage(data, stage, buildLut(a))
+    expect(data[0]).toBeGreaterThan(220)
+    expect(data[0]).toBe(data[1])
+    expect(data[4]).toBeLessThan(25)
+    expect(data[7]).toBe(128)
+    const inverted = px(150, 150, 140, 255)
+    applyStage(inverted, stage, buildLut(adj({ invert: true })))
+    expect(inverted[0]).toBeLessThan(35)
+    const h = stageHistogram(px(150, 150, 140, 255, 84, 88, 90, 255, 0, 0, 0, 0), stage)
+    expect(h.reduce((s, v) => s + v, 0)).toBe(2) // transparent pixel skipped
   })
 })

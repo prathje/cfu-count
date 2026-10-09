@@ -32,7 +32,7 @@ describe('createAdjustProcessor', () => {
     vi.stubGlobal('document', { createElement })
     const p = createAdjustProcessor()
     const source = { width: 4, height: 4 } as unknown as ImageSourceLike
-    const job = p.adjust(source, { x: 0, y: 0, w: 4, h: 4 }, [1, 0, 0, 0, 1, 0, 0, 0, 1], new Uint8ClampedArray(256))
+    const job = p.adjust(source, { x: 0, y: 0, w: 4, h: 4 }, { kind: 'matrix', matrix: [1, 0, 0, 0, 1, 0, 0, 0, 1] }, new Uint8ClampedArray(256))
     await vi.waitFor(() => expect(FakeWorker.last?.posted).toHaveLength(1))
     p.dispose()
     await expect(job).rejects.toThrow('disposed')
@@ -58,7 +58,7 @@ describe('createAdjustProcessor', () => {
     vi.stubGlobal('document', { createElement: () => ({ width: 0, height: 0, getContext: () => ctx }) })
     const p = createAdjustProcessor()
     const source = { width: 4, height: 4 } as unknown as ImageSourceLike
-    const result = await p.adjust(source, { x: 0, y: 0, w: 4, h: 4 }, [1, 0, 0, 0, 1, 0, 0, 0, 1], new Uint8ClampedArray(256))
+    const result = await p.adjust(source, { x: 0, y: 0, w: 4, h: 4 }, { kind: 'matrix', matrix: [1, 0, 0, 0, 1, 0, 0, 0, 1] }, new Uint8ClampedArray(256))
     expect(bitmaps[0].close).toHaveBeenCalled() // the untransferred crop is freed
     expect(result).toBe(bitmaps[1]) // the main-thread fallback finished the job
     expect(p.mode()).toBe('main')

@@ -1,11 +1,15 @@
 /**
  * Pure pixel maths for display adjustments (model/display.ts). Each pixel goes
- * through a 3x3 channel matrix (channel view + saturation), then a 256-entry
- * lookup table shared by all channels (auto-contrast stretch, brightness,
- * contrast, gamma, invert). Works on RGBA byte arrays in place; alpha is kept.
- * No DOM: used by the adjust worker and its main-thread fallback.
+ * through a colour stage, either a 3x3 channel matrix (channel view +
+ * saturation) or, for the centre view, a 3D colour LUT to grey
+ * (centre-contrast.ts), then a 256-entry lookup table shared by all channels
+ * (auto-contrast stretch, brightness, contrast, gamma, invert). Works on RGBA
+ * byte arrays in place; alpha is kept. No DOM: used by the adjust worker and
+ * its main-thread fallback.
  */
 import type { ImageDisplayAdjust } from '../model/types'
+import { centreKey, effectiveRim } from '../model/display'
+import { applyColourLut, buildCentreLut, lookupColour, type ColourLut } from './centre-contrast'
 
 /** Rec. 709 luma weights (applied to the encoded sRGB values: a display approximation). */
 export const LUMA = [0.2126, 0.7152, 0.0722] as const
@@ -18,6 +22,8 @@ const IDENTITY: Matrix3 = [1, 0, 0, 0, 1, 0, 0, 0, 1]
 export function channelMatrix(a: Pick<ImageDisplayAdjust, 'channel' | 'saturation'>): Matrix3 {
   const [wr, wg, wb] = LUMA
   switch (a.channel) {
+    case 'centre': // no colour LUT (nothing sampled yet): plain grey
+      return [wr, wg, wb, wr, wg, wb, wr, wg, wb]
     case 'red':
       return [1, 0, 0, 1, 0, 0, 1, 0, 0]
     case 'green':
@@ -33,6 +39,38 @@ export function channelMatrix(a: Pick<ImageDisplayAdjust, 'channel' | 'saturatio
       return [k * wr + s, k * wg, k * wb, k * wr, k * wg + s, k * wb, k * wr, k * wg, k * wb + s]
     }
   }
+}
+
+/** First per-pixel step: a channel matrix, or a colour LUT straight to grey. */
+export type ColourStage = { kind: 'matrix'; matrix: Matrix3 } | { kind: 'clut'; clut: ColourLut }
+
+/** The colour stage of an adjustment, and a key that is equal for equal stages. */
+export function colourStage(a: Pick<ImageDisplayAdjust, 'channel' | 'saturation' | 'centre' | 'separation'>): { stage: ColourStage; key: string } {
+  if (a.channel === 'centre' && a.centre) {
+    const clut = buildCentreLut({ centre: a.centre.centre, rim: effectiveRim(a.centre), separation: a.separation })
+    return { stage: { kind: 'clut', clut }, key: `c:${centreKey(a)}` }
+  }
+  const matrix = channelMatrix(a)
+  return { stage: { kind: 'matrix', matrix }, key: `m:${matrix.join(',')}` }
+}
+
+/** Apply a colour stage then the 1D LUT to RGBA pixels [start, end) in place. */
+export function applyStage(data: Uint8ClampedArray, stage: ColourStage, lut: Uint8ClampedArray, start = 0, end = data.length >> 2): void {
+  if (stage.kind === 'clut') applyColourLut(data, stage.clut, lut, start, end)
+  else applyAdjust(data, stage.matrix, lut, start, end)
+}
+
+/** Histogram of a colour stage's output (see `histogram`). */
+export function stageHistogram(data: Uint8ClampedArray, stage: ColourStage): Uint32Array {
+  if (stage.kind === 'matrix') return histogram(data, stage.matrix)
+  const hist = new Uint32Array(256)
+  const pixels = data.length >> 2
+  const step = Math.max(1, Math.ceil(pixels / HISTOGRAM_MAX_SAMPLES)) << 2
+  for (let i = 0; i < data.length; i += step) {
+    if (data[i + 3] === 0) continue
+    hist[lookupColour(stage.clut, data[i], data[i + 1], data[i + 2])]++
+  }
+  return hist
 }
 
 /** Levels stretch from auto contrast: input `lo` maps to 0, `hi` to 255. */

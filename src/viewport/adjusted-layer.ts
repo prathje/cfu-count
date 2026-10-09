@@ -14,7 +14,7 @@
  */
 import type { ImageDisplayAdjust } from '../model/types'
 import { displayKey, isDefaultDisplay } from '../model/display'
-import { buildLut, channelMatrix, percentileRange, type LevelRange, type Matrix3 } from './image-adjust'
+import { buildLut, colourStage, percentileRange, type ColourStage, type LevelRange } from './image-adjust'
 import type { AdjustProcessor, PixelRect } from './adjust-processor'
 import { pickLevel, type ImageSourceLike, type PyramidLevel } from './render'
 
@@ -71,8 +71,8 @@ interface TileEntry {
 interface Generation {
   key: string
   adjust: ImageDisplayAdjust
-  matrix: Matrix3
-  matrixKey: string
+  stage: ColourStage
+  stageKey: string
   lut: Uint8ClampedArray | null
   whole: Map<ImageSourceLike, ImageSourceLike>
   tiles: Map<string, TileEntry>
@@ -237,9 +237,8 @@ export class AdjustedLayer {
   }
 
   private newGeneration(adjust: ImageDisplayAdjust): Generation {
-    const matrix = channelMatrix(adjust)
-    const matrixKey = matrix.join(',')
-    const g: Generation = { key: displayKey(adjust), adjust, matrix, matrixKey, lut: null, whole: new Map(), tiles: new Map(), done: new Set() }
+    const { stage, key: stageKey } = colourStage(adjust)
+    const g: Generation = { key: displayKey(adjust), adjust, stage, stageKey, lut: null, whole: new Map(), tiles: new Map(), done: new Set() }
     this.updateLut(g)
     return g
   }
@@ -247,7 +246,7 @@ export class AdjustedLayer {
   /** The LUT needs the auto-contrast range first (if enabled). */
   private updateLut(g: Generation) {
     if (!g.adjust.autoContrast) g.lut = buildLut(g.adjust)
-    else if (this.ranges.has(g.matrixKey)) g.lut = buildLut(g.adjust, this.ranges.get(g.matrixKey) ?? null)
+    else if (this.ranges.has(g.stageKey)) g.lut = buildLut(g.adjust, this.ranges.get(g.stageKey) ?? null)
   }
 
   private plan(g: Generation, target: PyramidLevel, rect: ImageRect): Job[] {
@@ -256,10 +255,10 @@ export class AdjustedLayer {
     const tiled = (l: PyramidLevel) => pixels(l.source) > TILE_LEVEL_MIN_PX
     const levelJob = (l: PyramidLevel, quick: boolean): Job => ({ key: `l:${this.id(l.source)}`, kind: 'level', level: l, quick })
     const coarseOk = !tiled(coarsest)
-    if (g.adjust.autoContrast && !this.ranges.has(g.matrixKey)) {
+    if (g.adjust.autoContrast && !this.ranges.has(g.stageKey)) {
       // Only a small level gives a cheap histogram; wait for the pyramid otherwise.
       if (!coarseOk) return []
-      jobs.push({ key: `h:${this.id(coarsest.source)}:${g.matrixKey}`, kind: 'histogram', level: coarsest, quick: true })
+      jobs.push({ key: `h:${this.id(coarsest.source)}:${g.stageKey}`, kind: 'histogram', level: coarsest, quick: true })
     }
     // Quick preview: the coarsest level follows every change (also mid-drag); finer levels wait to settle.
     if (coarseOk && coarsest !== target) jobs.push(levelJob(coarsest, true))
@@ -330,17 +329,17 @@ export class AdjustedLayer {
     const src = job.level.source
     try {
       if (job.kind === 'histogram') {
-        const hist = await this.processor.histogram(src, g.matrix)
+        const hist = await this.processor.histogram(src, g.stage)
         // The image changed meanwhile (setLevels cleared the ranges): this histogram no longer applies.
         if (this.disposed || !this.levels.some((l) => l.source === src)) return
-        this.ranges.set(g.matrixKey, percentileRange(hist))
-        for (const gen of [this.cur, this.stale]) if (gen && gen.matrixKey === g.matrixKey && !gen.lut) this.updateLut(gen)
+        this.ranges.set(g.stageKey, percentileRange(hist))
+        for (const gen of [this.cur, this.stale]) if (gen && gen.stageKey === g.stageKey && !gen.lut) this.updateLut(gen)
         g.done.add(job.key)
         this.note('histogram', pixels(src), t0)
         return
       }
       const rect: PixelRect = job.kind === 'tile' ? job.rect : { x: 0, y: 0, w: src.width, h: src.height }
-      const out = await this.processor.adjust(src, rect, g.matrix, g.lut!)
+      const out = await this.processor.adjust(src, rect, g.stage, g.lut!)
       if (this.disposed || g !== this.cur || !this.levels.some((l) => l.source === src)) {
         this.free(out)
         return
@@ -376,7 +375,7 @@ export class AdjustedLayer {
     } catch (err) {
       g.done.add(job.key) // don't retry in a loop; a settings change retries
       if (job.kind === 'histogram' && !this.disposed && this.levels.some((l) => l.source === src)) {
-        this.ranges.set(g.matrixKey, null) // show without the stretch rather than nothing
+        this.ranges.set(g.stageKey, null) // show without the stretch rather than nothing
         this.updateLut(g)
       }
       console.warn('Display adjustment failed', err)

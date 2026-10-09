@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_DISPLAY, DISPLAY_PRESETS, displayKey, isDefaultDisplay, matchingPreset, normaliseDisplay, storedDisplay } from './display'
+import { DEFAULT_DISPLAY, DISPLAY_PRESETS, applyPreset, displayKey, effectiveRim, isDefaultDisplay, matchingPreset, normaliseDisplay, storedDisplay } from './display'
+import type { CentreSample } from './types'
+
+const sample: CentreSample = { centre: [150, 150, 140], rim: [110, 115, 115], pickedRim: null }
 
 describe('display adjustments', () => {
   it('normalises untrusted input with defaults and clamping', () => {
@@ -30,5 +33,25 @@ describe('display adjustments', () => {
     }
     expect(matchingPreset(undefined)?.id).toBe('default')
     expect(matchingPreset({ ...DEFAULT_DISPLAY, gamma: 1.5 })).toBeUndefined()
+  })
+  it('centre view: key follows the samples and separation, never the default', () => {
+    const c = { ...DEFAULT_DISPLAY, channel: 'centre' as const, centre: sample }
+    expect(isDefaultDisplay(c)).toBe(false)
+    expect(displayKey(c)).not.toBe(displayKey({ ...c, separation: 9 }))
+    expect(displayKey(c)).not.toBe(displayKey({ ...c, centre: { ...sample, pickedRim: [90, 90, 90] } }))
+    expect(displayKey(c)).not.toBe(displayKey({ ...c, centre: null }))
+    // Outside the centre view samples and separation don't change the rendering.
+    expect(displayKey({ ...DEFAULT_DISPLAY, channel: 'green', centre: sample, separation: 3 })).toBe(displayKey({ ...DEFAULT_DISPLAY, channel: 'green' }))
+    expect(effectiveRim(sample)).toEqual(sample.rim)
+    expect(effectiveRim({ ...sample, pickedRim: [1, 2, 3] })).toEqual([1, 2, 3])
+  })
+  it('keeps samples when switching away from the centre view, and through presets', () => {
+    expect(storedDisplay({ ...DEFAULT_DISPLAY, centre: sample })).toEqual({ ...DEFAULT_DISPLAY, centre: sample })
+    const centres = DISPLAY_PRESETS.find((p) => p.id === 'centres')!
+    const v = applyPreset(centres, { ...DEFAULT_DISPLAY, brightness: 0.4, centre: sample })
+    expect(v).toEqual({ ...DEFAULT_DISPLAY, channel: 'centre', centre: sample })
+    expect(matchingPreset(v)?.id).toBe('centres')
+    expect(matchingPreset({ ...v, separation: 10 })).toBeUndefined()
+    expect(normaliseDisplay({ centre: { centre: [1, 2, 3.14159], rim: [4, 5, 6] } }).centre).toEqual({ centre: [1, 2, 3.1], rim: [4, 5, 6], pickedRim: null })
   })
 })

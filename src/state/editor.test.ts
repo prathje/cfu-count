@@ -434,7 +434,7 @@ describe('editor', () => {
     editor.annotations.add(1, 1)
     await editor.projects.flush()
     editor.groups.toggleLocked(editor.groups.active()!.id)
-    const display = { brightness: 0.2, contrast: 0, gamma: 1, saturation: 1, invert: true, channel: 'green' as const, autoContrast: false }
+    const display = { brightness: 0.2, contrast: 0, gamma: 1, saturation: 1, invert: true, channel: 'green' as const, autoContrast: false, centre: null, separation: 6 }
     editor.images.setDisplay(['i1', 'i2'], display)
     await editor.projects.flush()
     const last = session().save.mock.calls.at(-1)! as [Project, unknown[]]

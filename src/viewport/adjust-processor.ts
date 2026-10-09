@@ -5,7 +5,7 @@
  * no canvas backing store kept alive), or a canvas where createImageBitmap is
  * missing.
  */
-import { applyAdjust, histogram, type Matrix3 } from './image-adjust'
+import { applyStage, stageHistogram, type ColourStage } from './image-adjust'
 import type { WorkerReply, WorkerRequest } from './adjust-protocol'
 import type { ImageSourceLike } from './render'
 
@@ -19,9 +19,9 @@ export interface PixelRect {
 
 export interface AdjustProcessor {
   /** Adjusted copy of `rect` of `source` (source pixels). */
-  adjust(source: ImageSourceLike, rect: PixelRect, matrix: Matrix3, lut: Uint8ClampedArray): Promise<ImageSourceLike>
-  /** Histogram of the matrix outputs over the whole `source`. */
-  histogram(source: ImageSourceLike, matrix: Matrix3): Promise<Uint32Array>
+  adjust(source: ImageSourceLike, rect: PixelRect, stage: ColourStage, lut: Uint8ClampedArray): Promise<ImageSourceLike>
+  /** Histogram of the colour stage outputs over the whole `source`. */
+  histogram(source: ImageSourceLike, stage: ColourStage): Promise<Uint32Array>
   /** 'worker' | 'main' (diagnostics; 'main' after a worker failure too). */
   mode(): 'worker' | 'main'
   dispose(): void
@@ -96,11 +96,11 @@ export function createAdjustProcessor(): AdjustProcessor {
     return { canvas, ctx, image: ctx.getImageData(0, 0, rect.w, rect.h) }
   }
 
-  async function adjustMain(source: ImageSourceLike, rect: PixelRect, matrix: Matrix3, lut: Uint8ClampedArray): Promise<ImageSourceLike> {
+  async function adjustMain(source: ImageSourceLike, rect: PixelRect, stage: ColourStage, lut: Uint8ClampedArray): Promise<ImageSourceLike> {
     const { canvas, ctx, image } = readPixels(source, rect)
     const total = rect.w * rect.h
     for (let start = 0; start < total; start += MAIN_CHUNK_PX) {
-      applyAdjust(image.data, matrix, lut, start, start + MAIN_CHUNK_PX)
+      applyStage(image.data, stage, lut, start, start + MAIN_CHUNK_PX)
       if (start + MAIN_CHUNK_PX < total) await nextTick()
     }
     ctx.putImageData(image, 0, 0)
@@ -115,11 +115,11 @@ export function createAdjustProcessor(): AdjustProcessor {
   const whole = (s: ImageSourceLike): PixelRect => ({ x: 0, y: 0, w: s.width, h: s.height })
 
   return {
-    async adjust(source, rect, matrix, lut) {
+    async adjust(source, rect, stage, lut) {
       const w = getWorker()
       if (w) {
         try {
-          const reply = await viaWorker(w, source, rect, (id, bitmap) => ({ id, type: 'adjust', bitmap, matrix, lut }))
+          const reply = await viaWorker(w, source, rect, (id, bitmap) => ({ id, type: 'adjust', bitmap, stage, lut }))
           if ('bitmap' in reply) return reply.bitmap
           useWorker = false // e.g. no OffscreenCanvas 2D inside workers
         } catch (err) {
@@ -127,13 +127,13 @@ export function createAdjustProcessor(): AdjustProcessor {
           useWorker = false
         }
       }
-      return adjustMain(source, rect, matrix, lut)
+      return adjustMain(source, rect, stage, lut)
     },
-    async histogram(source, matrix) {
+    async histogram(source, stage) {
       const w = getWorker()
       if (w) {
         try {
-          const reply = await viaWorker(w, source, whole(source), (id, bitmap) => ({ id, type: 'histogram', bitmap, matrix }))
+          const reply = await viaWorker(w, source, whole(source), (id, bitmap) => ({ id, type: 'histogram', bitmap, stage }))
           if ('hist' in reply) return reply.hist
           useWorker = false
         } catch (err) {
@@ -143,7 +143,7 @@ export function createAdjustProcessor(): AdjustProcessor {
       }
       const { canvas, image } = readPixels(source, whole(source))
       canvas.width = canvas.height = 0
-      return histogram(image.data, matrix)
+      return stageHistogram(image.data, stage)
     },
     mode: () => (useWorker ? 'worker' : 'main'),
     dispose() {
