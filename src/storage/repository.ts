@@ -6,6 +6,7 @@
  *   DriveSession      in-memory OAuth token + DriveState
  *   projectSync       Drive orchestration (push/link/pull) over DriveClient + DrivePicker
  *   autosave          status derivation + debounced Drive scheduler
+ *   versionHistory    local version snapshots (session.history)
  * This file holds the repository / session surface, the open-session status and
  * local operations. At most one session is open (see api.ts).
  */
@@ -23,6 +24,7 @@ import { AutosaveScheduler, deriveStatus, type Timers } from './drive/autosave'
 import type { DriveClient } from './drive/client'
 import type { DrivePicker } from './drive/picker'
 import type { DriveSession } from './drive/session'
+import { createVersionHistory } from './versionHistory'
 import { createProjectSync, EditCounters, isSyncDirty, type OpenStatusPatch, type ProjectSync } from './drive/projectSync'
 
 /** Everything the repository depends on (all injectable for tests). */
@@ -349,6 +351,26 @@ export function createProjectRepository(deps: RepositoryDeps): ProjectRepository
       return new Blob([buildSummaryCsv(project, annotations)], { type: 'text/csv;charset=utf-8' })
     }
 
+    const history = createVersionHistory({
+      local,
+      projectId,
+      withLock,
+      localWrite: (fn) => localWrite(projectId, fn),
+      now,
+      onRestored(project, sync) {
+        if (sync) {
+          edits.bump(projectId)
+          for (const id of sync.dirtyImages) edits.bump(projectId, id)
+        }
+        if (open !== state) return
+        state.lastLocalSaveAt = now()
+        state.linked = project.storage.kind === 'drive'
+        if (state.linked) state.dirty = true
+        refresh()
+        if (state.linked && session.isConnected && !state.conflict) scheduler.request()
+      },
+    })
+
     return {
       projectId,
       opened,
@@ -364,6 +386,13 @@ export function createProjectRepository(deps: RepositoryDeps): ProjectRepository
         import: guarded(importFiles),
         importFromDrive: withDrive(() => requireSync().importFromPicker(projectId)),
         blob: guarded(blob),
+      },
+      history: {
+        list: guarded(history.list),
+        create: guarded(history.create),
+        load: guarded(history.load),
+        restore: guarded(history.restore),
+        delete: guarded(history.delete),
       },
       exportZip: guarded(exportZip),
       exportCsv: guarded(exportCsv),

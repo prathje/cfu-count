@@ -14,7 +14,8 @@ import { newId, now } from '../model/ids'
 import { makeManualAnnotation } from '../model/annotations'
 import { makeGroup } from '../model/groups'
 import { activeImages, applyStorageOwned } from '../model/project'
-import type { DriveState, ImportResult, ProjectRepository, ProjectSession, ProjectSnapshot, ProjectSummary, SaveStatus } from '../storage/api'
+import type { DriveState, ImportResult, ProjectRepository, ProjectSession, ProjectSnapshot, ProjectSummary, SaveStatus, VersionHistory } from '../storage/api'
+import { createMemoryHistory } from '../storage/memoryHistory'
 import { decodeArchive, encodeArchive } from '../storage/archive'
 import { buildSummaryCsv } from '../storage/csv'
 import { browserDecoder, inspectImage, sha256Hex, UnsupportedImageError } from '../storage/images'
@@ -24,6 +25,8 @@ interface Stored {
   project: Project
   annotations: Map<ID, ImageAnnotations>
   blobs: Map<ID, Blob>
+  /** Version history (in memory, kept while the page is open). */
+  history?: VersionHistory
 }
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms))
@@ -160,9 +163,31 @@ export function createDemoRepository(): ProjectRepository {
       setStatus({ state: 'saved-drive', at: now() })
     }
 
+    const history = (s.history ??= createMemoryHistory({
+      read: () => ({ project: s.project, docs: [...s.annotations.values()] }),
+      write(project, docs) {
+        s.project = clone(project)
+        s.annotations = new Map(docs.map((d) => [d.imageId, clone(d)]))
+        if (s.project.storage.kind === 'drive') setStatus({ state: 'pending' })
+        else setStatus({ state: 'saved-local', at: now() })
+      },
+      now,
+    }))
+    const guard = <A extends unknown[], R>(fn: (...a: A) => Promise<R>) => async (...a: A) => {
+      live()
+      return fn(...a)
+    }
+
     return {
       projectId: id,
       opened: snapshot(s, warnings),
+      history: {
+        list: guard(history.list),
+        create: guard(history.create),
+        load: guard(history.load),
+        restore: guard(history.restore),
+        delete: guard(history.delete),
+      },
       get closed() {
         return current !== me
       },

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { Annotation, ImageRecord, Project } from '../model/types'
+import type { Annotation, ImageAnnotations, ImageRecord, Project } from '../model/types'
+import { createMemoryHistory } from '../storage/memoryHistory'
 import { SCHEMA_VERSION } from '../model/types'
 import type { DriveState, ImportResult, ProjectRepository, ProjectSession, ProjectSnapshot, SaveStatus } from '../storage/api'
 import { createEditor } from './editor'
@@ -50,12 +51,23 @@ function mockRepo() {
 
   function makeSession(p: Project): MockSession {
     const updated = new Set<(p: Project) => void>()
+    const stored = { project: structuredClone(p), docs: new Map<string, ImageAnnotations>() }
     const session: MockSession = {
       projectId: p.id,
       opened: { project: p, annotations: new Map() },
       closed: false,
-      save: vi.fn(async () => {
+      save: vi.fn(async (np: Project, docs: ImageAnnotations[]) => {
         if (control.failSave) throw new Error('quota exceeded')
+        stored.project = structuredClone(np)
+        for (const d of docs) stored.docs.set(d.imageId, structuredClone(d))
+      }),
+      history: createMemoryHistory({
+        read: () => ({ project: stored.project, docs: [...stored.docs.values()] }),
+        write(np, docs) {
+          stored.project = structuredClone(np)
+          stored.docs = new Map(docs.map((d) => [d.imageId, structuredClone(d)]))
+        },
+        now: () => new Date().toISOString(),
       }),
       onUpdated(fn) {
         updated.add(fn)

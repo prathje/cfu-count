@@ -60,6 +60,76 @@ export interface ProjectSnapshot {
   warnings?: string[]
 }
 
+/**
+ * Why a version (local snapshot) was taken:
+ *   session-start       before the first change after opening the project
+ *   periodic            every ~10 minutes while there are changes
+ *   manual              "Save version now"
+ *   before-destructive  right before a destructive or bulk change (clear, delete group, take Drive version)
+ *   before-restore      right before restoring another version (so a restore can be undone)
+ */
+export type VersionReason = 'session-start' | 'periodic' | 'manual' | 'before-destructive' | 'before-restore'
+
+export interface VersionCounts {
+  /** Confirmed annotations on images that are part of the project (removed images excluded). */
+  annotations: number
+  /** Images that are part of the project (not removed). */
+  images: number
+  /** Confirmed annotations per annotation group of the version, in its group order. */
+  groups: { id: ID; name: string; color: string; count: number }[]
+}
+
+/** Metadata of one stored version (cheap to list; contents are loaded with `history.load`). */
+export interface VersionInfo {
+  id: ID
+  projectId: ID
+  createdAt: string
+  reason: VersionReason
+  /** User-facing description, e.g. "Before clearing “Colonies” on all images". */
+  label: string
+  counts: VersionCounts
+  /** Compressed bytes this version added to browser storage (unchanged documents are shared). */
+  storedBytes: number
+}
+
+export interface VersionCreateResult {
+  version: VersionInfo
+  /** False when an automatic version was skipped because nothing changed since the latest one. */
+  created: boolean
+  /** Set when space had to be made (older automatic versions removed after a quota error). */
+  warning?: string
+}
+
+/**
+ * Local version history of the open project: snapshots of project.json and every
+ * annotation document (never image bytes: images are only ever soft-deleted).
+ * Stored in this browser only (IndexedDB), deduplicated by content and compressed.
+ * Retention: everything from the last 24 h, then hourly for 7 days, daily for 30 days,
+ * at most 200; the most recent safety version is kept for 7 days.
+ */
+export interface VersionHistory {
+  /** Newest first. */
+  list(): Promise<VersionInfo[]>
+  /**
+   * Snapshot the SAVED working copy (callers flush pending edits first). Serialised
+   * with saves, so a call made before a save captures the state before it. Automatic
+   * reasons (session-start, periodic) are skipped when nothing changed since the latest
+   * version. Rejects with LocalStorageError when it cannot be stored even after
+   * removing older automatic versions; never changes the save status.
+   */
+  create(reason: VersionReason, label: string): Promise<VersionCreateResult>
+  /** Full contents of a version. */
+  load(id: ID): Promise<ProjectSnapshot>
+  /**
+   * Replace the working copy with a version: first snapshots the current state
+   * (`before-restore`, returned as `backup`), then writes the version locally and, when
+   * Drive-linked, marks everything pending (conflict rules unchanged). Images added
+   * after the version are soft-deleted, never erased. The caller loads `snapshot`.
+   */
+  restore(id: ID): Promise<{ snapshot: ProjectSnapshot; backup: VersionInfo }>
+  delete(id: ID): Promise<void>
+}
+
 export interface ImportResult {
   added: ImageRecord[]
   rejected: { name: string; reason: string }[]
@@ -122,6 +192,9 @@ export interface ProjectSession {
     // There is no remove: removing an image is a soft delete the editor records in
     // project.json (ImageRecord.deletedAt). Storage never erases image bytes or documents.
   }
+
+  /** Local version history (snapshots in this browser). */
+  history: VersionHistory
 
   /** Download as a .zip (same layout as the Drive folder). */
   exportZip(): Promise<Blob>
