@@ -72,7 +72,7 @@ function layout(kind: 'pair' | 'chain3' | 'triangle' | 'chain4' | 'square', d: n
   }
 }
 
-function input(cluster: Disk[], method: DetectMethod): DetectInput {
+function input(cluster: Disk[], method: DetectMethod, objective: 'tuned' | 'brief' = 'tuned'): DetectInput {
   const s = seeds.map((d, i) => ({ annotationId: `s${i}`, imageId: 'img', x: d.x + 0.7, y: d.y - 0.6 }))
   return {
     image: plate([...seeds, ...cluster]),
@@ -83,7 +83,7 @@ function input(cluster: Disk[], method: DetectMethod): DetectInput {
     targetGroupId: 'g',
     seeds: s,
     existing: s.map((q) => ({ id: q.annotationId, x: q.x, y: q.y, groupId: 'g', origin: 'manual' as const })),
-    settings: { method },
+    settings: { method, objective },
   }
 }
 
@@ -96,18 +96,19 @@ const KINDS = [
   ['square', 4],
 ] as const
 
-describe('fitter splits touching clusters', () => {
+describe.each(['tuned', 'brief'] as const)('fitter (%s objective) splits touching clusters', (objective) => {
   for (const [kind, k] of KINDS)
     for (const ov of OVERLAPS) {
       it(`${kind} (K=${k}) at ${ov * 100}% overlap`, async () => {
         const cluster = layout(kind, 2 * R * (1 - ov))
-        const r = await detect(input(cluster, 'fitter'))
+        const r = await detect(input(cluster, 'fitter', objective))
         const found = r.suggestions
         expect(found.length).toBe(k)
         // every colony has a suggestion within half a radius
         for (const c of cluster) expect(Math.min(...found.map((s) => Math.hypot(s.x - c.x, s.y - c.y)))).toBeLessThan(0.5 * R)
-        // a clear cluster (≤ 15 % overlap) is decided, not sent to review
-        if (ov <= 0.15) {
+        // a clear cluster (≤ 15 % overlap) is decided, not sent to review (default objective;
+        // the 'brief' variant sometimes flags clear chains, see detection-results.md)
+        if (ov <= 0.15 && objective === 'tuned') {
           const cl = r.clusters.find((q) => q.clusterId === found[0].clusterId)!
           expect(cl.status).toBe('ok')
           expect(found.every((s) => s.status === 'ok')).toBe(true)

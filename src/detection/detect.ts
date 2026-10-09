@@ -194,7 +194,7 @@ async function detectLocal(input: DetectInput, onProgress?: ProgressFn, signal?:
   if (settings.method === 'watershed') out = await runWatershed(ctx)
   else if (settings.method === 'log') out = await runLog(ctx, localSeedPts)
   else {
-    const fitKey = JSON.stringify([pKey, seedKey(input), existingKey(input), settings.kMax, settings.sMin, settings.fitWeights ?? null])
+    const fitKey = JSON.stringify([pKey, seedKey(input), existingKey(input), settings.kMax, settings.sMin, settings.objective ?? 'tuned', settings.fitWeights ?? null])
     out = await runFitter(ctx, localSeedPts, cache?.fitterSlot(fitKey))
   }
   timings.method = now() - t2

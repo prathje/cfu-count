@@ -78,8 +78,13 @@ export interface DetectSettings {
   sMin: number
   /** Below this many usable seeds the calibration is reported as tentative (default 3). */
   minUsableSeeds: number
+  /**
+   * Fitter objective variant: 'tuned' (default; see fitter.ts) or 'brief' (the
+   * product owner's formula: L_mask + α L_boundary + β Σ((log r − μ)/s)² + λ K).
+   */
+  objective?: 'tuned' | 'brief'
   /** Advanced (evaluation/tuning): override fitter objective weights. */
-  fitWeights?: Partial<{ alpha: number; beta: number; gamma: number; lambda: number; wFP: number; huber: number; omega: number }>
+  fitWeights?: Partial<{ alpha: number; beta: number; gamma: number; lambda: number; wFP: number; huber: number; omega: number; oversize: number; undersize: number; areaCount: number }>
 }
 
 export interface DetectInput {

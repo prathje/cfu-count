@@ -46,17 +46,22 @@ export interface MethodContext {
 }
 
 /** Mask threshold and count penalty from the 0..1 sensitivity slider. */
+/**
+ * Mask threshold and count penalty from the 0..1 sensitivity slider. Biased
+ * towards recall (field report: undercounting): a false suggestion costs the
+ * reviewer one tap, a missed colony has to be found and added by hand.
+ */
 export function sensitivityParams(sensitivity: number): { thrFrac: number; noiseK: number; lambda: number; logFrac: number } {
   const t = Math.min(Math.max(sensitivity, 0), 1)
   return {
-    /** Mask threshold as a fraction of the typical seed contrast. */
-    thrFrac: 0.65 - 0.35 * t,
+    /** Mask threshold as a fraction of the typical seed contrast (0.35 at the default 0.5). */
+    thrFrac: 0.5 - 0.3 * t,
     /** ... but never below this many noise σ. */
-    noiseK: 4 - 2 * t,
-    /** Count penalty per new colony, in units of one typical colony area. */
-    lambda: 0.3 - 0.25 * t,
+    noiseK: 3.5 - 2 * t,
+    /** Count penalty per new colony, in units of one typical colony area (0.1 at the default). */
+    lambda: 0.2 - 0.2 * t,
     /** LoG detection threshold as a fraction of the median seed LoG response. */
-    logFrac: 0.55 - 0.35 * t,
+    logFrac: 0.45 - 0.35 * t,
   }
 }
 

@@ -7,12 +7,12 @@
  *     scales; de-duplicated.
  *  2. Objective, in units of ONE TYPICAL COLONY (A0 = π r_med²):
  *       J = (FN + FP)/A0                       soft mask: Σ m over uncovered px + Σ (1 − m) over covered px,
- *                                              m = smoothstep of F over 0.2–0.6 × seed contrast (0 on background and
+ *                                              m = smoothstep of F over 0.3–0.7 × the cluster's brightness (0 on background and
  *                                              in the 1–2 px seams between touching colonies, 1 inside)
  *         + α Σ_i E_i                          edge: exposed disk boundary away from the observed boundary
- *         + β Σ_i huber±((log r_i − μ)/s)      seed-derived size prior (oversize counts double)
+ *         + β Σ_i huber±((log r_i − μ)/s)      seed-derived size prior (oversize ×2, undersize ×0.5)
  *         + γ Σ_i A_i                          appearance: disk interior dimmer than the seeds, or ring-like
- *         + λ Σ_i (r_i/r_med)²                 count penalty, proportional to disk area
+ *         + λ Σ_i (r_i/r_med)²                 count penalty, proportional to disk area ('brief': λ K)
  *         + ω Σ_pairs overlap                  deep overlaps (centres closer than 0.7 (r_i + r_j))
  *     Existing annotations (any group) are fixed disks: they cover pixels and
  *     hide boundaries but pay no prior/appearance/count terms and never move.
@@ -47,9 +47,35 @@ export interface FitWeights {
   huber: number
   /** Weight of the pairwise overlap penalty (deep overlaps are rare for real colonies). */
   omega: number
+  /** Multiplier on the size cost of disks LARGER than the prior (1 = symmetric). */
+  oversize: number
+  /** Multiplier on the size cost of disks SMALLER than the prior (seeds are biased to large colonies). */
+  undersize: number
+  /** 1: count penalty λ·Σ(r_i/r̃)² (area-proportional); 0: λ·K (the method brief). */
+  areaCount: number
 }
 
-export const DEFAULT_WEIGHTS: Omit<FitWeights, 'lambda'> = { alpha: 0.5, beta: 0.6, gamma: 0.5, wFP: 1, huber: 2, omega: 1 }
+export type FitObjective = 'tuned' | 'brief'
+
+/** Size prior and count shape only (the parts that enter the stored configuration tables). */
+export type ScoreWeights = Pick<FitWeights, 'lambda' | 'beta' | 'huber' | 'oversize' | 'undersize' | 'areaCount'>
+
+/**
+ * Objective variants (lambda comes from the sensitivity slider):
+ *  - 'tuned': this repo's version — area-proportional count, asymmetric Huber prior
+ *    (oversize ×2), appearance term γ and overlap term ω.
+ *  - 'brief': exactly the product owner's formula — L_mask + α L_boundary
+ *    + β Σ ((log r − μ)/s)² + λ K; γ = ω = 0. (β applies to ½ z², as in 'tuned'.)
+ */
+export const OBJECTIVES: Record<FitObjective, Omit<FitWeights, 'lambda'>> = {
+  tuned: { alpha: 0.5, beta: 0.6, gamma: 0.5, wFP: 0.5, huber: 2, omega: 1, oversize: 2, undersize: 0.5, areaCount: 1 },
+  brief: { alpha: 0.5, beta: 0.6, gamma: 0, wFP: 0.5, huber: Infinity, omega: 0, oversize: 1, undersize: 1, areaCount: 0 },
+}
+
+export const DEFAULT_WEIGHTS: Omit<FitWeights, 'lambda'> = OBJECTIVES.tuned
+
+/** Count term of one disk under the variant. */
+export const countTerm = (r: number, rMed: number, areaCount: number): number => (areaCount ? (r / rMed) ** 2 : 1)
 
 export interface Circle3 {
   x: number
@@ -84,6 +110,9 @@ export interface ClusterFitParams {
   /** F level of the "core" mask used for extra candidates (≈ 0.75 × seed contrast). */
   coreLevel: number
 }
+
+/** Weight of exposed disk boundary that lies INSIDE the foreground, relative to on the background. */
+export const INTERIOR_EDGE = 0.25
 
 /** Fit state for one cluster patch. Exposed for unit tests. */
 export class ClusterFit {
@@ -128,12 +157,17 @@ export class ClusterFit {
     this.F = F.data
     this.a0 = Math.PI * p.prior.rMed * p.prior.rMed
     this.coverPx = new Int16Array(this.w * this.h)
-    // soft membership: smoothstep of F between 0.2 and 0.6 of the seed contrast, inside the cluster only.
-    // Uncovered pixels cost m, covered pixels cost 1 − m: seams between touching colonies argue
-    // against a disk spanning them, and a colony's edge sits at its half-maximum (as for the seeds).
+    // soft membership: smoothstep of F between 0.3 and 0.7 of the CLUSTER's own brightness (90th
+    // percentile, at least half the seed contrast), inside the cluster only. Uncovered pixels cost m,
+    // covered pixels cost 1 − m: seams between touching colonies argue against a disk spanning them.
+    // Relative to the cluster (not the seeds) so colonies dimmer than the seeds are not priced out.
     this.mIn = new Float32Array(this.M.length)
-    const lo = 0.2 * p.contrastRef
-    const hi = 0.6 * p.contrastRef
+    const inside: number[] = []
+    for (let i = 0; i < this.M.length; i++) if (this.M[i]) inside.push(F.data[i])
+    inside.sort((a, b) => a - b)
+    const refC = Math.max(0.5 * p.contrastRef, inside.length ? inside[Math.floor(0.9 * (inside.length - 1))] : p.contrastRef)
+    const lo = 0.3 * refC
+    const hi = 0.7 * refC
     for (let i = 0; i < this.M.length; i++) {
       if (!this.M[i]) continue
       const t = Math.min(1, Math.max(0, (F.data[i] - lo) / (hi - lo)))
@@ -189,7 +223,7 @@ export class ClusterFit {
   }
 
   private priorCost(r: number): number {
-    return sizeCost(r, this.p.prior.logR, this.p.prior.s, this.p.weights.huber)
+    return sizeCost(r, this.p.prior.logR, this.p.prior.s, this.p.weights.huber, this.p.weights.oversize, this.p.weights.undersize)
   }
 
   private sampleF(x: number, y: number): number {
@@ -229,8 +263,12 @@ export class ClusterFit {
       const yi = Math.floor(py)
       if (xi < 0 || yi < 0 || xi >= this.w || yi >= this.h) cost[k] = 1
       else {
-        const d = this.dEdge[yi * this.w + xi]
-        cost[k] = Math.min(d * d, tau2) / tau2
+        const i = yi * this.w + xi
+        const d = this.dEdge[i]
+        const c = Math.min(d * d, tau2) / tau2
+        // a disk edge running through foreground (where a neighbour is not explained yet) is
+        // mostly priced by the mask term; only an edge out on the background is a true misfit
+        cost[k] = this.M[i] ? INTERIOR_EDGE * c : c
       }
     }
     return {
@@ -293,7 +331,7 @@ export class ClusterFit {
     if (!d.fixed) {
       this.sumPrior += d.prior
       this.sumApp += d.app
-      this.sumCount += (d.r / this.p.prior.rMed) ** 2
+      this.sumCount += countTerm(d.r, this.p.prior.rMed, this.p.weights.areaCount)
       this.kNew++
     }
     d.alive = true
@@ -345,7 +383,7 @@ export class ClusterFit {
     if (!d.fixed) {
       this.sumPrior -= d.prior
       this.sumApp -= d.app
-      this.sumCount -= (d.r / this.p.prior.rMed) ** 2
+      this.sumCount -= countTerm(d.r, this.p.prior.rMed, this.p.weights.areaCount)
       this.kNew--
     }
   }
@@ -704,24 +742,22 @@ const MAX_SWEEP_K = 8
  * of 3 became one"), while colonies smaller than the seeds are common and
  * legitimate, so the upper side counts double.
  */
-export const OVERSIZE_FACTOR = 2
-
-export function sizeCost(r: number, logR: number, s: number, huber: number): number {
+export function sizeCost(r: number, logR: number, s: number, huber: number, oversize: number, undersize = 1): number {
   const zs = (Math.log(r) - logR) / s
   const z = Math.abs(zs)
   const c = z <= huber ? 0.5 * z * z : huber * (z - 0.5 * huber)
-  return zs > 0 ? OVERSIZE_FACTOR * c : c
+  return zs > 0 ? oversize * c : undersize * c
 }
 
-export function priorSum(disks: readonly Circle3[], logR: number, s: number, huber: number): number {
+export function priorSum(disks: readonly Circle3[], logR: number, s: number, huber: number, oversize: number, undersize = 1): number {
   let t = 0
-  for (const d of disks) t += sizeCost(d.r, logR, s, huber)
+  for (const d of disks) t += sizeCost(d.r, logR, s, huber, oversize, undersize)
   return t
 }
 
 /** Score of a stored configuration for the given count penalty and prior spread. */
-export function configScore(c: GroupConfig, w: { lambda: number; beta: number; huber: number }, logR: number, s: number): number {
-  return c.base + w.lambda * c.count + w.beta * priorSum(c.disks, logR, s, w.huber)
+export function configScore(c: GroupConfig, w: ScoreWeights, logR: number, s: number): number {
+  return c.base + w.lambda * c.count + w.beta * priorSum(c.disks, logR, s, w.huber, w.oversize, w.undersize)
 }
 
 function sweepGroups(fit: ClusterFit, mask: Mask, params: ClusterFitParams, bounds: { minX: number; minY: number; maxX: number; maxY: number }, rMin: number): ClusterSolution {
@@ -807,13 +843,15 @@ function sweepGroups(fit: ClusterFit, mask: Mask, params: ClusterFitParams, boun
     const open = pix.filter((i) => !fixedHere.some((f) => Math.hypot((i % w) + 0.5 - f.x, Math.floor(i / w) + 0.5 - f.y) < f.r))
     const k0 = free.length
     const ka = Math.round(open.length / (0.85 * fit.a0))
-    const clearSingle = k0 <= 1 && ka <= 1
+    // a clear single (one disk already, area for one) only compares K = 0 and 1; a group the greedy
+    // left EMPTY still tries K = 1 (and more if the area says so)
+    const clearSingle = k0 === 1 && ka <= 1
     const kLo = clearSingle ? 0 : Math.max(0, Math.min(k0, ka) - 1)
-    const kHi = clearSingle ? k0 : Math.min(MAX_SWEEP_K, Math.max(k0, ka) + 1)
+    const kHi = clearSingle ? 1 : Math.min(MAX_SWEEP_K, Math.max(k0, ka, open.length >= 0.3 * fit.a0 ? 1 : 0) + 1)
     const configs: GroupConfig[] = []
     const record = (disks: readonly Circle3[], k: number) => {
-      const count = disks.reduce((a, d) => a + (d.r / prior.rMed) ** 2, 0)
-      const base = fit.J() - weights.lambda * count - weights.beta * priorSum(disks, prior.logR, prior.s, weights.huber)
+      const count = disks.reduce((a, d) => a + countTerm(d.r, prior.rMed, weights.areaCount), 0)
+      const base = fit.J() - weights.lambda * count - weights.beta * priorSum(disks, prior.logR, prior.s, weights.huber, weights.oversize, weights.undersize)
       const prev = configs.find((c) => c.k === k)
       const cand: GroupConfig = { k, disks: disks.map(({ x, y, r }) => ({ x, y, r })), base, count }
       if (!prev) configs.push(cand)
@@ -930,7 +968,7 @@ export function contestedArea(a: readonly Circle3[], b: readonly Circle3[], rMed
 }
 
 /** Pick the best and runner-up configuration of a group for the given weights and prior spread. */
-export function decideGroup(g: GroupFit, wts: { lambda: number; beta: number; huber: number }, logR: number, s: number, rMed = Math.exp(logR)): GroupDecision {
+export function decideGroup(g: GroupFit, wts: ScoreWeights, logR: number, s: number, rMed = Math.exp(logR)): GroupDecision {
   const scored = g.configs.map((c) => ({ c, j: configScore(c, wts, logR, s) })).sort((a, b) => a.j - b.j)
   const best = scored[0]
   const runner = scored[1] ?? null
@@ -982,7 +1020,7 @@ const TABLE_SENSITIVITY = 0.5
 async function buildFitterState(ctx: MethodContext, seedPts: { x: number; y: number }[], key: string): Promise<FitterState> {
   const { prior, settings } = ctx
   const sp = sensitivityParams(TABLE_SENSITIVITY)
-  const baseWeights: FitWeights = { ...DEFAULT_WEIGHTS, lambda: sp.lambda, ...settings.fitWeights }
+  const baseWeights: FitWeights = { ...OBJECTIVES[settings.objective ?? 'tuned'], lambda: sp.lambda, ...settings.fitWeights }
   // the mask does not follow the sensitivity slider (so the expensive part can be cached)
   const mask = foregroundMask(ctx, maskThresholdAt(ctx, TABLE_SENSITIVITY))
   await ctx.checkpoint(0.5)

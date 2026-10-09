@@ -17,7 +17,8 @@
  *   --only <names>        comma-separated substrings of image names
  *   --single-pass         analyse at the preliminary scale only (no seed-derived scale, no plate crop)
  *   --target-r <px>       typical colony radius at analysis scale for the second pass (default 8)
- *   --weights k=v,...     fitter weight overrides (alpha, beta, gamma, lambda, wFP, huber)
+ *   --objective <name>    fitter objective variant: tuned | brief
+ *   --weights k=v,...     fitter weight overrides (alpha, beta, gamma, lambda, wFP, huber, omega, oversize, areaCount)
  *   --no-overlays         skip overlay images
  *   --rerun               also time a slider-like re-run (sensitivity + 0.1) on cached planes
  *   --max-pixels <n>      explicit analysis pixel cap (default none, as in the app)
@@ -55,6 +56,7 @@ const resampleN = Number(args.resample ?? 0)
 const seedSpec = String(args.seeds ?? 'auto')
 const targetR = Number(args['target-r'] ?? 8)
 const rerun = !!args.rerun
+const objective = args.objective ? (String(args.objective) as 'tuned' | 'brief') : undefined
 const maxPixels = args['max-pixels'] ? Number(args['max-pixels']) : undefined
 /** --weights beta=1,huber=2 (fitter tuning) */
 const fitWeights = args.weights ? Object.fromEntries(String(args.weights).split(',').map((kv) => [kv.split('=')[0], Number(kv.split('=')[1])])) : undefined
@@ -181,7 +183,7 @@ async function buildRequest(it: Item, plan: SeedPlan, rand: () => number, method
     targetGroupId: 'target',
     seeds,
     existing,
-    settings: { method, sensitivity: sens, fitWeights },
+    settings: { method, sensitivity: sens, fitWeights, ...(objective ? { objective } : {}) },
     includeClusterLabels: !!it.gt,
     analysis: twoPass ? { targetTypicalRadius: targetR, ...(maxPixels ? { maxPixels } : {}) } : { scale: chooseAnalysisScale({ ...size, maxPixels }).scale },
   }
