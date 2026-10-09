@@ -34,6 +34,7 @@ import {
 import { dropEntriesForGroup, emptyHistory, planRedo, planUndo, record, type ImageHistory } from './history'
 import { hiddenMessage, historyBlockMessage, lockedMessage, type Notify } from './messages'
 import { prefs } from './prefs'
+import { isCancelled } from '../storage/errors'
 
 export interface EditorState {
   /** loading = initial project list; empty = no project open; ready = project open. */
@@ -727,6 +728,8 @@ export function createEditor(repo: ProjectRepository, notify: Notify): Editor {
     try {
       return await fn()
     } catch (err) {
+      // The user closed a Google popup/picker: not an error worth a toast.
+      if (isCancelled(err)) return undefined
       console.error(failMessage, err)
       notify({ tone: 'error', message: failMessage, detail: errorText(err) })
       return undefined
@@ -760,7 +763,23 @@ export function createEditor(repo: ProjectRepository, notify: Notify): Editor {
 
   async function switchTo(fn: () => Promise<OpenedProject>, label: string, failMessage: string) {
     await saver.flush()
-    const opened = await run(label, fn, failMessage)
+    return finishSwitch(run(label, fn, failMessage))
+  }
+
+  /**
+   * Drive variant: the repository opens a Google popup before its first await, and
+   * Safari only allows popups within the click's user activation, so `fn` must start
+   * synchronously. The pending local save is flushed concurrently (it completes
+   * long before the user finishes in the picker).
+   */
+  async function switchToDrive(fn: () => Promise<OpenedProject>, label: string, failMessage: string) {
+    const pending = run(label, fn, failMessage)
+    await saver.flush()
+    return finishSwitch(pending)
+  }
+
+  async function finishSwitch(pending: Promise<OpenedProject | undefined>) {
+    const opened = await pending
     if (opened) {
       loadOpened(opened)
       await refreshProjects()
@@ -820,6 +839,7 @@ export function createEditor(repo: ProjectRepository, notify: Notify): Editor {
     try {
       await repo.connectDrive()
     } catch (err) {
+      if (isCancelled(err)) return
       notify({ tone: 'error', message: 'Couldn’t connect to Google Drive', detail: errorText(err) })
     }
   }
@@ -833,7 +853,7 @@ export function createEditor(repo: ProjectRepository, notify: Notify): Editor {
   async function linkToDrive(mode: 'create-folder' | 'pick-folder') {
     if (!state.project) return
     const id = state.project.id
-    const opened = await switchTo(
+    const opened = await switchToDrive(
       () => repo.linkProjectToDrive(id, mode),
       'Linking to Google Drive…',
       'Couldn’t link the project to Google Drive',
@@ -843,12 +863,11 @@ export function createEditor(repo: ProjectRepository, notify: Notify): Editor {
     }
   }
   const openFromDrive = () =>
-    switchTo(() => repo.openProjectFromDrive(), 'Opening from Google Drive…', 'Couldn’t open the project from Google Drive')
+    switchToDrive(() => repo.openProjectFromDrive(), 'Opening from Google Drive…', 'Couldn’t open the project from Google Drive')
 
   async function importFromDrive(imageGroupId: ID | null = null) {
     const project = state.project
     if (!project) return
-    await saver.flush()
     const result = await run(
       'Importing from Google Drive…',
       () => repo.importImagesFromDrive(structuredClone(unwrap(project)) as Project),
