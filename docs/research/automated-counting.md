@@ -4,21 +4,34 @@ Status: research note, 2026-10-09. Nothing here has been prototyped or benchmark
 
 Context: brief §9 (assisted counting is a later phase: the user marks representative colonies, picks a region, asks for "find similar", reviews suggestions, and accepts a batch as one undo step) and `src/model/types.ts` (`Annotation.origin`, `reviewStatus`, `DetectorProvenance`). Hard constraint: everything runs in the browser on static hosting (GitHub Pages), with iPad Safari as a first-class target.
 
+Revision 2 (same day): integrates the product owner's method brief `colony-fitting-method-brief.md` ("the method brief" below). That brief proposes seed-derived per-group size/appearance priors plus a constrained union-of-circles fit. It is assessed in §3.4. The table, recommendation, phases (§6.1), interface (§6.2), type mapping (§6.3), evaluation (§5) and risks (§6.6) are updated to match it.
+
 ---
 
 ## 1. Summary of options
 
 | # | Option | What it does | Pros | Cons | Effort | Added download | Verdict |
 |---|---|---|---|---|---|---|---|
-| A | **Classical, exemplar-tuned blob detector (pure TS, in a Worker)** | Background flattening, then multi-scale LoG/DoG peaks at scales taken from the exemplars, then scoring against exemplar colour/contrast/patch statistics, with the threshold calibrated so the exemplars themselves are found | Small, fast, deterministic, explainable parameters, no licence baggage, works offline | Hand-tuned. Weak on irregular/spreading colonies, heavy clustering, glare and condensation. Exemplars are points only, so the radius has to be estimated | 1–3 weeks incl. tuning | ~10–30 KB (own code) | **MVP** |
-| B | Same pipeline on **OpenCV.js** | `HoughCircles`, `adaptiveThreshold`, `distanceTransform`, `watershed`, `matchTemplate`, etc. are ready-made | Mature, battle-tested primitives; fast prototyping | Official 4.13 `opencv.js` is **10.96 MB raw / 3.5 MB gzip** (measured), and the WASM is embedded as base64. Emscripten memory management (`Mat.delete()`) | Days to prototype | 3.5 MB gz (lazy) | Good for a **throwaway prototype**. Optional for production |
+| S | **Seed calibration** (method brief §1–2) | From the group's manual marks: estimate each seed's radius from the image, flag low-quality seeds (touching, edge, glare), fit a robust log-normal radius prior (median / scaled MAD, floor s_min) and per-feature appearance ranges | Needed by every option below. Shows the user what was learned ("8 manual examples; 6 usable"). Cheap | Radius estimation from a point is the single biggest error source. Seeds are biased toward large, easy colonies | ~1 week | own code | **Phase 1a, shared foundation** |
+| H | **Seed-constrained union-of-circles fitter** (method brief §3–5) | Local foreground mask, then connected clusters. For each cluster, compare K = 1…K_max disks from distance-transform peaks and contour-arc circle fits. Objective: mask + edge + size-prior + appearance + count penalty. Manual centres are fixed disks. Close alternatives are flagged for review | Directly addresses touching clusters. Gives centres **and** radii. Explicit ambiguity flags instead of forced counts. MCount is a published precedent for the candidate/selection idea | Depends on a decent foreground mask. Five loss weights to tune, and the count penalty needs reviewed crowded examples. More code than A. The seed-prior adaptation is unvalidated | 3–5 weeks incl. tuning | own code (~tens of KB) | **Phase 1b, primary detector** (per the product owner), validated against a watershed baseline |
+| A | **Classical exemplar-tuned blob detector** (LoG/DoG) | Multi-scale LoG/DoG peaks at seed-derived scales, scored against seed colour/contrast/profile, with the threshold calibrated so the seeds are recovered | Small, fast, needs no mask, separates round touching pairs | Weak on irregular colonies and big clusters. Gives no cluster-level ambiguity | 1–2 weeks | ~10–30 KB | **Candidate generator / fallback** inside H, and a comparison baseline |
+| W | Threshold + connected components + distance-transform watershed | Classical segmentation split | Simple. The method brief §7 requires it as the baseline | Over- and under-splits. No size prior | ~1 week (shares S/H primitives) | own code | **Required baseline** in the harness |
+| B | S/H/A/W primitives on **OpenCV.js** | `HoughCircles`, `adaptiveThreshold`, `distanceTransform`, `watershed`, `matchTemplate`, etc. are ready-made | Mature, battle-tested primitives; fast prototyping | Official 4.13 `opencv.js` is **10.96 MB raw / 3.5 MB gzip** (measured), and the WASM is embedded as base64. Emscripten memory management (`Mat.delete()`) | Days to prototype | 3.5 MB gz (lazy) | Good for a **throwaway prototype**. Optional for production |
 | C | **image-js** (MIT, pure JS/TS) | General image library | MIT, TS, no WASM | Unpacked npm 11.7 MB (tree-shaking untested). Feature coverage for watershed/LoG not verified | Days | unknown, likely 100s of KB | Possible source of primitives. Check before adopting |
-| D | **Interactive learned pixel/patch classifier** (ilastik / Arteta-style) | Per-pixel filter-bank features at a few scales, trained from the user's dots plus background samples plus rejected suggestions. Small logistic regression / random forest / ridge density regressor, retrained in the Worker | Adapts to each plate's look. Rejections improve the model (active learning). Handles colour/morphology variation better than fixed rules | More UI (negatives, retrain loop). Feature stacks are memory-heavy at full resolution. Calibration is still per-plate | 2–4 weeks on top of A | ~50–100 KB (e.g. `ml-random-forest` 61 KB unpacked) | **Phase 2** |
-| E | **Pretrained colony detector** (YOLO-n trained on AGAR / Makrai dataset) exported to ONNX, run with ONNX Runtime Web | Detection boxes with scores, tiled (SAHI-style) | Can be accurate on images that look like the training data (published mAP@0.5 ≈ 0.97 on in-domain data) | Domain shift to your plates/phones is unproven. **Licences**: Ultralytics is AGPL-3.0, AGAR data is CC BY-NC 2.0. Needs ORT Web (`ort-wasm-simd-threaded.wasm` alone is 14.2 MB raw) plus a model of ~5–10 MB. Threads need cross-origin isolation, which GitHub Pages cannot set natively | 3–6 weeks + training infra | ~15–25 MB | Phase 3, **experimental** |
+| D | **Interactive learned pixel/patch classifier** (ilastik / Arteta-style) | Per-pixel filter-bank features at a few scales, trained from the user's dots plus background samples plus rejected suggestions. Small logistic regression / random forest / ridge density regressor, retrained in the Worker | Adapts to each plate's look. Rejections improve the model (active learning). Handles colour/morphology variation better than fixed rules | More UI (negatives, retrain loop). Feature stacks are memory-heavy at full resolution. Calibration is still per-plate | 2–4 weeks on top of S/H | ~50–100 KB (e.g. `ml-random-forest` 61 KB unpacked) | **Phase 2**: improves H's foreground mask and appearance term |
+| E | **Pretrained colony detector** (excluded from the mainline by the method brief: "no pretrained network") (YOLO-n trained on AGAR / Makrai dataset) exported to ONNX, run with ONNX Runtime Web | Detection boxes with scores, tiled (SAHI-style) | Can be accurate on images that look like the training data (published mAP@0.5 ≈ 0.97 on in-domain data) | Domain shift to your plates/phones is unproven. **Licences**: Ultralytics is AGPL-3.0, AGAR data is CC BY-NC 2.0. Needs ORT Web (`ort-wasm-simd-threaded.wasm` alone is 14.2 MB raw) plus a model of ~5–10 MB. Threads need cross-origin isolation, which GitHub Pages cannot set natively | 3–6 weeks + training infra | ~15–25 MB | Phase 3, **experimental** |
 | F | **Exemplar-based class-agnostic counters** (FamNet, CounTR, LOCA/DAVE, GeCo/GeCo2) | "Count things like these boxes" | Exactly the right interaction model in principle | GPU research models with ResNet-50/ViT/SAM backbones and ~1024–1536 px inputs. I found no official ONNX/web ports. Exemplars must be **boxes**, not points. Unknown accuracy on tiny dense colonies | Research project | 100s of MB | **Not feasible now**. Revisit |
 | G | **SAM-family promptable segmentation** (SlimSAM in Transformers.js) | Click a point and get a mask | Could turn an exemplar *point* into a radius/mask. SlimSAM-77 is reported at ~14 MB INT8 on WASM | Not a counter; running it per candidate is too slow. Bigger SAM 2.1 variants are 145–878 MB | ~1 week to try | ~14 MB + runtime | Optional helper for exemplar radius later |
 
-**Recommendation.** Build **A** in a dedicated Worker behind a stable `Detector` interface. Use **B** (OpenCV.js) only to prototype quickly against real plates if that helps; it is not a production dependency. Build an **evaluation harness first**, using project exports (manual annotations = ground truth). Add **D** once real plates show where A fails. Treat **E/F/G** as research spikes gated on measured accuracy, licence clearance and download size. Persist nothing automated until the user accepts it.
+**Recommendation (revised).** Adopt the method brief's design as the mainline. It agrees with this note on everything essential: seeds from the user's own marks, priors per group and image, points estimated from image evidence, suggestions kept separate, no server and no pretrained network. It goes further than the original plan on touching clusters.
+
+1. **Phase 0**: evaluation harness on project exports. It must include the brief's metrics (missed, duplicate, centre error, per-cluster count error, seed-selection sensitivity, runtime and memory).
+2. **Phase 1a**: seed calibration **S**, plus the watershed baseline **W**.
+3. **Phase 1b**: union-of-circles fitter **H**, with LoG (**A**) as an extra candidate source and a fallback for isolated small colonies where the mask is weak. Ship only if the harness shows H beats W on touching clusters without losing on isolated colonies.
+4. **Phase 2**: **D**, mainly to produce a better foreground mask and appearance term for H.
+5. **E/F/G**: optional research spikes only.
+
+All of it runs as pure TS in one cancellable Worker. Use OpenCV.js (**B**) only for throwaway prototyping. Persist nothing automated until accepted. The brief's requirement to save run records and inferred geometry needs a schema addition (§6.3).
 
 ---
 
@@ -39,10 +52,10 @@ All of these map to well-known operations. The papers below show that classical 
 
 ### 2.3 Thresholding + connected components + watershed (segmentation route)
 - **Otsu / adaptive (local mean or Gaussian) threshold**, then connected-component labelling with per-component area, perimeter, circularity, convexity, mean colour.
-- **Touching colonies:** distance transform of the binary mask, then local maxima as markers, then watershed. This is the standard split, and it is what OpenCFU does for regions classified as "multiple objects" ([PLOS ONE](https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0054072)). MCount ([Kim et al. 2024, PLOS ONE](https://journals.plos.org/plosone/article?id=10.1371%2Fjournal.pone.0311242), [code, MIT](https://github.com/hyu-kim/mcount)) combines Otsu, contour concave-point detection and distance-transform circle fitting. It reports 3.99 % average error on 960 high-throughput images, versus NICE 16.5 %, AutoCellSeg 33.5 % and OpenCFU 50.3 % *on their dataset*. Those competitor figures come from a different imaging regime (small, low-resolution spots), so don't generalise them.
+- **Touching colonies:** distance transform of the binary mask, then local maxima as markers, then watershed. This is the standard split, and it is what OpenCFU does for regions classified as "multiple objects" ([PLOS ONE](https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0054072)). MCount ([Chen et al. 2025, PLOS ONE](https://journals.plos.org/plosone/article?id=10.1371%2Fjournal.pone.0311242), [code, MIT](https://github.com/hyu-kim/mcount)) combines Otsu, contour concave-point detection and distance-transform circle fitting. It reports 3.99 % average error on 960 high-throughput images, versus NICE 16.5 %, AutoCellSeg 33.5 % and OpenCFU 50.3 % *on their dataset*. Those competitor figures come from a different imaging regime (small, low-resolution spots), so don't generalise them.
 - **Multi-threshold scoring** (OpenCFU): instead of one threshold, sweep thresholds and accumulate a score map of pixels that form plausible circular objects. It is robust and conceptually simple, at roughly *k*× the cost.
 
-### 2.4 Blob detection (detection route, recommended for points)
+### 2.4 Blob detection (detection route; candidate source for the fitter)
 - **LoG / DoG / DoH**: scale-normalised Laplacian-of-Gaussian finds roughly circular blobs and returns a centre and a scale (radius ≈ √2·σ). scikit-image documents LoG as the most accurate and slowest, DoG as a faster approximation, and DoH as fastest but poor below ~3 px ([scikit-image blob example](https://scikit-image.org/docs/stable/auto_examples/features_detection/plot_blob.html)).
 - Why this suits the app: the output is **points**, which is exactly the `Annotation` geometry. Touching *round* colonies give separate LoG maxima without any segmentation step. The sigma range can be set from the exemplars, so only 3–5 scales are needed.
 - Non-maximum suppression in (x, y, σ) with a minimum separation of ~0.7× the smaller radius.
@@ -95,6 +108,52 @@ Honest assessment: none of these has an official ONNX/Transformers.js port that 
 
 ---
 
+### 3.4 Assessment of the product owner's colony-fitting method brief
+
+Source: `colony-fitting-method-brief.md` (repo root, 2026-10-09). It proposes: the user annotates a few colonies, presses Find similar in this group, reviews, accepts. Seeds give a robust per-group, per-image radius prior in log space (μ = median log r, s = max(s_min, 1.4826·MAD)) and soft appearance ranges. Clusters are fitted as a **union of disks** by minimising
+
+J(K, θ) = L_mask(M, U_K) + α·L_edge(∂M, ∂U_K) + β·Σ ρ((log r_i − μ)/s) + γ·L_appearance + λ·K,
+
+using candidates from distance-transform peaks and contour-arc circle fits. Manual centres are held fixed, and clusters where competing K fit similarly well are flagged for review. The brief itself says this is a proposal, not a validated detector, and not a published equation.
+
+**Where it agrees with this note**
+- Points carry location, not radius. The radius must be estimated from the image, and the display marker size is cosmetic (§3.1; `types.ts`).
+- One model per annotation group. Don't pool heterogeneous exemplars. Use diagonal/robust appearance statistics with few seeds instead of a full covariance (§3.1).
+- Background-normalised local contrast, and soft rather than hard size/colour limits.
+- Runs in a cancellable Worker on a reduced-resolution analysis image, with no server and no pretrained network (§6.2, §6.5). This rules E/F out of the mainline, which matches my "not feasible / experimental" verdicts.
+- Suggestions stay separate from confirmed counts. Accepting a batch is one undo step. Origin stays `automated` after accept or move. Scores are not calibrated probabilities, so use `confidence: null` (§6.3).
+- MCount is the closest published precedent. The brief's pipeline is a seed-informed generalisation of MCount's contour-arc + distance-transform circle candidates + selection. MCount's selection is a 0–1 integer program, minimising contour–circle pairing distance plus λ × deviation from the candidate count, with d = 0.5 and λ = 38 tuned by grid search and 10-fold CV, at <1.7 s per sub-image ([Chen et al. 2025](https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0311242)). The brief's second reference, ColTapp ([Bär et al. 2020, Sci Rep 10:16084](https://doi.org/10.1038/s41598-020-72979-4)), is a MATLAB tool using distance transforms, watershed and circular Hough detection. I did not verify its licence.
+
+**Where it differs from, or changes, this note**
+1. **Primary detector**: I had proposed LoG blob detection (A) as the MVP. The brief makes a mask-based cluster fitter (H) primary. I agree for touching clusters: LoG gives no principled per-cluster K and no ambiguity signal. But H depends on the foreground mask M, which is a single point of failure on phone photos (glare, condensation, colony-coloured media). So I keep LoG as an additional candidate source and as a fallback for small isolated colonies, and add the brief's required watershed baseline (W).
+2. **Manual annotations as fixed disks**: I had proposed only radius-based de-duplication. The brief's version is better: manual centres (any group, including hidden) enter the cluster fit as fixed disks with their inferred radius. A cluster with one manual mark and three visible colonies then gets exactly two or three new suggestions, not four. Adopted in §6.2/§6.3.
+3. **Ambiguity as a first-class output**: new. Results become per-cluster, with the chosen K, the runner-up K and the objective gap. Clusters with a small gap are flagged "review" rather than given a forced count. The review UX and interface change accordingly (§6.2, §6.4).
+4. **Calibration threshold**: I had calibrated a score threshold so the seeds are recovered. The brief uses the prior inside the objective instead (β term) plus a count penalty λ. These are compatible. A sensitivity slider then maps to λ and/or a mask threshold rather than to a LoG score.
+5. **No feedback of predictions into calibration**: the brief forbids silently adding predicted colonies to the seed set and keeps a fixed seed snapshot per run. My Phase 2 used *rejected* suggestions as negatives. That is a human label, not a prediction, so it is consistent with the brief, but it must be explicit and recorded in the run record. Accepted automated annotations must not become seeds unless the user opts in.
+6. **Persisted run records and inferred geometry**: the brief asks to *save*, in per-image JSON, the inferred radius/boundary and quality per annotation, plus a run record (method/version, seed IDs, image identity/version, analysis scale, prior parameters, fitting settings, diagnostics). Schema v1 has no slot for either. I had left radius as "future schema". This makes the schema addition a requirement for adopting the brief (§6.3).
+7. **Reference plate**: the brief scopes priors to "per annotation group and image" and says not to pool imaging conditions automatically. The original task framing mentioned an optional reference plate. Reusing seeds from another image is therefore an **open product question**, and should be an explicit, recorded choice if it is ever allowed.
+
+**Browser/Worker feasibility of H** (*estimates, to benchmark*)
+- All operations are local to a cluster patch. A cluster typically spans tens to a few hundred analysis pixels. Rasterising K ≤ ~8 disks into a patch of ≤ 200×200 px and evaluating mask/edge losses costs ~K × patch area operations per evaluation. Local refinement (coordinate descent or Nelder–Mead over 3K parameters, a few hundred evaluations) costs ~10⁷–10⁸ simple operations for a large cluster. In optimised TS typed-array code that is roughly tens of milliseconds per large cluster, and far less for singletons. A plate with a few hundred clusters, most of them K = 1, should fit within a few seconds in a Worker, with per-cluster progress and cancellation between clusters.
+- Model selection over K: greedy add/remove from the candidate set plus local refinement, keeping the best and runner-up per K. An exact ILP as in MCount would need a WASM solver dependency. Start with greedy or beam search over small K, and consider an ILP only if the harness shows greedy failing.
+- Edge term: needs a gradient-magnitude image at the analysis scale (one extra float plane) and the *exposed* boundary of U_K (arc pixels not inside another disk). This is cheap to compute on the patch raster.
+- Large confluent regions: cap the patch size and K_max. Above the cap, return the region as "uncountable / review" rather than fitting it (brief §5).
+- Memory: one RGB analysis image + background + mask + gradient + labels ≈ 5–6 planes. At ≤ 4 MP that is ≈ 100 MB, which is acceptable. Cluster patches are transient.
+- Code: Otsu/adaptive threshold, CC labelling, distance transform, contour tracing, algebraic circle fit (Kåsa/Taubin) to arcs, disk rasterisation and a small optimiser. All pure TS and unit-testable. No new runtime dependency is needed.
+
+**Open questions and risks specific to the brief**
+- **Seed radius estimation quality** drives μ and s, and with them the whole fit. The brief rightly says to mark touching/edge/glare seeds as low quality. A minimum number of usable seeds is undefined ("no universally sufficient count"), so the UI needs a "tentative" state, and s_min must be set from measurement resolution (e.g. ≥ ~1 analysis px relative to r).
+- **Weight tuning**: five terms (α, β, γ, λ, plus mask threshold and s_min), normalised across resolutions and cluster sizes. λ needs reviewed crowded clusters, which only exist once users have fully annotated some crowded plates. The harness corpus has to include those, and the weights must be fixed before any held-out evaluation.
+- **Non-circular colonies** (spreading, swarming, irregular edges): the brief says circles first and bounded ellipticity only if needed. Expect H to over-split irregular colonies. A per-group "irregular" warning, from seed circularity, should lower trust.
+- **Seed bias**: users mark large, obvious colonies, so the prior under-covers small ones. The brief asks to report poor coverage. The harness should test the case "seeds = the 5 largest colonies".
+- **Seed-selection sensitivity** is a stated acceptance metric. It means repeated runs with resampled seeds in the harness (cheap offline).
+- **Manual-centre constraints vs. inaccurate clicks**: a manual mark off-centre by a few px, fixed during fitting, can distort neighbouring fits. Option: fix the *existence* of a manual colony but allow its fitted disk centre to move within a small tolerance for loss computation only. The annotation itself is never moved.
+- **Reproducibility**: a run record holding seed *IDs* alone can't reproduce a run once seeds are moved or deleted. Snapshot seed coordinates (and inferred radii) in the run record too.
+- **Diagnostics are not confidence**: the objective gap and residuals belong in diagnostics, not in `DetectorProvenance.confidence`.
+
+
+---
+
 ## 4. Existing tools and datasets
 
 | Tool | Method | Licence | Notes |
@@ -102,7 +161,7 @@ Honest assessment: none of these has an official ONNX/Transformers.js port that 
 | OpenCFU ([PLOS ONE 2013](https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0054072)) | Per-channel median background, positive LoG, multi-threshold score map, shape filter, distance-transform watershed for multiples, optional colour-likelihood filter | GPL-3.0 | ~0.69 s for 1.6 × 1.6 MP. Median error 3 colonies on 10–1000-colony plates. Best blueprint for option A |
 | NICE ([Clarke et al. 2010, Cytometry A](https://onlinelibrary.wiley.com/doi/10.1002/cyto.a.20864); [code](https://github.com/usnistgov/NICE-Public)) | Thresholding-based, dark colonies, multiple ROIs | US-Gov public domain | MATLAB 2016b. Repo archived June 2026. <3 % mean difference vs manual reported |
 | AutoCellSeg ([Sci Rep 2018](https://www.semanticscholar.org/paper/AutoCellSeg:-robust-automatic-colony-forming-unit-Khan-Torelli/4a8205ad11971f8c0c9684fa52ecd8e9e784b91c)) | Multi-threshold + feedback watershed + post-editing | MIT ([repo](https://github.com/AngeloTorelli/AutoCellSeg)) | MATLAB GUI |
-| MCount ([PLOS ONE 2024](https://journals.plos.org/plosone/article?id=10.1371%2Fjournal.pone.0311242)) | Otsu + contours + concave points + circle fitting. Two hyper-parameters | MIT ([repo](https://github.com/hyu-kim/mcount)) | Good reference for splitting merged colonies |
+| MCount ([PLOS ONE 2025](https://journals.plos.org/plosone/article?id=10.1371%2Fjournal.pone.0311242)) | Otsu + contours + concave points + circle fitting. Two hyper-parameters | MIT ([repo](https://github.com/hyu-kim/mcount)) | Good reference for splitting merged colonies |
 | ImageJ Colony Counter ([imagej.net](https://imagej.net/ij/plugins/colony-counter.html)) | Threshold + particle analysis | GPL | Also: [CoCo macro](https://github.com/jiaxuanleong/coco) (no licence declared), Count-On-It (Fiji, commercial vendor) |
 | YOLO colony detectors | e.g. YOLO11n (2.6 M params, 6.5 GFLOPs) on 640 px tiles with SAHI, mAP@0.5 96.9 %, <320 ms/plate on an RTX 3050 ([Sci Rep 2026, PMC](https://pmc.ncbi.nlm.nih.gov/articles/PMC13451340/); [code](https://github.com/sercankulcu/SAHI-Colony-Counting), no licence declared). Colony-YOLO (YOLOv8n variant, mobile deployment) ([Microorganisms 2025](https://doi.org/10.3390/microorganisms13071617)) | Ultralytics framework is **AGPL-3.0** ([repo](https://github.com/ultralytics/ultralytics)); SAHI is MIT ([repo](https://github.com/obss/sahi)) | Ultralytics exports ONNX directly, and nano models are a realistic ORT Web size. **AGPL obligations apply to the weights/code if distributed**; a permissively licensed detector (e.g. RT-DETR / YOLOX / own small CNN) avoids that |
 
@@ -124,7 +183,9 @@ The app already produces the right ground truth: manual, point-level, per-image 
 3. **Matching**: bipartite matching (Hungarian, or greedy by distance, which is fine at these densities) between predictions and ground truth within radius *d* = 0.5 × median exemplar diameter (report *d* = 0.3/0.5/1.0× as a sensitivity check). Report TP/FP/FN, precision, recall, F1.
 4. **Count metrics**: absolute and relative count error, MAE across plates, and a Bland–Altman plot vs manual (the standard way colony-counter papers report agreement; OpenCFU and NICE both compare to human counts).
 5. **Stratify** by density (e.g. <30, 30–300, >300 per plate, matching the common countable range), by radial position (inner vs outer 10 % of the ROI), by cluster membership (GT points with a neighbour within 1.2× diameter = "touching"), and by plate condition tags (uneven light, condensation, glare, mixed morphologies, coloured media). Add those tags to a harness-side sidecar file, not the app schema.
-6. **Human-time metric**: the real goal is "time to a confirmed count". Log (locally) suggestions shown, accepted, rejected, and manual additions after accept. Acceptance rate × recall is what users feel.
+6. **Method-brief metrics** (brief §7): centre-location error of matched pairs (px and fraction of radius). Duplicates (two predictions matched to one GT, or a prediction near an existing manual mark). **Per-cluster count error**: assign GT points and predictions to the foreground connected components and compare counts per component, broken down by GT cluster size 1, 2, 3–5, >5. Rate and correctness of "review" flags: a flagged cluster is a deferral, not an error, but report how often flags fire and how often the chosen K was right anyway. **Seed-selection sensitivity**: rerun with ≥10 resampled seed sets per plate (random, "largest 5", "user-like") and report the spread of count and F1. Browser runtime and peak memory on a real iPad.
+7. **Baselines**: report W (threshold + distance-transform watershed) and A (LoG) next to H on the same seeds. H is adopted only if it beats W on touching clusters without losing on isolated colonies. Fix all weights (α, β, γ, λ, s_min) on a development split before scoring a held-out split.
+8. **Human-time metric**: the real goal is "time to a confirmed count". Log (locally) suggestions shown, accepted, rejected, and manual additions after accept. Acceptance rate × recall is what users feel.
 
 **Known hard cases to test explicitly**
 - **Touching/merged colonies**: LoG handles round touching pairs. Elongated merges need distance-transform watershed or concave-point splitting (MCount). Large confluent areas should be flagged "uncountable region", not guessed.
@@ -139,10 +200,11 @@ The app already produces the right ground truth: manual, point-level, per-image 
 ## 6. Integration plan for this app
 
 ### 6.1 Phases
-- **Phase 0 (now, alongside the manual MVP)**: keep a disabled, labelled "Find similar (coming later)" action (brief §9). Define the `Detector` interface and suggestion state (below). Write `scripts/eval` (node + vitest) that loads project exports and computes §5 metrics. Start collecting fully annotated plates.
-- **Phase 1, MVP detector (option A)**: user selects a target group, marks ≥3 exemplars (existing manual annotations in the ROI can be used as exemplars), draws or confirms a circular ROI, presses Find. Worker pipeline: decode at analysis scale, background flatten, exemplar radius estimation, multi-scale DoG/LoG at exemplar scales, NMS, per-candidate features (contrast/noise, colour Mahalanobis, radial-profile correlation), score, calibrated threshold, de-duplication against existing annotations. Two sliders: sensitivity (threshold) and size range. Re-running with new parameters reuses cached intermediate results (background-flattened image, DoG stack).
-- **Phase 2 (option D)**: per-candidate classifier trained on exemplars (+), rejected suggestions (−) and auto-sampled background (−, low weight). Retrain on each reject/accept round. Optional distance-transform watershed or concave-point splitting for elongated blobs. Optional per-blob density estimate shown as "≈n colonies here?" without auto-creating n points.
-- **Phase 3 (research spike, gated)**: (a) SlimSAM point-prompt for exemplar radius/mask; (b) small detector (permissively licensed architecture, trained on Makrai + user-contributed plates) through ORT Web WASM single-thread, with WebGPU where present. Ship only if the harness shows a clear win over Phase 2 on *your* plates and the download (~15–25 MB, cached by a service worker) is acceptable.
+- **Phase 0 (now, alongside the manual MVP)**: keep a disabled, labelled "Find similar (coming later)" action (brief §9). Define the `Detector` interface and suggestion state (below). Write `scripts/eval` (node + vitest) that loads project exports and computes the §5 metrics, including per-cluster count error and seed sensitivity. Start collecting fully annotated plates, **including crowded ones**, because λ can't be tuned without them. Propose the schema additions in §6.3 to the schema owners.
+- **Phase 1a, seed calibration + baseline (S, W)**: user selects a target group and presses "Find similar in this group". Existing manual annotations of that group inside the ROI are the seeds, so no separate calibration step is needed. Worker pipeline: decode at analysis scale, background flatten, per-seed radius estimate (local segmentation + radial edge evidence over several scales), quality flags (touching / edge / glare / weak edge), robust log-radius prior and diagonal appearance ranges. The UI shows the status ("8 manual examples; 6 usable for size estimation") and the inferred rings. Implement W on the same primitives so the harness has a baseline from day one. S is useful on its own as a visible check of what the detector "learned".
+- **Phase 1b, union-of-circles fitter (H)**: foreground mask from local contrast against the background, using the seed appearance ranges. Then connected clusters (ROI rim band excluded), then per cluster: candidates from distance-transform peaks, circle fits to contour arcs and LoG peaks at prior scales. Greedy/beam selection over K ≤ K_max with local refinement of the objective. Manual centres of all groups are fixed disks. Output the best K, the runner-up K, the objective gap and a review flag. Sliders: sensitivity (λ / mask threshold) and prior width (multiplier on s). Re-running reuses cached planes, and only clusters affected by a parameter are refitted.
+- **Phase 2 (option D)**: a learned pixel classifier (seeds and rejected suggestions as labels) replaces the hand-set foreground mask and appearance term in H. That is where H is weakest. Rejections are recorded in the run record. Optional explicit opt-in "use reviewed automated colonies as additional seeds", with their provenance staying automated (brief §5).
+- **Phase 3 (research spike, gated)**: SlimSAM point-prompt as an alternative seed-radius estimator. Small permissively licensed ONNX detector only as a comparison, since the method brief excludes pretrained networks from the mainline.
 
 ### 6.2 Worker interface (proposal)
 
@@ -157,17 +219,21 @@ export interface DetectRequest {
   imageSize: { width: number; height: number }
   /** In original-image px. Circle covers most plates; polygon later. */
   roi: { kind: 'circle'; cx: number; cy: number; r: number; edgeMarginFrac: number }
-  /** Exemplar points in original-image px (manual annotations of the target group inside the ROI). */
-  exemplars: { x: number; y: number }[]
-  /** Existing annotations (all groups) used for de-duplication. */
-  existing: { x: number; y: number; groupId: string }[]
+  /** Seed snapshot: manual annotations of the target group inside the ROI (fixed for the run, brief §4.1/§5). */
+  targetGroupId: string
+  seeds: { annotationId: string; x: number; y: number }[]
+  /** Source-image identity, recorded in the run record (ImageRecord.fingerprint). */
+  imageFingerprint: string
+  /** All existing annotations, all groups incl. hidden: fixed disks in cluster fits + duplicate checks. */
+  existing: { annotationId: string; x: number; y: number; groupId: string; origin: 'manual' | 'automated' }[]
   /** Labelled negatives from earlier rejections in this session (Phase 2). */
   negatives?: { x: number; y: number }[]
   params: {
-    sensitivity: number               // 0..1 slider, mapped to the calibrated threshold
-    sizeRange: [number, number]       // multipliers on estimated exemplar radius, default [0.6, 1.6]
+    sensitivity: number               // 0..1 slider, mapped to count penalty λ / mask threshold
+    priorWidth: number                // multiplier on the seed-derived log-radius scale s (default 1)
+    kMax?: number                     // per-cluster cap; larger regions are returned as 'review' regions
     analysisMaxSide?: number          // override downsampling
-    dedupeRadiusFactor: number        // default 0.6 × estimated radius
+    dedupeRadiusFactor: number        // fallback duplicate check for candidates outside any fitted cluster (default 0.6 × r)
   }
 }
 
@@ -179,38 +245,64 @@ export type DetectEvent =
 export interface DetectResult {
   detector: { name: string; version: string }      // e.g. 'blob-exemplar', '0.1.0'
   params: Record<string, unknown>                  // fully resolved params incl. analysis scale and calibrated threshold
-  exemplarStats: { radiusPx: number[]; warnings: string[] }   // e.g. 'exemplars bimodal in size'
+  calibration: {
+    seeds: { annotationId: string; x: number; y: number; radiusPx: number | null; quality: 'ok' | 'touching' | 'edge' | 'glare' | 'weak' }[]
+    prior: { mu: number; s: number; sMin: number; nUsable: number }   // log-radius prior
+    appearance: Record<string, { median: number; scale: number }>     // per-feature robust stats
+    warnings: string[]                                                 // e.g. 'few usable seeds', 'no small seeds'
+  }
+  analysisScale: number
   suggestions: Suggestion[]
+  clusters: ClusterResult[]
   timingsMs: Record<string, number>
 }
 
 export interface Suggestion {
   x: number; y: number                // original-image px (pixel-centre convention as types.ts)
-  radiusPx: number                    // estimated colony radius, NOT AnnotationGroup.size
-  score: number                       // detector-internal, uncalibrated
-  confidence: number | null           // only non-null once calibrated (see 6.3)
+  radiusPx: number                    // fitted colony radius, NOT AnnotationGroup.size
+  clusterId: string
+  quality: { boundaryResidual: number; priorDeviation: number }   // diagnostics, not probabilities
+  confidence: number | null           // null unless separately calibrated (see 6.3)
+}
+
+export interface ClusterResult {
+  clusterId: string
+  bbox: [number, number, number, number]          // original-image px
+  fixedManual: string[]                           // annotation IDs treated as fixed disks
+  chosenK: number
+  runnerUpK: number | null
+  objectiveGap: number | null                     // J(runner-up) − J(chosen), normalised
+  status: 'ok' | 'review' | 'too-large'
 }
 // Cancellation: postMessage({ type: 'cancel', runId }); the worker checks between stages.
 ```
 
-Messaging: plain `postMessage` with transferables (`ImageBitmap` is transferable) is enough. A small RPC helper (or Comlink) is optional. One long-lived module Worker (`new Worker(new URL('./detect.worker.ts', import.meta.url), { type: 'module' })`, which Vite supports) keeps the cached pyramids for the current image. Drop the cache when the image changes.
+Messaging: plain `postMessage` with transferables (`ImageBitmap` is transferable) is enough. A small RPC helper (or Comlink) is optional. One long-lived module Worker (`new Worker(new URL('./detect.worker.ts', import.meta.url), { type: 'module' })`, which Vite supports) keeps the cached planes (background, mask, gradient, labels) for the current image. Drop the cache when the image changes.
 
 ### 6.3 Mapping to `Annotation` / `DetectorProvenance`
 - **Pending suggestions are not `Annotation`s.** Keep them in an ephemeral, per-image suggestion layer (in memory, optionally autosaved as a draft). They are drawn with a distinct style, never counted in totals or CSV (brief §8: "keep unaccepted suggestions separate from confirmed totals"), and don't enter undo history. This avoids having to filter `reviewStatus: 'unreviewed'` out of every count path, every CSV row and every Drive round trip.
 - **Accept (batch or single)**: one `HistoryEntry` labelled e.g. "Accept 24 suggestions", containing N add-ops (`src/state/history.ts` already anticipates this label). Each created record:
   - `origin: 'automated'` (immutable), `lastEditSource: 'automated'`, `manuallyAdjusted: false`
   - `reviewStatus: 'accepted'`, `reviewedAt: now`, `groupId`: the target group (or the group chosen at accept time)
-  - `detector: { name, version, runId, params, confidence }` with the resolved params from `DetectResult`. Keep `params` compact (it is duplicated on every annotation; consider storing only a `paramsHash` and a short run summary if JSON size grows).
+  - `detector: { name, version, runId, params, confidence: null }`. Keep `params` **per-annotation and small**: e.g. `{ clusterId, radiusPx, boundaryResidual, priorDeviation }`. Run-level data (seed snapshot, prior, settings) belongs in a run record, not duplicated N times.
+- **Schema additions the method brief requires** (proposal for the schema owners; not in v1, and other agents own `types.ts`):
+  - `ImageAnnotations.detectionRuns?: DetectionRun[]`, where `DetectionRun = { runId, method, version, createdAt, imageFingerprint, analysisScale, targetGroupId, seeds: {annotationId, x, y, radiusPx, quality}[], prior: {mu, s, sMin}, appearance, settings, diagnostics: {clusters: …summary…}, negatives?: {x, y}[] }`. Store only runs that produced at least one accepted annotation, and prune runs no annotation references any more. `Annotation.detector.runId` is the foreign key.
+  - `Annotation.geometry?: { kind: 'circle'; r: number; quality?: number; source: 'fit' | 'seed-estimate' }` in original-image px, separate from `AnnotationGroup.size`. Manual seeds can get `geometry` too (estimated radius). That must never change their `origin`, `lastEditSource` or `manuallyAdjusted`.
+  - Without a schema bump, the only v1-compatible fallback is to put the run record into every accepted annotation's `detector.params`. That works, but it bloats JSON and Drive files (the seed list is repeated N times), so I don't recommend it beyond a prototype.
 - **Reject**: removes the suggestion from the layer and records it as a negative for this session. It creates no `Annotation`. If rejected suggestions should be auditable later, that is a schema v2 question (e.g. persist them with `reviewStatus: 'rejected'`). The current type supports that but count paths would have to exclude it.
 - **Move after accept**: the normal edit path sets `manuallyAdjusted: true` and `lastEditSource: 'manual'`, and `origin` stays `'automated'` (types.ts already specifies this).
 - **Confidence**: classical scores are not probabilities. Use `confidence: null` (the type's documented "not meaningful" value) until a calibration (e.g. Platt/isotonic fitted on harness data) exists. Don't write raw scores into `confidence`.
-- **Radius**: `Suggestion.radiusPx` has no home in v1 `Annotation`. Do not reuse `AnnotationGroup.size`. If the radius should persist, add an optional measured-geometry field in a schema bump.
-- **De-duplication**: in the Worker (suppress suggestions within `dedupeRadiusFactor × r` of any existing annotation, all groups, including hidden ones, since hidden still count) *and* again at accept time on the main thread (annotations may have changed since the run started).
+- **Radius**: see `Annotation.geometry` above. Never reuse `AnnotationGroup.size`.
+- **Existing annotations and duplicates**: in the Worker, existing annotations of all groups (hidden included, since hidden still count) are fixed disks in the cluster fit, so they are counted as existing colonies rather than re-suggested (brief §4.7). At accept time the main thread re-checks against the current annotations (they may have changed since the run started), and refuses accepts into locked groups (the existing `checkOps` path).
+- **Image identity**: refuse to run, or to accept results, while `ImageRecord.sourceMismatch` is set. That field was added to `types.ts` concurrently. Store `ImageRecord.fingerprint` in the run record so a run can't be applied to replaced bytes.
+- **Seeds are not modified**: the run reads manual annotations but never moves or re-types them. Suggestions never become seeds for the same run.
 
 ### 6.4 Review UX
-- Suggestions render as hollow rings in a neutral "pending" colour with the count shown separately ("24 suggested, not counted"). Sliders update the visible set live by filtering cached scores (no re-run) where possible.
+- Suggestions render as hollow rings in a neutral "pending" colour with the count shown separately ("24 suggested, not counted"). Sliders re-run only the cheap stages: changing λ or prior width refits clusters from cached planes and candidates, without decoding or re-segmenting.
 - Actions: Accept all visible (one undo step), Accept in lasso/region, tap to toggle reject, Clear suggestions. Apple Pencil/touch hit-testing reuses the existing nearest-point logic.
-- Show the exemplars used and the estimated radius rings, so users can see *why* the detector chose a size.
+- Show the seeds used, with their inferred radius rings and quality flags, and the status line ("8 manual examples; 6 usable"), so users can see *why* the detector chose a size. Offer "add another example" only when calibration is weak (brief §1).
+- Clusters with status `review` are highlighted as regions (outline + "2 or 3?") rather than as committed points. Tapping one shows the alternatives: accept the chosen K, accept the alternative, or skip. "Accept all" accepts `ok` clusters only and leaves `review` clusters pending. `too-large` regions are shown as "count manually".
+- Optional fitted outlines (circles) toggle on and off. They are diagnostics, separate from the group's display marker style.
 - Never auto-accept. Never show suggestions as confirmed counts (brief §9).
 
 ### 6.5 Performance budget (12–24 MP phone photos, iPad Safari)
@@ -218,7 +310,7 @@ Messaging: plain `postMessage` with transferables (`ImageBitmap` is transferable
 - **Analysis scale from exemplars, not a fixed size**: choose the downsample so the smallest expected colony radius (r_min after the size range) is ≈ 3–4 px. Example: a plate spanning 3000 px with 1 mm colonies at ~33 px/mm has a colony radius of ~16 px, so ×0.25 downsampling is fine. That gives 1000×750 for a full 12 MP frame, ~0.75 MP, well within budget. Cap the analysis image at ~4 MP. If tiny colonies force a higher resolution, process the ROI in overlapping tiles (overlap ≥ 2 × r_max) and merge with NMS. Crop to the ROI *before* downsampling.
 - **Decode**: `createImageBitmap(blob, { resizeWidth, resizeHeight, resizeQuality: 'high' })` is supported since Safari/iOS 15, and `OffscreenCanvas` with a 2D context in Workers since Safari/iOS 16.4 (MDN browser-compat-data, checked 2026-10-09). This allows decode + resize + `getImageData` entirely in the Worker. **Verify EXIF orientation**: the worker's pixel grid must match `ImageRecord.width/height` (oriented). Test with rotated iPhone JPEGs and HEIC→JPEG conversions. `ImageDecoder` (WebCodecs) is not available on iOS Safari.
 - Canvas limits: iOS Safari capped canvas area at 16,777,216 px (4096²) through iOS 17, and 67,108,864 px from iOS 18 ([PQINA](https://pqina.nl/blog/canvas-area-exceeds-the-maximum-limit/), [Lion Puro](https://lionpuro.com/posts/canvas-is-finally-usable-on-safari/)). Total canvas memory is also limited. Downsampled analysis canvases avoid both. Release buffers explicitly (`bitmap.close()`, `canvas.width = 0`).
-- Time budget (*targets, to benchmark*): ≤1.5 s from Find to first suggestions on an iPad (M1 or recent A-series) for a 12 MP photo at the analysis scale. ≤150 ms slider updates (filter only). Report progress per stage. Cancel within one stage.
+- Time budget (*targets, to benchmark*): ≤1.5 s from Find to first suggestions on an iPad (M1 or recent A-series) for a 12 MP photo at the analysis scale. ≤300 ms slider updates (cluster refit from cached planes; *estimate*), first suggestions within a few seconds even on crowded plates, with progress per cluster batch. Report progress per stage. Cancel within one stage.
 - Threads: ORT Web multi-threading and `SharedArrayBuffer` need cross-origin isolation (COOP/COEP headers), which GitHub Pages cannot send. The `coi-serviceworker` workaround exists but may interfere with Google Identity/Picker popups and iframes. That is a real conflict with the essential Drive integration. Stay single-threaded per Worker. Parallelise, if needed, with 2 Workers on separate tiles (plain transferables, no SAB).
 
 ### 6.6 Risks and unknowns
@@ -230,7 +322,8 @@ Messaging: plain `postMessage` with transferables (`ImageBitmap` is transferable
 6. **iPad memory**: Safari kills tabs under memory pressure without warning. Keep peak Worker memory well under ~300 MB (*estimate of a safe target*, to test).
 7. **Licences**: GPL (OpenCFU, ImageJ plugin), AGPL (Ultralytics) and CC BY-NC (AGAR) all constrain reuse. The project has no licence yet. Decide before borrowing code, weights or data.
 8. **ORT Web docs lag Safari**: ONNX Runtime's WebGPU page still says Safari is Technology Preview only ([ORT WebGPU EP](https://onnxruntime.ai/docs/tutorials/web/ep-webgpu.html)), while WebKit shipped WebGPU on by default in Safari 26 on iOS/iPadOS 26 ([WebKit blog](https://webkit.org/blog/17333/webkit-features-in-safari-26-0/)). Operator coverage on WebGPU is a subset of WASM's ([ORT Web](https://onnxruntime.ai/docs/tutorials/web/)). Any Phase 3 model must be tested on real iPads.
-9. **Scope creep**: the brief makes the manual experience the priority. The detector must stay behind the interface and not shape core data paths beyond what §6.3 describes.
+9. **Method-brief specific**: the union-of-circles fit depends on the foreground mask, has five weights to tune (λ needs crowded, reviewed plates), will over-split irregular colonies, and inherits seed-radius and seed-selection bias. Details and mitigations are in §3.4. Persisting run records needs a schema bump that touches the storage, Drive and archive code that other agents own.
+10. **Scope creep**: the brief makes the manual experience the priority. The detector must stay behind the interface and not shape core data paths beyond what §6.3 describes.
 
 ---
 
@@ -240,7 +333,9 @@ Classical / tools
 - Geissmann Q. OpenCFU (2013), PLOS ONE: https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0054072 (arXiv: https://arxiv.org/pdf/1210.5502)
 - Clarke et al. NICE (2010), Cytometry A: https://onlinelibrary.wiley.com/doi/10.1002/cyto.a.20864 · code: https://github.com/usnistgov/NICE-Public · NIST: https://www.nist.gov/publications/low-cost-high-throughput-automated-counting-bacterial-colonies
 - Khan et al. AutoCellSeg (2018), Sci Rep: https://www.semanticscholar.org/paper/AutoCellSeg:-robust-automatic-colony-forming-unit-Khan-Torelli/4a8205ad11971f8c0c9684fa52ecd8e9e784b91c · code: https://github.com/AngeloTorelli/AutoCellSeg
-- Kim et al. MCount (2024), PLOS ONE: https://journals.plos.org/plosone/article?id=10.1371%2Fjournal.pone.0311242 · code: https://github.com/hyu-kim/mcount
+- Chen, Huang, Kim, Cui, Buie. MCount (2025), PLOS ONE 20(3): e0311242: https://journals.plos.org/plosone/article?id=10.1371%2Fjournal.pone.0311242 · code: https://github.com/hyu-kim/mcount
+- Product-owner method brief: `colony-fitting-method-brief.md` (repo root, 2026-10-09)
+- Bär, Boumasmoud, Zinkernagel, Vulin. ColTapp (2020), Sci Rep 10:16084: https://doi.org/10.1038/s41598-020-72979-4
 - ImageJ Colony Counter: https://imagej.net/ij/plugins/colony-counter.html · CoCo: https://github.com/jiaxuanleong/coco
 - scikit-image blob detection: https://scikit-image.org/docs/stable/auto_examples/features_detection/plot_blob.html
 - OpenCV.js build measured from https://docs.opencv.org/4.13.0/opencv.js · npm `@techstark/opencv-js` (Apache-2.0)
