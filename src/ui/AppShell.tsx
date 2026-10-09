@@ -2,6 +2,7 @@ import { createEffect, createSignal, Match, on, onCleanup, Show, Switch } from '
 import { AppBar } from './appbar/AppBar'
 import { DriveButton, SaveStatusPill, type DriveActions, type SyncInfo } from './appbar/DriveControls'
 import { ProjectMenu } from './appbar/ProjectMenu'
+import { SettingsMenu } from './appbar/SettingsMenu'
 import { useApp } from './context'
 import { createFileDrop } from './fileDrop'
 import { ImagePlus, Loader } from './icons'
@@ -17,10 +18,11 @@ import './app.css'
 
 /** Top-level container: layout, drawer, global drop/shortcuts/persistence hooks, app bar wiring. */
 export function AppShell() {
-  const { editor, toaster, dialogs, thumbnails, actions, isDemo, assist } = useApp()
+  const { editor, toaster, dialogs, thumbnails, actions, isDemo, assist, sound } = useApp()
   const { state, projects, drive } = editor
   const narrow = createMediaQuery('(max-width: 900px)')
   const phone = createMediaQuery('(max-width: 560px)')
+  const touchScreen = createMediaQuery('(any-pointer: coarse)')
   const [sidebarOpen, setSidebarOpen] = createSignal(!narrow())
   const [helpOpen, setHelpOpen] = createSignal(false)
   const [adjustOpen, setAdjustOpen] = createSignal(false)
@@ -147,6 +149,21 @@ export function AppShell() {
         drive={
           <div class="contents" onClick={dismissDrawer}>
             <DriveButton {...sync()} {...driveActions} compact={narrow()} />
+          </div>
+        }
+        settings={
+          <div class="contents" onClick={dismissDrawer}>
+            <SettingsMenu
+              sound={sound.settings.get()}
+              onSound={sound.settings.update}
+              onPreview={sound.preview}
+              audioUnavailable={sound.status() === 'unavailable'}
+              appleTouch={isApple && touchScreen()}
+              showTouch={touchScreen()}
+              touchAnnotates={state.touchAnnotates}
+              onTouchAnnotates={editor.view.setTouchAnnotates}
+              onShowShortcuts={() => setHelpOpen(true)}
+            />
           </div>
         }
       />

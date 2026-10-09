@@ -3,7 +3,7 @@ import { Microscope, PanelLeft } from '../icons'
 import { ToggleButton } from '../primitives'
 import './appbar.css'
 
-/** Top application bar layout: brand, sidebar toggle, project slot, status + Drive slots. */
+/** Top application bar layout: brand, sidebar toggle, project slot, status + Drive + settings slots. */
 export interface AppBarProps {
   showSidebarToggle: boolean
   sidebarOpen: boolean
@@ -14,6 +14,8 @@ export interface AppBarProps {
   project: JSX.Element
   status: JSX.Element
   drive: JSX.Element
+  /** Device settings (gear), last on the right. */
+  settings: JSX.Element
 }
 
 export function AppBar(props: AppBarProps) {
@@ -47,6 +49,7 @@ export function AppBar(props: AppBarProps) {
       <div class="appbar__right">
         {props.status}
         {props.drive}
+        {props.settings}
       </div>
     </header>
   )

@@ -102,6 +102,22 @@ cleared on image switch. The viewport gets read-only `suggestions`,
 the review panel is open; elsewhere Add/Erase act on confirmed markers) and
 `ViewportHandle.showRect` for region navigation.
 
+**Edit feedback (sound cues).** The editor and the assist controller take an
+optional `feedback` port (`state/feedback.ts`) and report what happened to the
+user's edit: `added` (with `near` when the viewport reported a marker underneath),
+`erased`, `history` (undo/redo), `accepted` (assisted batch) and `refused` (every
+explained refusal: hidden/locked/no group, nothing to erase, edits paused, refused
+undo/redo or accept). The composition root also reports every toast as `notice`.
+The pure `cueFor` maps events to cues (error toasts and refusals share the error
+cue; a finger tap that only navigates is silent so palm contact never buzzes).
+`ui/sound` filters by the per-device `SoundSettings` (`state/soundSettings.ts`,
+localStorage), drops the same cue repeated within 45 ms (a refusal and its toast)
+and synthesises it with Web Audio (`engine.ts`, recipes as data in `cues.ts`). The
+AudioContext is created on the first gesture (iOS rule) and resumed after
+'suspended'/'interrupted'; Web Audio on iOS stays in the ambient session, so Silent
+mode mutes it. The gear in the app bar (`appbar/SettingsMenu.tsx`) edits these
+settings and the device's touch-annotates preference.
+
 ## Data flow
 
 ```mermaid

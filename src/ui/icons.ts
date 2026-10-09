@@ -68,3 +68,5 @@ import CircleIcon from 'lucide-solid/icons/circle'
 import { mergeProps } from 'solid-js'
 /** Solid filled circle (the "filled dot" marker style). */
 export const CircleFilled: IconComponent = (props) => CircleIcon(mergeProps(props, { fill: 'currentColor' }))
+export { default as Settings } from 'lucide-solid/icons/settings'
+export { default as Volume2 } from 'lucide-solid/icons/volume-2'

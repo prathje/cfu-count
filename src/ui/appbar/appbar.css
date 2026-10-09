@@ -374,3 +374,38 @@
   font-size: 0.95em;
   overflow-wrap: anywhere;
 }
+
+/* Settings popover (gear): sound feedback and device preferences. */
+.settings-pop__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+  padding: 0 var(--s-2) var(--s-2);
+}
+
+.settings-pop__body .slider {
+  margin: var(--s-1) 0 var(--s-2);
+}
+
+.settings-cues {
+  display: flex;
+  flex-direction: column;
+}
+
+.settings-cue {
+  display: flex;
+  align-items: center;
+  gap: var(--s-1);
+}
+
+.settings-cue .switch-row {
+  flex: 1;
+  min-width: 0;
+}
+
+.settings-pop__note {
+  margin: var(--s-1) 0 0;
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+  color: var(--c-text-3);
+}
