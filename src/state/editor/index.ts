@@ -17,6 +17,7 @@ import { applyStorageOwned, displayOrder, docForSave } from '../../model/project
 import type { DriveState, ProjectRepository, ProjectSession, SaveStatus } from '../../storage/api'
 import { isCancelled } from '../../storage/errors'
 import { createAutosaver } from '../autosave'
+import { noFeedback, type Feedback } from '../feedback'
 import type { Confirm, Notify } from '../messages'
 import { prefs } from '../prefs'
 import { createAnnotations, type AnnotationCommands } from './annotations'
@@ -41,6 +42,8 @@ export interface EditorDeps {
   notify: Notify
   /** Ask the user a yes/no question (e.g. discard changes that could not be saved). */
   confirm: Confirm
+  /** Edit feedback port (sound cues); default: none. */
+  feedback?: Feedback
   /** Autosave debounce in ms (tests). */
   autosaveDelay?: number
 }
@@ -155,6 +158,7 @@ export function createEditor(repo: ProjectRepository, deps: EditorDeps): Editor 
       saver,
       notify,
       confirm,
+      feedback: deps.feedback ?? noFeedback,
       session: () => session,
 
       load(next, snapshot = next.opened) {
@@ -217,6 +221,7 @@ export function createEditor(repo: ProjectRepository, deps: EditorDeps): Editor 
         const busy = state.busy
         if (!busy?.blocking) return false
         notify({ tone: 'info', key: 'busy', message: `Please wait — ${busy.label.replace(/…$/, '')}`, detail: 'Changes are paused until it finishes.' })
+        ctx.feedback({ type: 'refused', reason: 'busy' })
         return true
       },
 

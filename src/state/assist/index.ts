@@ -18,6 +18,7 @@ import { editBlock } from '../../model/policy'
 import { newId as defaultNewId, now as defaultNow } from '../../model/ids'
 import type { DetectorClient, DetectProgress } from '../../detection'
 import type { Editor } from '../editor'
+import type { Feedback } from '../feedback'
 import type { Notify } from '../messages'
 import {
   DEFAULT_REVIEW_SETTINGS,
@@ -60,6 +61,8 @@ export type AssistPhase = 'idle' | 'running' | 'ready' | 'error'
 export interface AssistDeps {
   editor: Editor
   notify: Notify
+  /** Edit feedback port (sound cues); default: none. */
+  feedback?: Feedback
   /** Creates the Worker-backed client; called once, on the first run. */
   createClient(): DetectorClient
   /** Debounce for slider re-runs, in ms (default 450). */
@@ -124,6 +127,7 @@ const isCancelled = (err: unknown) => err instanceof Error && err.name === 'Dete
 export function createAssist(deps: AssistDeps): Assist {
   return createRoot((disposeRoot) => {
     const { editor, notify } = deps
+    const feedback = deps.feedback ?? (() => {})
     const { state, annotations, images, groups } = editor
     const newId = deps.newId ?? defaultNewId
     const now = deps.now ?? defaultNow
@@ -340,6 +344,7 @@ export function createAssist(deps: AssistDeps): Assist {
       if (!l || !v || !image || state.currentImageId !== l.imageId) return false
       if (image.sourceMismatch || image.fingerprint !== l.imageFingerprint) {
         notify({ tone: 'warning', key: 'assist', message: 'Can’t accept: the image changed', detail: 'These suggestions were computed on different image bytes. Run Find similar again.' })
+        feedback({ type: 'refused', reason: 'image-changed' })
         return false
       }
       const group = groups.list().find((g) => g.id === l.groupId)
@@ -358,12 +363,14 @@ export function createAssist(deps: AssistDeps): Assist {
                 ? { label: 'Show group', run: () => groups.setHidden(group.id, false) }
                 : undefined,
         })
+        feedback({ type: 'refused', reason: reason ?? 'no-group' })
         return false
       }
       const runId = newId()
       const plan = planAccept(l, v, scope, { annotations: annotations.current(), image, runId, at: now(), newId })
       if (!plan) {
         notify({ tone: 'info', key: 'assist', message: 'Nothing to accept here', detail: 'Every suggestion in this selection is already marked or rejected.' })
+        feedback({ type: 'refused', reason: 'nothing-to-accept' })
         return false
       }
       const n = plan.annotations.length
@@ -375,8 +382,10 @@ export function createAssist(deps: AssistDeps): Assist {
       })
       if (blocked) {
         notify({ tone: 'warning', key: 'assist', message: 'Couldn’t add the suggestions', detail: blocked.reason === 'invalid' ? blocked.detail : 'The target group can’t be edited right now.' })
+        feedback({ type: 'refused', reason: blocked.reason })
         return false
       }
+      feedback({ type: 'accepted', count: n })
       const imageId = image.id
       notify({
         tone: 'success',

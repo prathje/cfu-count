@@ -15,6 +15,7 @@ import type { Tool } from '../../model/tool'
 import type { ProjectRepository, ProjectSession, ProjectSnapshot, ProjectSummary } from '../../storage/api'
 import type { Autosaver } from '../autosave'
 import type { ImageHistory } from '../history'
+import type { Feedback } from '../feedback'
 import type { Confirm, Notify } from '../messages'
 
 export interface EditorState {
@@ -56,6 +57,8 @@ export interface EditorContext {
   readonly saver: Autosaver
   readonly notify: Notify
   readonly confirm: Confirm
+  /** Reports what happened to the user's edits (sound cues). Never throws. */
+  readonly feedback: Feedback
   /** The open storage session (null when no project is open). */
   session(): ProjectSession | null
   /**

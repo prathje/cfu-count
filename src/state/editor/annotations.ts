@@ -63,8 +63,11 @@ export interface AnnotationCommands {
   canUndo: Accessor<boolean>
   canRedo: Accessor<boolean>
 
-  /** Add a manual, accepted annotation to the active group on the current image. */
-  add(x: number, y: number): boolean
+  /**
+   * Add a manual, accepted annotation to the active group on the current image.
+   * `near`: the viewport reported it on top of an existing marker (feedback only).
+   */
+  add(x: number, y: number, opts?: { near?: boolean }): boolean
   erase(annotationId: ID): boolean
   /** Apply ops to one image as ONE undo step. Returns the block if refused (nothing changes). */
   applyBatch(imageId: ID, ops: AnnotationOp[], opts: BatchOptions): OpBlock | null
@@ -95,7 +98,7 @@ export interface AnnotationCommands {
 }
 
 export function createAnnotations(ctx: EditorContext, groups: GroupCommands): AnnotationCommands {
-  const { state, setState, notify } = ctx
+  const { state, setState, notify, feedback } = ctx
 
   const current = createMemo<readonly Annotation[]>(() => {
     const id = state.currentImageId
@@ -117,6 +120,7 @@ export function createAnnotations(ctx: EditorContext, groups: GroupCommands): An
 
   function explainBlocked(reason: EditBlockReason | 'nothing-to-erase') {
     const group = groups.active()
+    feedback({ type: 'refused', reason })
     if (reason === 'nothing-to-erase') {
       notify({
         tone: 'info',
@@ -146,6 +150,7 @@ export function createAnnotations(ctx: EditorContext, groups: GroupCommands): An
     const group = groups.list().find((g) => g.id === groupId)
     const reason = editBlock(group)
     if (!reason) return false
+    feedback({ type: 'refused', reason })
     if (reason === 'no-group' || !group) {
       notify({ tone: 'warning', key: 'blocked', message: 'This annotation group no longer exists' })
       return true
@@ -196,6 +201,7 @@ export function createAnnotations(ctx: EditorContext, groups: GroupCommands): An
   function explainOpBlock(block: OpBlock, message: string, detail: string) {
     const action = block.reason === 'locked' || block.reason === 'hidden' ? fixFor(block.reason, block.group) : undefined
     notify({ tone: 'warning', key: 'blocked', message, detail, action })
+    feedback({ type: 'refused', reason: block.reason })
   }
 
   // ------------------------------------------------------------ writes
@@ -267,7 +273,7 @@ export function createAnnotations(ctx: EditorContext, groups: GroupCommands): An
     return true
   }
 
-  function add(x: number, y: number): boolean {
+  function add(x: number, y: number, opts: { near?: boolean } = {}): boolean {
     const imageId = state.currentImageId
     if (!imageId || ctx.editsFrozen()) return false
     const group = groups.active()
@@ -277,7 +283,9 @@ export function createAnnotations(ctx: EditorContext, groups: GroupCommands): An
       return false
     }
     const annotation = makeManualAnnotation(x, y, group.id, newId(), now())
-    return applyBatch(imageId, [{ kind: 'add', annotation }], { label: 'Add colony' }) === null
+    if (applyBatch(imageId, [{ kind: 'add', annotation }], { label: 'Add colony' })) return false
+    feedback({ type: 'added', near: !!opts.near })
+    return true
   }
 
   function erase(annotationId: ID): boolean {
@@ -290,6 +298,7 @@ export function createAnnotations(ctx: EditorContext, groups: GroupCommands): An
       if (block.reason === 'locked' || block.reason === 'hidden') explainBlocked(block.reason)
       return false
     }
+    feedback({ type: 'erased' })
     return true
   }
 
@@ -310,6 +319,7 @@ export function createAnnotations(ctx: EditorContext, groups: GroupCommands): An
         message: `Can’t redo “${plan.ok ? plan.entry.label : ''}”: the image changed`,
         detail: `${runProblem} Run Find similar again on the current image.`,
       })
+      feedback({ type: 'refused', reason: 'image-changed' })
       return false
     }
     if (!plan.ok) {
@@ -324,6 +334,7 @@ export function createAnnotations(ctx: EditorContext, groups: GroupCommands): An
       if (plan.entry.detectionRun) setRun(imageId, plan.entry.detectionRun, direction === 'redo')
       setState('history', imageId, plan.next)
     })
+    feedback({ type: 'history', direction })
     return true
   }
 

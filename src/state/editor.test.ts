@@ -6,6 +6,7 @@ import { createEditor } from './editor'
 import { createAssist } from './assist'
 import type { DetectRequest, DetectResult, DetectorClient } from '../detection'
 import type { ConfirmRequest, Notice } from './messages'
+import type { FeedbackEvent } from './feedback'
 
 const img = (id: string, imageGroupId: string | null): ImageRecord => ({
   id,
@@ -113,9 +114,11 @@ function mockRepo() {
 async function setup(opts: { confirm?: (r: ConfirmRequest) => Promise<boolean> } = {}) {
   const notices: Notice[] = []
   const confirms: ConfirmRequest[] = []
+  const events: FeedbackEvent[] = []
   const { repo, sessions, control } = mockRepo()
   const editor = createEditor(repo, {
     notify: (n) => notices.push(n),
+    feedback: (e) => events.push(e),
     confirm: (r) => {
       confirms.push(r)
       return opts.confirm ? opts.confirm(r) : Promise.resolve(false)
@@ -123,7 +126,7 @@ async function setup(opts: { confirm?: (r: ConfirmRequest) => Promise<boolean> }
   })
   await editor.projects.init()
   const session = () => sessions.at(-1)!
-  return { editor, notices, confirms, repo, sessions, session, control }
+  return { editor, notices, confirms, events, repo, sessions, session, control }
 }
 
 const automated = (id: string, groupId: string, extra: Partial<Annotation> = {}): Annotation => ({
@@ -209,6 +212,32 @@ describe('editor', () => {
     expect(editor.groups.active()?.hidden).toBe(false)
     expect(editor.annotations.undo()).toBe(true)
     expect(editor.annotations.total()).toBe(0)
+  })
+
+  it('reports edit feedback: add (near), erase, undo/redo and every explained refusal', async () => {
+    const { editor, events } = await setup()
+    const id = editor.groups.active()!.id
+    editor.annotations.add(1, 1)
+    editor.annotations.add(1.5, 1, { near: true })
+    expect(events).toEqual([{ type: 'added', near: false }, { type: 'added', near: true }])
+    events.length = 0
+    expect(editor.annotations.erase(editor.annotations.current()[1].id)).toBe(true)
+    editor.annotations.undo()
+    editor.annotations.redo()
+    expect(events).toEqual([{ type: 'erased' }, { type: 'history', direction: 'undo' }, { type: 'history', direction: 'redo' }])
+    events.length = 0
+    editor.groups.setLocked(id, true)
+    expect(editor.annotations.add(2, 2)).toBe(false)
+    expect(editor.annotations.undo()).toBe(false)
+    expect(editor.annotations.erase(editor.annotations.current()[0].id)).toBe(false)
+    editor.annotations.explainBlocked('nothing-to-erase')
+    expect(events).toEqual([
+      { type: 'refused', reason: 'locked' },
+      { type: 'refused', reason: 'locked' },
+      { type: 'refused', reason: 'locked' },
+      { type: 'refused', reason: 'nothing-to-erase' },
+    ])
+    expect(editor.annotations.total()).toBe(1)
   })
 
   it('reports a locked+hidden group as locked first (one policy)', async () => {
@@ -624,13 +653,22 @@ async function setupAssist(make: (req: DetectRequest) => Partial<DetectResult> =
   const env = await setup()
   const detector = fakeDetector(make)
   let ids = 0
-  const assist = createAssist({ editor: env.editor, notify: (n) => env.notices.push(n), createClient: () => detector, debounceMs: 0, newId: () => `id${++ids}` })
+  const assist = createAssist({ editor: env.editor, notify: (n) => env.notices.push(n), feedback: (e) => env.events.push(e), createClient: () => detector, debounceMs: 0, newId: () => `id${++ids}` })
   for (const [x, y] of [[10, 10], [20, 10], [30, 10]]) env.editor.annotations.add(x, y)
   const settle = () => new Promise((r) => setTimeout(r, 0))
   return { ...env, assist, detector, settle }
 }
 
 describe('assisted counting', () => {
+  it('reports a refused accept as feedback', async () => {
+    const { editor, assist, settle, events } = await setupAssist()
+    assist.start()
+    await settle()
+    editor.groups.setLocked(editor.groups.active()!.id, true)
+    expect(assist.accept({ kind: 'ok' })).toBe(false)
+    expect(events.at(-1)).toEqual({ type: 'refused', reason: 'locked' })
+  })
+
   it('runs on open with this image’s manual examples and never counts suggestions', async () => {
     const { editor, assist, detector, settle } = await setupAssist()
     expect(assist.block()).toBeNull()
@@ -646,13 +684,14 @@ describe('assisted counting', () => {
   })
 
   it('accepting all OK is one undo step that stores the run; undo removes both and suggestions are pending again', async () => {
-    const { editor, assist, settle, notices } = await setupAssist()
+    const { editor, assist, settle, notices, events } = await setupAssist()
     assist.start()
     await settle()
     assist.toggleReject(1)
     expect(assist.view()!.rejected).toBe(1)
     expect(assist.accept({ kind: 'ok' })).toBe(true)
     expect(notices.at(-1)).toMatchObject({ tone: 'success', message: 'Added 1 colony to “Colonies”' })
+    expect(events.at(-1)).toEqual({ type: 'accepted', count: 1 })
     expect(editor.annotations.total()).toBe(4)
     const added = editor.annotations.current().at(-1)!
     expect(added).toMatchObject({ origin: 'automated', reviewStatus: 'accepted', geometry: { kind: 'circle', r: 3, source: 'fit' }, detector: { confidence: null } })

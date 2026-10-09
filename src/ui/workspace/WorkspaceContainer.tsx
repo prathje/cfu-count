@@ -242,7 +242,7 @@ export function WorkspaceContainer(props: WorkspaceContainerProps) {
 
   function onAdd(x: number, y: number, info: AddInfo) {
     const list = confirmed() // snapshot before the add: the near marker is in it
-    if (!annotations.add(x, y) || !info.nearAnnotationId) return
+    if (!annotations.add(x, y, { near: !!info.nearAnnotationId }) || !info.nearAnnotationId) return
     const near = list.find((a) => a.id === info.nearAnnotationId)
     const added = annotations.current().at(-1)
     if (!near || !added) return
