@@ -1,13 +1,13 @@
 import { createMemo, createSignal, Show } from 'solid-js'
-import { isConfirmed } from '../../model/annotations'
-import type { ViewportHandle } from '../../viewport/api'
+import { isConfirmed, labelNumber } from '../../model/annotations'
+import type { AddInfo, BlockedReason, ViewportHandle } from '../../viewport/api'
 import { Viewport } from '../../viewport/Viewport'
 import { useApp } from '../context'
 import { bitmapError, bitmapSizeMismatch, createCurrentBitmap, readyImage, type BlobSource } from '../images'
 import { createElementWidth, createMediaQuery, MOD } from '../media'
 import { CANVAS_GUARD_ATTR } from '../primitives'
 import { FloatingToolbar, toolbarModeFor } from '../toolbar/FloatingToolbar'
-import { groupTallies, interactionHint, sizeMismatchMessage } from './hints'
+import { groupTallies, interactionHint, nearDuplicateMessage, sizeMismatchMessage, TOUCH_NAVIGATES_DETAIL, TOUCH_NAVIGATES_MESSAGE } from './hints'
 import { ImageHeader } from './ImageHeader'
 import { ViewportFooter } from './ViewportFooter'
 import { NoImages } from './EmptyStates'
@@ -21,8 +21,11 @@ export interface WorkspaceContainerProps {
   onViewport?(handle: ViewportHandle): void
 }
 
+/** The "fingers only navigate" explanation is shown once per page session. */
+let touchNavigatesExplained = false
+
 export function WorkspaceContainer(props: WorkspaceContainerProps) {
-  const { editor, actions } = useApp()
+  const { editor, actions, toaster } = useApp()
   const { state, annotations, groups, images, view } = editor
   const [stage, setStage] = createSignal<HTMLElement>()
   const stageWidth = createElementWidth(stage)
@@ -47,6 +50,39 @@ export function WorkspaceContainer(props: WorkspaceContainerProps) {
   }
   const hint = () => interactionHint({ tool: state.tool, activeGroup: groups.active(), coarse: coarse(), touchAnnotates: state.touchAnnotates })
   const driveConnected = () => editor.drive.state().state === 'connected'
+
+  function onAdd(x: number, y: number, info: AddInfo) {
+    const list = confirmed() // snapshot before the add: the near marker is in it
+    if (!annotations.add(x, y) || !info.nearAnnotationId) return
+    const near = list.find((a) => a.id === info.nearAnnotationId)
+    const added = annotations.current().at(-1)
+    if (!near || !added) return
+    const nearGroup = groups.list().find((g) => g.id === near.groupId)
+    toaster.push({
+      tone: 'info',
+      key: 'near-duplicate',
+      message: nearDuplicateMessage({
+        groupName: nearGroup?.name ?? 'another group',
+        number: labelNumber(list, near.id),
+        sameGroup: near.groupId === added.groupId,
+      }),
+      detail: 'Both markers are kept. Undo if it was a double tap.',
+      action: { label: 'Undo', run: () => annotations.erase(added.id) },
+    })
+  }
+
+  function onBlocked(reason: BlockedReason) {
+    if (reason !== 'touch-navigates') return annotations.explainBlocked(reason)
+    if (touchNavigatesExplained || state.touchAnnotates) return
+    touchNavigatesExplained = true
+    toaster.push({
+      tone: 'info',
+      key: 'touch-navigates',
+      message: TOUCH_NAVIGATES_MESSAGE,
+      detail: TOUCH_NAVIGATES_DETAIL,
+      action: { label: 'Turn on', run: () => view.setTouchAnnotates(true) },
+    })
+  }
 
   return (
     <section class="workspace" aria-label="Image workspace">
@@ -87,9 +123,9 @@ export function WorkspaceContainer(props: WorkspaceContainerProps) {
                 activeGroupId={state.activeGroupId}
                 tool={state.tool}
                 touchAnnotates={state.touchAnnotates}
-                onAdd={annotations.add}
+                onAdd={onAdd}
                 onErase={annotations.erase}
-                onBlocked={annotations.explainBlocked}
+                onBlocked={onBlocked}
                 onViewChange={(v) => setScale(v.scale)}
                 ref={(h) => {
                   handle = h

@@ -4,7 +4,7 @@ import { makeGroup } from '../model/groups'
 import { saveStatusLabel } from './format'
 import { removeImageBody } from './projectActions'
 import { toolbarModeFor } from './toolbar/layout'
-import { groupTallies, interactionHint, sizeMismatchMessage } from './workspace/hints'
+import { groupTallies, interactionHint, nearDuplicateMessage, sizeMismatchMessage } from './workspace/hints'
 import type { SaveStatus } from '../storage/api'
 
 const group = (id: string, extra: Partial<AnnotationGroup> = {}): AnnotationGroup => ({ ...makeGroup([], id, id), ...extra })
@@ -69,5 +69,13 @@ describe('dialog wording', () => {
   })
   it('explains a decode size mismatch', () => {
     expect(sizeMismatchMessage({ width: 100, height: 80 }, { width: 80, height: 100 })).toMatch(/80×100.*100×80/)
+  })
+})
+
+describe('nearDuplicateMessage', () => {
+  it('names the marker number, and the group when it differs', () => {
+    expect(nearDuplicateMessage({ groupName: 'Colonies', number: 14, sameGroup: true })).toBe('Added close to #14')
+    expect(nearDuplicateMessage({ groupName: 'Small', number: 3, sameGroup: false })).toBe('Added close to “Small” #3')
+    expect(nearDuplicateMessage({ groupName: 'Small', number: null, sameGroup: true })).toBe('Added close to an existing marker')
   })
 })

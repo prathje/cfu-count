@@ -7,6 +7,7 @@ import {
   confirmedCountsByGroup,
   countBreakdownByGroup,
   invertOps,
+  labelNumber,
   makeManualAnnotation,
   normaliseAnnotation,
   visibilitySplit,
@@ -214,5 +215,14 @@ describe('applyStorageOwned', () => {
     const merged = applyStorageOwned(editor, stored)
     expect(merged).toMatchObject({ name: 'Mine', revision: 7, storage: { kind: 'drive' }, excludedDriveFileIds: ['x'] })
     expect(merged.images[0]).toMatchObject({ name: 'edited', source: { kind: 'drive', fileId: 'd1' }, sourceMismatch: { message: 'm' } })
+  })
+})
+
+describe('labelNumber', () => {
+  it('numbers markers per group in list order, like the viewport labels', () => {
+    const list = [ann('a', 'g1'), ann('b', 'g2'), ann('c', 'g1'), ann('d', 'g2'), ann('e', 'g1')]
+    expect(labelNumber(list, 'e')).toBe(3)
+    expect(labelNumber(list, 'd')).toBe(2)
+    expect(labelNumber(list, 'zzz')).toBeNull()
   })
 })

@@ -223,3 +223,43 @@ describe('reset', () => {
     expect(taps(m.up(s(1, 'mouse', 5, 5)))).toEqual([{ type: 'tap', x: 5, y: 5, pointerType: 'mouse' }])
   })
 })
+
+describe('navTap (finger tap while touch annotation is off)', () => {
+  const navTaps = (fx: GestureEffect[]) => fx.filter((e) => e.type === 'navTap')
+  it('reports a still, short finger tap without ever tapping', () => {
+    m.down(s(1, 'touch', 50, 50), add)
+    t += 80
+    const fx = m.up(s(1, 'touch', 52, 51))
+    expect(taps(fx)).toHaveLength(0)
+    expect(navTaps(fx)).toEqual([{ type: 'navTap', x: 50, y: 50 }])
+  })
+  it('is silent for drags, long presses, pinches, the pan tool and recent pen use', () => {
+    m.down(s(1, 'touch', 0, 0), add)
+    m.move(s(1, 'touch', 40, 0))
+    expect(navTaps(m.up(s(1, 'touch', 40, 0)))).toHaveLength(0)
+
+    m.down(s(2, 'touch', 0, 0), add)
+    t += TOUCH_TAP_MAX_MS + 50
+    expect(navTaps(m.up(s(2, 'touch', 0, 0)))).toHaveLength(0)
+
+    m.down(s(3, 'touch', 0, 0), add)
+    m.down(s(4, 'touch', 100, 0), add)
+    expect(navTaps(m.up(s(4, 'touch', 100, 0)))).toHaveLength(0)
+    expect(navTaps(m.up(s(3, 'touch', 0, 0)))).toHaveLength(0)
+
+    m.down(s(5, 'touch', 0, 0), { ...add, tool: 'pan' })
+    expect(navTaps(m.up(s(5, 'touch', 0, 0)))).toHaveLength(0)
+
+    m.down(s(6, 'pen', 0, 0), add)
+    m.up(s(6, 'pen', 0, 0))
+    t += 100
+    m.down(s(7, 'touch', 0, 0), add)
+    expect(navTaps(m.up(s(7, 'touch', 0, 0)))).toHaveLength(0)
+  })
+  it('does not fire when touch annotates (that is a real tap)', () => {
+    m.down(s(1, 'touch', 5, 5), addTouch)
+    const fx = m.up(s(1, 'touch', 5, 5))
+    expect(navTaps(fx)).toHaveLength(0)
+    expect(taps(fx)).toHaveLength(1)
+  })
+})

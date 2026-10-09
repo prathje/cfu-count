@@ -14,6 +14,7 @@ import { GestureMachine, type GestureEffect, type PointerKind, type PointerSampl
 import { editBlock } from '../model/policy'
 import { resolveHover, resolveTap, type InteractionScene } from './interaction'
 import { createPointIndex, type PointIndex } from './spatial-index'
+import { displayRadius } from './marker-size'
 import {
   buildPyramid,
   disposePyramid,
@@ -302,13 +303,13 @@ export function Viewport(props: ViewportProps) {
     const el = document.createElement('div')
     const still = reducedMotion?.matches ?? false
     el.className = still ? 'cfu-viewport__pulse cfu-viewport__pulse--static' : 'cfu-viewport__pulse'
-    const d = Math.max(10, r * 2 + 6)
+    const d = Math.max(16, r * 2 + 10)
     el.style.width = el.style.height = `${d}px`
     // left/top, not transform: the CSS animation scales via `transform` about the centre.
     el.style.left = `${x - d / 2}px`
     el.style.top = `${y - d / 2}px`
     if (!still) el.addEventListener('animationend', () => el.remove())
-    setTimeout(() => el.remove(), still ? 900 : 1500)
+    setTimeout(() => el.remove(), still ? 1200 : 2000)
     root.appendChild(el)
   }
 
@@ -323,9 +324,9 @@ export function Viewport(props: ViewportProps) {
     const intent = resolveTap(scene(), props.tool, sx, sy, pointerType)
     switch (intent.kind) {
       case 'add': {
-        props.onAdd(intent.x, intent.y)
+        props.onAdd(intent.x, intent.y, { nearAnnotationId: intent.nearby?.id ?? null })
         if (intent.nearby) {
-          const r = activeGroup()?.size ?? 6
+          const r = displayRadius(activeGroup()?.size ?? 6, view.scale)
           const s = imageToScreen(view, intent.nearby.x, intent.nearby.y)
           pulseAt(s.x, s.y, r)
           pulseAt(sx, sy, r)
@@ -362,6 +363,9 @@ export function Viewport(props: ViewportProps) {
         case 'hoverEnd':
           hover = null
           hideHover()
+          break
+        case 'navTap':
+          if (props.tool !== 'pan') props.onBlocked?.('touch-navigates')
           break
       }
     }

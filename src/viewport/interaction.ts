@@ -9,6 +9,7 @@ import type { BlockedReason, Tool, ViewState } from './api'
 import type { PointerKind } from './gesture'
 import type { PointIndex } from './spatial-index'
 import { screenToImage } from './transform'
+import { displayRadius } from './marker-size'
 
 /** Minimum erase hit radius in screen CSS px, by input type. */
 export const MIN_HIT_RADIUS: Record<PointerKind, number> = { mouse: 12, pen: 22, touch: 22 }
@@ -74,7 +75,7 @@ function eraseTarget(
   y: number,
   pointer: PointerKind,
 ): Annotation | null {
-  const radius = eraseHitRadiusPx(g.size, pointer) / scene.view.scale
+  const radius = eraseHitRadiusPx(displayRadius(g.size, scene.view.scale), pointer) / scene.view.scale
   return scene.index.nearest(x, y, radius, (a) => a.groupId === g.id)?.annotation ?? null
 }
 
@@ -89,7 +90,7 @@ export function nearbyVisibleMarker(
   markerSize: number,
 ): Annotation | null {
   const visible = new Set(scene.groups.filter((g) => !g.hidden).map((g) => g.id))
-  const radius = Math.max(MIN_DUPLICATE_RADIUS, markerSize) / scene.view.scale
+  const radius = Math.max(MIN_DUPLICATE_RADIUS, displayRadius(markerSize, scene.view.scale)) / scene.view.scale
   return scene.index.nearest(x, y, radius, (a) => visible.has(a.groupId))?.annotation ?? null
 }
 
@@ -113,7 +114,8 @@ export function resolveHover(
 ): HoverPreview {
   const g = scene.activeGroup
   if (tool === 'pan' || editBlock(g) || !g) return { kind: 'none' }
-  if (tool === 'add') return { kind: 'add', x: sx, y: sy, r: Math.max(3, g.size), color: g.color }
+  const r = displayRadius(g.size, scene.view.scale)
+  if (tool === 'add') return { kind: 'add', x: sx, y: sy, r: Math.max(3, r), color: g.color }
   const p = screenToImage(scene.view, sx, sy)
   const hit = eraseTarget(scene, g, p.x, p.y, pointer)
   if (hit) {
@@ -122,8 +124,8 @@ export function resolveHover(
       kind: 'erase-hit',
       x: (hit.x - v.offsetX) * v.scale,
       y: (hit.y - v.offsetY) * v.scale,
-      r: Math.max(6, g.size + 4),
+      r: Math.max(6, r + 4),
     }
   }
-  return { kind: 'erase-miss', x: sx, y: sy, r: eraseHitRadiusPx(g.size, pointer) }
+  return { kind: 'erase-miss', x: sx, y: sy, r: eraseHitRadiusPx(r, pointer) }
 }

@@ -5,6 +5,8 @@
 import type { Annotation, AnnotationGroup, ID } from '../model/types'
 import type { ViewState } from './api'
 import type { Size } from './transform'
+import { OccupancyGrid, markerBox, placeLabel } from './label-layout'
+import { displayRadius } from './marker-size'
 
 // ---------------------------------------------------------------------------
 // Backing store sizing
@@ -257,10 +259,23 @@ export interface AnnotationDrawStats {
   labels: number
 }
 
+/** Approximate label box width for an n-digit number (tabular digits), cached per font size. */
+const digitWidth = new Map<number, number>()
+function labelWidth(ctx: CanvasRenderingContext2D, fontPx: number, digits: number): number {
+  let w = digitWidth.get(fontPx)
+  if (w === undefined) {
+    w = ctx.measureText('0000000000').width / 10 || fontPx * 0.62
+    digitWidth.set(fontPx, w)
+  }
+  return w * digits
+}
+
 /**
- * Draw all visible markers. Groups are drawn in display order with the active
- * group last (on top, slightly heavier outline). Each group is batched into one
- * path per pass, so thousands of markers cost a handful of fill/stroke calls.
+ * Draw all visible markers, then their number labels. Groups are drawn in display
+ * order with the active group last (on top, slightly heavier outline). Markers are
+ * cached sprites blitted per point. Labels go on top of every marker and are placed
+ * around their marker to avoid other markers and labels (label-layout.ts). The
+ * displayed radius follows displayRadius() (shrinks only when zoomed far out).
  */
 export function drawAnnotationLayer(
   ctx: CanvasRenderingContext2D,
@@ -306,15 +321,18 @@ export function drawAnnotationLayer(
   const order = groups.filter((g) => !g.hidden && g.id !== activeGroupId)
   const active = activeGroupId ? byId.get(activeGroupId) : undefined
   if (active && !active.hidden) order.push(active)
+  const anyLabels = order.some((g) => g.labels && buckets.get(g.id)!.xs.length > 0)
+  const grid = anyLabels ? new OccupancyGrid() : null
 
+  // Pass 1: markers.
   ctx.lineJoin = 'round'
+  ctx.setTransform(1, 0, 0, 1, 0, 0)
   for (const g of order) {
     const b = buckets.get(g.id)!
     const count = b.xs.length
     if (count === 0) continue
     stats.drawn += count
-    const isActive = g.id === activeGroupId
-    const r = Math.max(1, g.size)
+    const r = displayRadius(Math.max(1, g.size), scale)
     ctx.globalAlpha = Math.max(0, Math.min(1, g.opacity))
     // One cached sprite per style; drawImage per marker. A single path with
     // thousands of arc sub-paths is cheap to record but expensive to rasterise
@@ -322,31 +340,41 @@ export function drawAnnotationLayer(
     // Blit unscaled at whole device pixels (identity transform, 3-argument
     // drawImage): ~3x cheaper per call than scaled blits in Chrome. Snapping
     // moves a marker by at most half a device pixel.
-    const sprite = markerSprite(g, isActive, dpr)
+    const sprite = markerSprite({ color: g.color, render: g.render, size: r }, g.id === activeGroupId, dpr)
     const halfPx = sprite.devicePx / 2
-    ctx.setTransform(1, 0, 0, 1, 0, 0)
     for (let i = 0; i < count; i++) {
       ctx.drawImage(sprite.canvas, Math.round(b.xs[i] * dpr - halfPx), Math.round(b.ys[i] * dpr - halfPx))
+      if (grid) grid.add(markerBox(b.xs[i], b.ys[i], r))
     }
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+  }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
 
-    if (g.labels) {
+  // Pass 2: labels, above every marker, placed to avoid markers and each other.
+  if (grid) {
+    ctx.globalAlpha = 1
+    ctx.textBaseline = 'middle'
+    ctx.textAlign = 'left'
+    ctx.strokeStyle = 'rgba(0,0,0,0.85)'
+    ctx.fillStyle = '#fff'
+    for (const g of order) {
+      if (!g.labels) continue
+      const b = buckets.get(g.id)!
+      const count = b.xs.length
+      if (count === 0) continue
+      const r = displayRadius(Math.max(1, g.size), scale)
       const fontPx = labelFontPx(g.labelSize)
-      ctx.globalAlpha = 1
       ctx.font = labelFont(fontPx)
-      ctx.textBaseline = 'middle'
-      ctx.textAlign = 'left'
       ctx.lineWidth = Math.max(2.5, fontPx * 0.25)
-      ctx.strokeStyle = 'rgba(0,0,0,0.85)'
-      ctx.fillStyle = '#fff'
-      const off = r * 0.7 + 2 + fontPx * 0.15
+      const h = fontPx * 1.05
       for (let i = 0; i < count; i++) {
         const sx = b.xs[i]
         const sy = b.ys[i]
         if (sx < -margin || sy < -margin || sx > viewport.width || sy > viewport.height + margin) continue
         const text = String(b.seq[i])
-        ctx.strokeText(text, sx + off, sy - off)
-        ctx.fillText(text, sx + off, sy - off)
+        const box = placeLabel(grid, sx, sy, r, labelWidth(ctx, fontPx, text.length), h)
+        const ty = box.y + h / 2
+        ctx.strokeText(text, box.x, ty)
+        ctx.fillText(text, box.x, ty)
         stats.labels++
       }
     }

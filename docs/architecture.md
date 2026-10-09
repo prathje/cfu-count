@@ -51,7 +51,13 @@ identity exactly when content changes.
 immutable snapshots; the viewport redraws and re-indexes on identity change.
 Refusals use the shared edit policy: `editBlock(group)` returns
 `'no-group' | 'locked' | 'hidden'` (locked before hidden), plus the viewport-only
-`'nothing-to-erase'`.
+`'nothing-to-erase'` and `'touch-navigates'` (a finger tap in Add/Erase while touch
+annotation is off; the UI offers to turn it on). `onAdd(x, y, { nearAnnotationId })`
+reports an add on top of an existing visible marker: the add still happens, the
+viewport pulses both markers and the UI offers Undo. Marker size is a screen-space
+radius; far zoomed out (scale < 0.5) the displayed radius shrinks smoothly to a
+3.5 px minimum (`viewport/marker-size.ts`), and number labels are placed around
+their marker to avoid collisions (`viewport/label-layout.ts`).
 
 ## Data flow
 

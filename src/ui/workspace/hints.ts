@@ -48,3 +48,13 @@ export function groupTallies(groups: readonly AnnotationGroup[], counts: Readonl
 export function sizeMismatchMessage(recorded: { width: number; height: number }, decoded: { width: number; height: number }): string {
   return `This browser decodes the image as ${decoded.width}×${decoded.height} px, but it was annotated at ${recorded.width}×${recorded.height} px. Markers may not line up; try another browser or re-import the original file.`
 }
+
+/** Toast text after an add that landed on top of an existing marker. */
+export function nearDuplicateMessage(near: { groupName: string; number: number | null; sameGroup: boolean }): string {
+  const ref = near.number == null ? 'an existing marker' : `#${near.number}`
+  return near.sameGroup ? `Added close to ${ref}` : `Added close to “${near.groupName}” ${ref}`
+}
+
+/** Toast shown (once per session) when a finger tap only navigated. */
+export const TOUCH_NAVIGATES_MESSAGE = 'Fingers pan and zoom'
+export const TOUCH_NAVIGATES_DETAIL = 'Turn on Touch annotates to add with a finger. Apple Pencil always works.'

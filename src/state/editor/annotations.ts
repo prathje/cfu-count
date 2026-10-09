@@ -17,10 +17,9 @@ import {
   type AnnotationOp,
   type OpBlock,
 } from '../../model/annotations'
-import { editBlock, type GroupBlockReason } from '../../model/policy'
+import { editBlock, type EditBlockReason, type GroupBlockReason } from '../../model/policy'
 import { emptyDoc } from '../../model/project'
 import { newId, now } from '../../model/ids'
-import type { BlockedReason } from '../../viewport/api'
 import { emptyHistory, planRedo, planUndo, record } from '../history'
 import { editBlockMessage, historyBlockMessage } from '../messages'
 import type { EditorContext } from './context'
@@ -61,7 +60,7 @@ export interface AnnotationCommands {
   undo(): boolean
   redo(): boolean
   /** Explain a viewport-reported refusal (toast with a fix-it action). */
-  explainBlocked(reason: BlockedReason): void
+  explainBlocked(reason: EditBlockReason | 'nothing-to-erase'): void
 }
 
 export function createAnnotations(ctx: EditorContext, groups: GroupCommands): AnnotationCommands {
@@ -85,7 +84,7 @@ export function createAnnotations(ctx: EditorContext, groups: GroupCommands): An
       ? { label: 'Unlock', run: () => groups.setLocked(group.id, false) }
       : { label: 'Show group', run: () => groups.setHidden(group.id, false) }
 
-  function explainBlocked(reason: BlockedReason) {
+  function explainBlocked(reason: EditBlockReason | 'nothing-to-erase') {
     const group = groups.active()
     if (reason === 'nothing-to-erase') {
       notify({

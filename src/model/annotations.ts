@@ -204,3 +204,20 @@ export function checkDetectionRun(
   if (!groups.some((g) => g.id === run.targetGroupId)) return `Detection run ${run.runId} targets an unknown annotation group.`
   return null
 }
+
+/**
+ * The number label shown next to a marker: its 1-based position among the
+ * annotations of the same group, in list order (the viewport numbers markers the
+ * same way). Pass the same list the viewport draws (confirmed annotations).
+ * Returns null if the id is not in the list.
+ */
+export function labelNumber(annotations: readonly Annotation[], id: string): number | null {
+  const target = annotations.find((a) => a.id === id)
+  if (!target) return null
+  let n = 0
+  for (const a of annotations) {
+    if (a.groupId === target.groupId) n++
+    if (a.id === id) return n
+  }
+  return null
+}

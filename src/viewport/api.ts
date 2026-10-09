@@ -8,8 +8,23 @@ import type { Tool } from '../model/tool'
 
 export type { Tool } from '../model/tool'
 
-/** Why a tap did nothing: the shared edit policy (model/policy.ts) or an erase that hit no marker. */
-export type BlockedReason = EditBlockReason | 'nothing-to-erase'
+/**
+ * Why a tap did nothing: the shared edit policy (model/policy.ts), an erase that
+ * hit no marker, or `touch-navigates`: a one-finger tap in Add/Erase while touch
+ * annotation is off (fingers only pan/zoom). Not reported while an Apple Pencil was
+ * used recently, since fingers are then expected to navigate.
+ */
+export type BlockedReason = EditBlockReason | 'nothing-to-erase' | 'touch-navigates'
+
+/** Extra facts about a completed add. */
+export interface AddInfo {
+  /**
+   * An existing visible marker (any group) overlapping the new position: a
+   * probable double tap on the same colony. The add still happens (it is
+   * undoable); the viewport pulses both markers and the UI may offer Undo.
+   */
+  nearAnnotationId: ID | null
+}
 
 export interface ViewState {
   /** Screen CSS px per image px. */
@@ -51,10 +66,10 @@ export interface ViewportProps {
    */
   touchAnnotates: boolean
   /** Completed tap/click in Add mode, in image coordinates. */
-  onAdd(x: number, y: number): void
+  onAdd(x: number, y: number, info: AddInfo): void
   /** Completed tap/click in Erase mode that hit an eligible marker. */
   onErase(annotationId: ID): void
-  /** Tap in add/erase on a hidden or locked active group, or erase that hit nothing. */
+  /** Tap in add/erase that did nothing; see BlockedReason. */
   onBlocked?(reason: BlockedReason): void
   onViewChange?(view: ViewState): void
   ref?: (handle: ViewportHandle) => void

@@ -15,6 +15,9 @@
  *    touchAnnotates is on and no pen was seen recently, a one-finger tap taps;
  *    a second finger arriving cancels the pending tap and starts a pinch. After a
  *    multi-finger gesture no tap is ever emitted until all fingers lift.
+ *    If touchAnnotates is OFF (and no pen was seen recently), a one-finger tap
+ *    still pans nothing but emits `navTap` so the UI can explain why nothing
+ *    was added. It never edits.
  */
 import type { Tool } from './api'
 
@@ -54,6 +57,11 @@ export type GestureEffect =
   | { type: 'pinch'; cx: number; cy: number; factor: number; dx: number; dy: number }
   | { type: 'hover'; x: number; y: number; pointerType: PointerKind }
   | { type: 'hoverEnd' }
+  /**
+   * A one-finger tap that only navigated because touch annotation is off (tool
+   * add/erase, no recent pen). Lets the UI offer to turn touch annotation on.
+   */
+  | { type: 'navTap'; x: number; y: number }
 
 /** Movement (CSS px) beyond which a press becomes a drag instead of a tap. */
 export const DRAG_THRESHOLD: Record<PointerKind, number> = { mouse: 4, pen: 8, touch: 10 }
@@ -78,7 +86,8 @@ interface Tracked {
 type Mode =
   | { kind: 'idle' }
   | { kind: 'pending'; id: number }
-  | { kind: 'drag'; id: number }
+  /** `tapCandidate`: a finger that would have annotated with touchAnnotates on (see navTap). */
+  | { kind: 'drag'; id: number; tapCandidate?: boolean }
   | { kind: 'pinch'; a: number; b: number; dist: number; mx: number; my: number }
 
 /** Current recogniser state, for cursors and tests. */
@@ -173,7 +182,8 @@ export class GestureMachine {
     if (m.kind === 'idle') {
       const annotate =
         ctx.touchAnnotates && !this.penSeenRecently(p.time) && ctx.tool !== 'pan' && !ctx.spaceHeld
-      this.mode = annotate ? { kind: 'pending', id: p.id } : { kind: 'drag', id: p.id }
+      const navOnly = !ctx.touchAnnotates && !this.penSeenRecently(p.time) && ctx.tool !== 'pan' && !ctx.spaceHeld
+      this.mode = annotate ? { kind: 'pending', id: p.id } : { kind: 'drag', id: p.id, tapCandidate: navOnly }
       return fx
     }
     if ((m.kind === 'pending' || m.kind === 'drag') && this.pointers.get(m.id)?.type === 'touch') {
@@ -250,6 +260,9 @@ export class GestureMachine {
         // Use the contact-down position: lift-off jitter (pen/finger roll) is ignored.
         fx.push({ type: 'tap', x: t.startX, y: t.startY, pointerType: t.type })
       }
+    } else if (!t.ignored && m.kind === 'drag' && m.id === p.id && m.tapCandidate) {
+      const moved = Math.hypot(t.x - t.startX, t.y - t.startY) > DRAG_THRESHOLD.touch
+      if (!moved && p.time - t.downTime <= TOUCH_TAP_MAX_MS) fx.push({ type: 'navTap', x: t.startX, y: t.startY })
     }
     this.release(p.id)
     return fx
