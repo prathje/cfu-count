@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import type { ID, ImageAnnotations, Project } from '../../model/types'
 import { DriveError } from '../errors'
-import { newDriveLink, pullFolder, pushProject, type PushInput } from '../drive/sync'
+import { newDriveLink, pullFolder, pushProject, type DriveFiles, type PushInput } from '../drive/sync'
+import { emptyDriveFiles } from '../localStore'
 import { annotation, doc, FakeDrive, PNG_1x1, project } from './fakes'
 
 const now = () => '2026-03-01T00:00:00.000Z'
@@ -12,16 +13,19 @@ describe('Drive sync engine', () => {
   let p: Project
   let docs: Map<ID, ImageAnnotations>
   let saved: Project | null
+  let savedFiles: DriveFiles | null
 
   function input(over: Partial<PushInput> = {}): PushInput {
     return {
       project: saved ?? p,
+      files: savedFiles ?? emptyDriveFiles(),
       annotations: docs,
       dirtyImages: new Set(docs.keys()),
       overwrite: false,
       loadImage: async () => new Blob([PNG_1x1], { type: 'image/png' }),
-      checkpoint: async (cp) => {
+      checkpoint: async (cp, files) => {
         saved = cp
+        savedFiles = files
       },
       ...over,
     }
@@ -29,7 +33,10 @@ describe('Drive sync engine', () => {
 
   async function push(over: Partial<PushInput> = {}) {
     const r = await pushProject(drive, input(over))
-    if (r.kind === 'saved') saved = r.project
+    if (r.kind === 'saved') {
+      saved = r.project
+      savedFiles = r.files
+    }
     return r
   }
 
@@ -39,6 +46,7 @@ describe('Drive sync engine', () => {
     p = project({ storage: newDriveLink(folder, 'Plate counts') })
     docs = new Map([['i1', doc(p, 'i1', [annotation('a1', 'g1')])]])
     saved = null
+    savedFiles = null
   })
 
   it('writes the folder layout and uploads local images to images/', async () => {
@@ -55,7 +63,10 @@ describe('Drive sync engine', () => {
     expect(drive.calls.filter((c) => c.startsWith('create')).at(-1)).toBe('create project.json')
     const remote = JSON.parse(drive.text(drive.findByName(folder, 'project.json')!.id))
     expect(remote.storage.files.annotations.i1).toBeTruthy()
-    expect(remote.storage.remoteVersions).toEqual({})
+    expect(remote.storage.files.remoteVersions).toBeUndefined()
+    expect(remote.storage.remoteVersions).toBeUndefined()
+    // the model link stays clean: bookkeeping lives in DriveFiles
+    expect(Object.keys(saved!.storage).sort()).toEqual(['folderId', 'folderName', 'kind'])
   })
 
   it('updates the same file IDs on later saves (no duplicates)', async () => {
@@ -92,7 +103,7 @@ describe('Drive sync engine', () => {
 
   it('detects remote edits to an annotation document', async () => {
     await push()
-    const annId = saved!.storage.kind === 'drive' ? saved!.storage.files.annotations.i1 : ''
+    const annId = savedFiles!.annotations.i1
     drive.externalEdit(annId, '{}')
     const r = await push({ dirtyImages: new Set(['i1']) })
     expect(r).toEqual({ kind: 'conflict', files: ['annotations/i1.json'] })
@@ -149,18 +160,20 @@ describe('Drive sync engine', () => {
     expect(r.unreferencedImages).toEqual([])
     // the pulled link knows current content tokens, so an immediate push is conflict-free
     saved = r.project
+    savedFiles = r.files
     expect((await push({ dirtyImages: new Set(['i1']) })).kind).toBe('saved')
   })
 
   it('reports files the app cannot read (drive.file not granted) and refuses to clobber them', async () => {
     await push()
-    const annId = saved!.storage.kind === 'drive' ? saved!.storage.files.annotations.i1 : ''
+    const annId = savedFiles!.annotations.i1
     drive.hidden.add(annId)
     const r = await pullFolder(drive, folder, now)
     expect(r.inaccessible).toContain(annId)
     expect(r.annotations.has('i1')).toBe(false)
     // editing that image locally must not silently overwrite the unseen remote doc
     saved = r.project
+    savedFiles = r.files
     const res = await push({ dirtyImages: new Set(['i1']) })
     expect(res).toEqual({ kind: 'conflict', files: ['annotations/i1.json'] })
   })
@@ -176,6 +189,17 @@ describe('Drive sync engine', () => {
     const i1 = r.project!.images.find((i) => i.id === 'i1')!
     expect(i1.sourceMismatch?.message).toMatch(/replaced/)
     expect(r.project!.images.find((i) => i.id === 'i2')!.sourceMismatch).toBeUndefined()
+  })
+
+  it('does not offer images the user removed (excludedDriveFileIds) for re-import', async () => {
+    await push()
+    const imgDir = drive.findByName(folder, 'images')!.id
+    const removed = drive.addFile('removed.jpg', imgDir, new Uint8Array([0xff, 0xd8, 0xff, 2]), 'image/jpeg')
+    saved = { ...saved!, excludedDriveFileIds: [removed] }
+    await push()
+    const r = await pullFolder(drive, folder, now)
+    expect(r.unreferencedImages).toEqual([])
+    expect(r.project!.excludedDriveFileIds).toEqual([removed])
   })
 
   it('returns project null for a folder without project.json', async () => {

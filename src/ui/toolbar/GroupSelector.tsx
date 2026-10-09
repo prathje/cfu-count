@@ -2,7 +2,7 @@ import { createSignal, For, Show } from 'solid-js'
 import type { AnnotationGroup, ID } from '../../model/types'
 import { ChevronDown, ChevronUp, EyeOff, Lock, Plus, Trash, Check, Pencil } from '../icons'
 import { Popover, InlineEdit, IconButton, createPopoverState } from '../primitives'
-import { GroupSwatch } from './GroupSwatch'
+import { GroupSwatch } from '../shared/GroupSwatch'
 
 /** Active annotation-group selector with inline group management (no side panel). */
 export interface GroupSelectorProps {

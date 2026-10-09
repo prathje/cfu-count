@@ -4,7 +4,7 @@ import { LABEL_SIZE_RANGE, type GroupStylePatch } from '../../model/groups'
 import { GROUP_PALETTE, colorName } from '../../model/palette'
 import { Circle, CircleDot, Lock, LockOpen } from '../icons'
 import { Button, SegmentedControl, Slider, Switch } from '../primitives'
-import { GroupSwatch } from './GroupSwatch'
+import { GroupSwatch } from '../shared/GroupSwatch'
 
 /** Per-group appearance controls. Disabled with an explanation while the group is locked. */
 export interface StylePanelProps {

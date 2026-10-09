@@ -11,7 +11,8 @@
  * Images picked from anywhere in Drive stay where they are; their file ID is identity.
  *
  * Conflict rule: an existing output file is only overwritten if its current
- * md5Checksum equals the one this browser last read/wrote (link.remoteVersions).
+ * md5Checksum equals the one this browser last read/wrote (DriveFiles.remoteVersions,
+ * storage-internal bookkeeping kept in the local sync state, not in the model).
  * A file referenced but never read here (e.g. not yet granted under drive.file)
  * also counts as a conflict. Drive has no compare-and-swap, so a small race
  * window between check and write remains; it is documented, not hidden.
@@ -24,30 +25,39 @@ import { encodeJson, toSharedProject } from '../documents'
 import { DriveError, SchemaError } from '../errors'
 import { inspectImage, sha256Hex, type ImageDecoder } from '../images'
 import { parseJson, validateImageAnnotations, validateProject } from '../validate'
+import { emptyDriveFiles, type DriveFiles } from '../localStore'
 import { FOLDER_MIME, type DriveClient, type DriveFile, type NewFileMetadata } from './client'
 
 export type DriveLink = Extract<ProjectStorageLink, { kind: 'drive' }>
+export type { DriveFiles } from '../localStore'
 
 export const PROJECT_JSON = 'project.json'
 export const SUMMARY_CSV = 'summary.csv'
 export const ANNOTATIONS_DIR = 'annotations'
 export const IMAGES_DIR = 'images'
 
-/** appProperties keys written on every file we create (private to this app). */
+/**
+ * appProperties written on every file we create (private to this app):
+ *   cfuKey        role, e.g. "project", "summary", "annotations:<imageId>", "image:<imageId>", "dir:<name>"
+ *   cfuProjectId  owning project
+ *   cfuImageId    image the file belongs to (images, annotation docs)
+ *   cfuSha256     content hash at upload (recognises our own interrupted uploads)
+ */
 const KEY = 'cfuKey'
+const PROJECT_ID = 'cfuProjectId'
 const SHA = 'cfuSha256'
 const IMAGE_ID = 'cfuImageId'
 
 export function newDriveLink(folderId: string, folderName: string): DriveLink {
-  return { kind: 'drive', folderId, folderName, files: { annotations: {} }, remoteVersions: {} }
+  return { kind: 'drive', folderId, folderName }
 }
 
 export function isDriveLinked(p: Project): p is Project & { storage: DriveLink } {
   return p.storage.kind === 'drive'
 }
 
-function cloneLink(l: DriveLink): DriveLink {
-  return { ...l, files: { ...l.files, annotations: { ...l.files.annotations } }, remoteVersions: { ...l.remoteVersions } }
+function cloneFiles(f: DriveFiles): DriveFiles {
+  return { ...f, annotations: { ...f.annotations }, remoteVersions: { ...f.remoteVersions } }
 }
 
 async function mapLimit<T, R>(items: T[], limit: number, fn: (t: T) => Promise<R>): Promise<R[]> {
@@ -94,13 +104,13 @@ async function tryGet(client: DriveClient, id: string | undefined): Promise<Driv
   }
 }
 
-async function ensureSubfolder(client: DriveClient, parentId: string, name: string, knownId: string | undefined, siblings: DriveFile[]): Promise<string> {
+async function ensureSubfolder(client: DriveClient, parentId: string, name: string, knownId: string | undefined, siblings: DriveFile[], projectId: string): Promise<string> {
   if (knownId && siblings.some((f) => f.id === knownId)) return knownId
   // Under drive.file a folder can be granted (picked) without being listable via its parent.
   if (knownId && (await tryGet(client, knownId))) return knownId
   const existing = siblings.find((f) => isFolder(f) && f.name === name)
   if (existing) return existing.id
-  const created = await client.create({ name, parents: [parentId], mimeType: FOLDER_MIME, appProperties: { [KEY]: `dir:${name}` } })
+  const created = await client.create({ name, parents: [parentId], mimeType: FOLDER_MIME, appProperties: { [KEY]: `dir:${name}`, [PROJECT_ID]: projectId } })
   return created.id
 }
 
@@ -109,6 +119,8 @@ async function ensureSubfolder(client: DriveClient, parentId: string, name: stri
 /** Inputs for one push of a Drive-linked project. */
 export interface PushInput {
   project: Project
+  /** Drive bookkeeping from the local sync state (file IDs + content tokens). */
+  files: DriveFiles
   /** ALL annotation documents of the project (summary.csv is derived from them). */
   annotations: Map<ID, ImageAnnotations>
   /** Images whose annotation documents changed since the last successful push. */
@@ -120,16 +132,18 @@ export interface PushInput {
    * Persist progress after each created/updated file, so an interrupted push
    * resumes with the same file IDs instead of creating duplicates.
    */
-  checkpoint(project: Project, writtenImages: ID[]): Promise<void>
+  checkpoint(project: Project, files: DriveFiles, writtenImages: ID[]): Promise<void>
 }
 
 export type PushResult =
-  | { kind: 'saved'; project: Project; warnings: string[] }
+  | { kind: 'saved'; project: Project; files: DriveFiles; warnings: string[] }
   | { kind: 'conflict'; files: string[] }
 
 export async function pushProject(client: DriveClient, input: PushInput): Promise<PushResult> {
   if (!isDriveLinked(input.project)) throw new Error('pushProject requires a Drive-linked project')
-  const link = cloneLink(input.project.storage)
+  const link: DriveLink = { ...input.project.storage }
+  const files = cloneFiles(input.files)
+  const projectId = input.project.id
   let project: Project = { ...input.project, storage: link, images: input.project.images.map((i) => ({ ...i })) }
   const warnings: string[] = []
 
@@ -139,8 +153,8 @@ export async function pushProject(client: DriveClient, input: PushInput): Promis
   }
   link.folderName = folder.name
   const root = await client.listChildren(link.folderId)
-  link.files.annotationsFolder = await ensureSubfolder(client, link.folderId, ANNOTATIONS_DIR, link.files.annotationsFolder, root)
-  const annFiles = await client.listChildren(link.files.annotationsFolder)
+  files.annotationsFolder = await ensureSubfolder(client, link.folderId, ANNOTATIONS_DIR, files.annotationsFolder, root, projectId)
+  const annFiles = await client.listChildren(files.annotationsFolder)
   const annById = new Map(annFiles.map((f) => [f.id, f]))
 
   // ---- plan + conflict detection (no writes yet) ----
@@ -149,13 +163,13 @@ export async function pushProject(client: DriveClient, input: PushInput): Promis
   const rootById = new Map(root.map((f) => [f.id, f]))
 
   let projectTarget: string | undefined
-  const pjKnown = known(link.files.projectJson, rootById)
+  const pjKnown = known(files.projectJson, rootById)
   if (pjKnown) {
     projectTarget = pjKnown.id
-    if (pjKnown.md5Checksum !== link.remoteVersions[pjKnown.id]) conflicts.push(PROJECT_JSON)
-  } else if (link.files.projectJson && link.remoteVersions[link.files.projectJson] === undefined) {
+    if (pjKnown.md5Checksum !== files.remoteVersions[pjKnown.id]) conflicts.push(PROJECT_JSON)
+  } else if (files.projectJson && files.remoteVersions[files.projectJson] === undefined) {
     // Referenced but never read here (not granted to this app yet): don't clobber it with a new file.
-    projectTarget = link.files.projectJson
+    projectTarget = files.projectJson
     conflicts.push(PROJECT_JSON)
   } else {
     // A project.json we don't know about (another device's first save, or a retried create).
@@ -171,9 +185,9 @@ export async function pushProject(client: DriveClient, input: PushInput): Promis
   for (const image of project.images) {
     const doc = input.annotations.get(image.id)
     if (!doc) continue
-    const fid = link.files.annotations[image.id]
+    const fid = files.annotations[image.id]
     const remote = known(fid, annById)
-    const neverRead = fid !== undefined && link.remoteVersions[fid] === undefined
+    const neverRead = fid !== undefined && files.remoteVersions[fid] === undefined
     if (!input.dirtyImages.has(image.id) && remote && !neverRead) continue // up to date
     if (!input.dirtyImages.has(image.id) && neverRead) continue // untouched here; keep remote as is
     const text = encodeJson(doc)
@@ -182,7 +196,7 @@ export async function pushProject(client: DriveClient, input: PushInput): Promis
     const name = `${image.id}.json`
     const plan: DocPlan = { imageId: image.id, body, sha, target: remote?.id }
     if (remote) {
-      if (remote.md5Checksum !== link.remoteVersions[remote.id]) conflicts.push(`${ANNOTATIONS_DIR}/${name}`)
+      if (remote.md5Checksum !== files.remoteVersions[remote.id]) conflicts.push(`${ANNOTATIONS_DIR}/${name}`)
     } else if (neverRead) {
       plan.target = fid
       conflicts.push(`${ANNOTATIONS_DIR}/${name}`)
@@ -199,13 +213,13 @@ export async function pushProject(client: DriveClient, input: PushInput): Promis
 
   if (conflicts.length && !input.overwrite) return { kind: 'conflict', files: conflicts }
 
-  const save = (written: ID[] = []) => input.checkpoint(project, written)
+  const save = (written: ID[] = []) => input.checkpoint(project, files, written)
 
   // ---- 1. upload images that only exist locally ----
   const localImages = project.images.filter((i) => i.source.kind === 'local')
   if (localImages.length) {
-    link.files.imagesFolder = await ensureSubfolder(client, link.folderId, IMAGES_DIR, link.files.imagesFolder, root)
-    const existing = await client.listChildren(link.files.imagesFolder)
+    files.imagesFolder = await ensureSubfolder(client, link.folderId, IMAGES_DIR, files.imagesFolder, root, projectId)
+    const existing = await client.listChildren(files.imagesFolder)
     for (const image of localImages) {
       const blob = await input.loadImage(image.id)
       if (!blob) {
@@ -214,7 +228,7 @@ export async function pushProject(client: DriveClient, input: PushInput): Promis
       }
       let file = existing.find((f) => f.appProperties?.[IMAGE_ID] === image.id && f.appProperties?.[SHA] === image.fingerprint)
       file ??= await client.create(
-        { name: image.name, parents: [link.files.imagesFolder], mimeType: image.mimeType, appProperties: { [KEY]: `image:${image.id}`, [IMAGE_ID]: image.id, [SHA]: image.fingerprint } },
+        { name: image.name, parents: [files.imagesFolder], mimeType: image.mimeType, appProperties: { [KEY]: `image:${image.id}`, [PROJECT_ID]: projectId, [IMAGE_ID]: image.id, [SHA]: image.fingerprint } },
         blob.type === image.mimeType ? blob : new Blob([blob], { type: image.mimeType }),
       )
       image.source = { kind: 'drive', fileId: file.id, md5Checksum: file.md5Checksum, version: file.version }
@@ -224,27 +238,27 @@ export async function pushProject(client: DriveClient, input: PushInput): Promis
 
   // ---- 2. annotation documents ----
   for (const plan of docPlans) {
-    const props = { [KEY]: `annotations:${plan.imageId}`, [SHA]: plan.sha }
-    const f = await upsert(client, plan.target, { name: `${plan.imageId}.json`, parents: [link.files.annotationsFolder], mimeType: 'application/json', appProperties: props }, plan.body)
-    link.files.annotations[plan.imageId] = f.id
-    if (f.md5Checksum) link.remoteVersions[f.id] = f.md5Checksum
+    const props = { [KEY]: `annotations:${plan.imageId}`, [PROJECT_ID]: projectId, [IMAGE_ID]: plan.imageId, [SHA]: plan.sha }
+    const f = await upsert(client, plan.target, { name: `${plan.imageId}.json`, parents: [files.annotationsFolder], mimeType: 'application/json', appProperties: props }, plan.body)
+    files.annotations[plan.imageId] = f.id
+    if (f.md5Checksum) files.remoteVersions[f.id] = f.md5Checksum
     await save([plan.imageId])
   }
 
   // ---- 3. summary.csv (derived: never a conflict) ----
   const csv = new Blob([buildSummaryCsv(project, input.annotations)], { type: 'text/csv' })
   // Update by ID even if not listed (granted individually); upsert recreates it only if gone.
-  const csvTarget = link.files.summaryCsv ?? root.find((f) => f.name === SUMMARY_CSV && f.appProperties?.[KEY] === 'summary')?.id
-  const csvFile = await upsert(client, csvTarget, { name: SUMMARY_CSV, parents: [link.folderId], mimeType: 'text/csv', appProperties: { [KEY]: 'summary' } }, csv)
-  link.files.summaryCsv = csvFile.id
+  const csvTarget = files.summaryCsv ?? root.find((f) => f.name === SUMMARY_CSV && f.appProperties?.[KEY] === 'summary')?.id
+  const csvFile = await upsert(client, csvTarget, { name: SUMMARY_CSV, parents: [link.folderId], mimeType: 'text/csv', appProperties: { [KEY]: 'summary', [PROJECT_ID]: projectId } }, csv)
+  files.summaryCsv = csvFile.id
 
   // ---- 4. project.json last ----
-  const pjBody = new Blob([encodeJson(toSharedProject(project))], { type: 'application/json' })
-  const pjFile = await upsert(client, projectTarget, { name: PROJECT_JSON, parents: [link.folderId], mimeType: 'application/json', appProperties: { [KEY]: 'project' } }, pjBody)
-  link.files.projectJson = pjFile.id
-  if (pjFile.md5Checksum) link.remoteVersions[pjFile.id] = pjFile.md5Checksum
+  const pjBody = new Blob([encodeJson(toSharedProject(project, files))], { type: 'application/json' })
+  const pjFile = await upsert(client, projectTarget, { name: PROJECT_JSON, parents: [link.folderId], mimeType: 'application/json', appProperties: { [KEY]: 'project', [PROJECT_ID]: projectId } }, pjBody)
+  files.projectJson = pjFile.id
+  if (pjFile.md5Checksum) files.remoteVersions[pjFile.id] = pjFile.md5Checksum
   project = { ...project, storage: link }
-  return { kind: 'saved', project, warnings }
+  return { kind: 'saved', project, files, warnings }
 }
 
 /** Update `targetId` in place; create the file only if there is no target or it no longer exists. */
@@ -266,13 +280,18 @@ export interface PullResult {
   folder: DriveFile
   /** null when no project.json is visible to this app in the folder. */
   project: (Project & { storage: DriveLink }) | null
+  /** Drive bookkeeping for the local sync state (file IDs found, content tokens read). */
+  files: DriveFiles
   annotations: Map<ID, ImageAnnotations>
   /**
    * Referenced files this app cannot read (under drive.file: not granted yet, or deleted).
    * Offer the picker with these IDs (setFileIds) to grant access.
    */
   inaccessible: string[]
-  /** Image files visible in the folder or images/ that the project does not reference yet. */
+  /**
+   * Image files visible in the folder or images/ that the project neither references
+   * nor lists in `excludedDriveFileIds` (images the user removed).
+   */
   unreferencedImages: DriveFile[]
   warnings: string[]
 }
@@ -291,7 +310,7 @@ export async function pullFolder(client: DriveClient, folderId: string, now: () 
   if (candidates.length > 1) warnings.push(`The folder contains ${candidates.length} project.json files; the most recently modified one was used.`)
   const pj = candidates[0]
   if (!pj) {
-    return { folder, project: null, annotations: new Map(), inaccessible, unreferencedImages: await imagesIn(sub(IMAGES_DIR)), warnings }
+    return { folder, project: null, files: emptyDriveFiles(), annotations: new Map(), inaccessible, unreferencedImages: await imagesIn(sub(IMAGES_DIR)), warnings }
   }
 
   let remote: Project
@@ -301,7 +320,9 @@ export async function pullFolder(client: DriveClient, folderId: string, now: () 
     if (e instanceof SchemaError) throw new DriveError('invalid', `project.json in "${folder.name}" cannot be read: ${e.message}`)
     throw e
   }
-  const remoteFiles: Partial<DriveLink['files']> = remote.storage.kind === 'drive' ? remote.storage.files : { annotations: {} }
+  // File-ID hints written by toSharedProject (needed to request access under drive.file).
+  const hinted = (remote.storage as { files?: Partial<DriveFiles> }).files
+  const remoteFiles: Partial<DriveFiles> = remote.storage.kind === 'drive' && hinted ? hinted : { annotations: {} }
   // Subfolders: visible by name, or referenced by ID and individually granted.
   const resolveDir = async (name: string, refId: string | undefined) => {
     const dir = sub(name) ?? (await tryGet(client, refId))
@@ -312,13 +333,14 @@ export async function pullFolder(client: DriveClient, folderId: string, now: () 
   const imgDir = await resolveDir(IMAGES_DIR, remoteFiles.imagesFolder)
   const visibleImages = await imagesIn(imgDir)
   const link = newDriveLink(folderId, folder.name)
-  link.files.projectJson = pj.id
-  if (pj.md5Checksum) link.remoteVersions[pj.id] = pj.md5Checksum
-  link.files.annotationsFolder = annDir?.id ?? remoteFiles.annotationsFolder
-  link.files.imagesFolder = imgDir?.id ?? remoteFiles.imagesFolder
+  const files = emptyDriveFiles()
+  files.projectJson = pj.id
+  if (pj.md5Checksum) files.remoteVersions[pj.id] = pj.md5Checksum
+  files.annotationsFolder = annDir?.id ?? remoteFiles.annotationsFolder
+  files.imagesFolder = imgDir?.id ?? remoteFiles.imagesFolder
   const csv = root.find((f) => f.id === remoteFiles.summaryCsv) ?? root.find((f) => f.name === SUMMARY_CSV) ?? (await tryGet(client, remoteFiles.summaryCsv))
   if (!csv && remoteFiles.summaryCsv) inaccessible.push(remoteFiles.summaryCsv)
-  link.files.summaryCsv = csv?.id ?? remoteFiles.summaryCsv
+  files.summaryCsv = csv?.id ?? remoteFiles.summaryCsv
 
   const annFiles = annDir ? await client.listChildren(annDir.id) : []
   const annById = new Map(annFiles.map((f) => [f.id, f]))
@@ -329,18 +351,18 @@ export async function pullFolder(client: DriveClient, folderId: string, now: () 
     const file = (refId && annById.get(refId)) || annFiles.find((f) => f.name === `${image.id}.json`) || (await tryGet(client, refId))
     if (!file) {
       if (refId) {
-        link.files.annotations[image.id] = refId // keep the reference so a push never duplicates it
+        files.annotations[image.id] = refId // keep the reference so a push never duplicates it
         inaccessible.push(refId)
       }
       return
     }
-    link.files.annotations[image.id] = file.id
+    files.annotations[image.id] = file.id
     const path = `${ANNOTATIONS_DIR}/${file.name}`
     try {
       const doc = validateImageAnnotations(parseJson(await (await client.download(file.id)).text(), path), path)
       if (doc.imageId !== image.id) throw new SchemaError(`${path} belongs to another image`)
       annotations.set(image.id, { ...doc, projectId: remote.id })
-      if (file.md5Checksum) link.remoteVersions[file.id] = file.md5Checksum
+      if (file.md5Checksum) files.remoteVersions[file.id] = file.md5Checksum
       if (doc.imageFingerprint !== image.fingerprint) warnings.push(`Annotations for "${image.name}" were made on a different version of the image.`)
     } catch (e) {
       if (e instanceof DriveError && (e.kind === 'not-found' || e.kind === 'forbidden')) inaccessible.push(file.id)
@@ -372,9 +394,9 @@ export async function pullFolder(client: DriveClient, folderId: string, now: () 
     return detectReplacement(image, file, now)
   })
 
-  const referenced = new Set(images.flatMap((i) => (i.source.kind === 'drive' ? [i.source.fileId] : [])))
+  const skip = new Set([...images.flatMap((i) => (i.source.kind === 'drive' ? [i.source.fileId] : [])), ...remote.excludedDriveFileIds])
   const project = { ...remote, images, storage: link }
-  return { folder, project, annotations, inaccessible: [...new Set(inaccessible)], unreferencedImages: visibleImages.filter((f) => !referenced.has(f.id)), warnings }
+  return { folder, project, files, annotations, inaccessible: [...new Set(inaccessible)], unreferencedImages: visibleImages.filter((f) => !skip.has(f.id)), warnings }
 }
 
 /**

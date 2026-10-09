@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { IDBFactory } from 'fake-indexeddb'
 import type { Project } from '../../model/types'
-import type { ProjectRepository } from '../api'
+import type { ProjectRepository, ProjectSession } from '../api'
 import { createProjectRepository } from '../repository'
 import { LocalStore } from '../localStore'
 import { DriveSession } from '../drive/session'
@@ -54,6 +54,9 @@ function device(drive: FakeDrive, opts: { local?: LocalStore } = {}): Device {
   return { repo, local, session, picker, timers }
 }
 
+const groupG1 = { id: 'g1', name: 'Main', color: '#f00', render: 'dot' as const, opacity: 1, size: 5, labels: false, labelSize: 12, hidden: false, locked: false }
+const driveFilesOf = async (dev: Device, projectId: string) => (await dev.local.getSync(projectId)).drive!
+
 describe('repository: local working copy', () => {
   let d: Device
   beforeEach(() => {
@@ -61,26 +64,42 @@ describe('repository: local working copy', () => {
   })
 
   it('creates, saves, lists and reopens projects', async () => {
-    const { project } = await d.repo.createProject('  Plates ')
+    const s = await d.repo.create('  Plates ')
+    const project = s.opened.project
     expect(project.name).toBe('Plates')
-    expect(d.repo.status().state).toBe('saved-local')
-    const { added } = await d.repo.importImageFiles(project, [pngFile()])
-    const p: Project = { ...project, images: added, annotationGroups: [{ id: 'g1', name: 'Main', color: '#f00', render: 'dot', opacity: 1, size: 5, labels: false, labelSize: 12, hidden: false, locked: false }] }
-    await d.repo.saveLocal(p, [doc(p, added[0].id, [annotation('a1', 'g1')])])
-    const list = await d.repo.listProjects()
+    expect(d.repo.getStatus().state).toBe('saved-local')
+    const { added } = await s.images.import([pngFile()])
+    const p: Project = { ...project, images: added, annotationGroups: [groupG1] }
+    await s.save(p, [doc(p, added[0].id, [annotation('a1', 'g1')])])
+    const list = await d.repo.list()
     expect(list).toMatchObject([{ id: p.id, name: 'Plates', imageCount: 1, storage: 'local' }])
-    const reopened = await d.repo.openProject(p.id)
-    expect(reopened.project.revision).toBe(2)
-    expect(reopened.annotations.get(added[0].id)!.annotations).toHaveLength(1)
-    const blob = await d.repo.getImageBlob(reopened.project, added[0].id)
+    const reopened = await d.repo.open(p.id)
+    expect(s.closed).toBe(true)
+    expect(reopened.opened.project.revision).toBe(2)
+    expect(reopened.opened.annotations.get(added[0].id)!.annotations).toHaveLength(1)
+    const blob = await reopened.images.blob(added[0].id)
     expect(new Uint8Array(await blob.arrayBuffer())).toEqual(PNG_1x1)
   })
 
+  it('rejects calls on a session that another session replaced', async () => {
+    const a1 = await d.repo.create('A')
+    await d.repo.create('B')
+    await expect(a1.save(a1.opened.project, [])).rejects.toThrow(/closed/)
+  })
+
+  it('notifies subscribers of status changes (framework-free contract)', async () => {
+    const seen: string[] = []
+    const off = d.repo.subscribe(() => seen.push(d.repo.getStatus().state))
+    await d.repo.create('P')
+    off()
+    expect(seen).toContain('saved-local')
+  })
+
   it('imports several files and rejects unsupported ones with reasons', async () => {
-    const { project } = await d.repo.createProject('P')
+    const s = await d.repo.create('P')
     const tiff = new File([new Uint8Array([0x49, 0x49, 0x2a, 0, 0, 0])], 'scan.tif')
     const text = new File(['hello'], 'notes.txt')
-    const r = await d.repo.importImageFiles(project, [pngFile('a.png'), tiff, pngFile('b.png'), text])
+    const r = await s.images.import([pngFile('a.png'), tiff, pngFile('b.png'), text])
     expect(r.added.map((i) => i.name)).toEqual(['a.png', 'b.png'])
     expect(r.added[0]).toMatchObject({ width: 640, height: 480, mimeType: 'image/png', source: { kind: 'local' } })
     expect(r.rejected.map((x) => x.name)).toEqual(['scan.tif', 'notes.txt'])
@@ -88,56 +107,57 @@ describe('repository: local working copy', () => {
   })
 
   it('surfaces IndexedDB failures as local-error and recovers', async () => {
-    const { project } = await d.repo.createProject('P')
+    const s = await d.repo.create('P')
     const original = d.local.saveProject.bind(d.local)
     d.local.saveProject = async () => {
       const { toLocalError } = await import('../errors')
       throw toLocalError(new DOMException('full', 'QuotaExceededError'), 'save the project in this browser')
     }
-    await expect(d.repo.saveLocal(project, [])).rejects.toThrow(/storage is full/)
-    expect(d.repo.status()).toMatchObject({ state: 'local-error' })
+    await expect(s.save(s.opened.project, [])).rejects.toThrow(/storage is full/)
+    expect(d.repo.getStatus()).toMatchObject({ state: 'local-error' })
     d.local.saveProject = original
-    await d.repo.saveLocal(project, [])
-    expect(d.repo.status().state).toBe('saved-local')
+    await s.save(s.opened.project, [])
+    expect(d.repo.getStatus().state).toBe('saved-local')
   })
 
   it('reports unavailable IndexedDB instead of failing silently', async () => {
     const repo = createRepository({ env: {}, indexedDB: undefined as unknown as IDBFactory })
-    expect(repo.drive().state).toBe('unconfigured')
+    expect(repo.getDriveState().state).toBe('unconfigured')
     // globalThis.indexedDB is undefined in node, so storage is unavailable
-    await expect(repo.listProjects()).rejects.toThrow(/IndexedDB/)
-    expect(repo.status().state).toBe('local-error')
+    await expect(repo.list()).rejects.toThrow(/IndexedDB/)
+    expect(repo.getStatus().state).toBe('local-error')
   })
 
   it('exports and re-imports an archive, giving a new ID on collision', async () => {
-    const { project } = await d.repo.createProject('P')
-    const { added } = await d.repo.importImageFiles(project, [pngFile()])
-    const p = { ...project, images: added }
-    await d.repo.saveLocal(p, [doc(p, added[0].id, [annotation('a1', 'g1'), annotation('a2', 'g1', { origin: 'automated', reviewStatus: 'unreviewed', lastEditSource: 'automated' })])])
-    const zip = await d.repo.exportArchive(p.id)
+    const s = await d.repo.create('P')
+    const { added } = await s.images.import([pngFile()])
+    const p = { ...s.opened.project, images: added }
+    await s.save(p, [doc(p, added[0].id, [annotation('a1', 'g1'), annotation('a2', 'g1', { origin: 'automated', reviewStatus: 'unreviewed', lastEditSource: 'automated' })])])
+    const zip = await s.exportZip()
+    const csv = await (await s.exportCsv()).text()
+    expect(csv.split('\r\n')[1]).toContain(',1,1,0,1,') // confirmed, manual, accepted automated, unreviewed
     const imported = await d.repo.importArchive(new File([zip], 'p.zip'))
-    expect(imported.project.id).not.toBe(p.id)
-    expect(imported.warnings?.join(' ')).toMatch(/separate copy/)
-    expect(imported.annotations.get(added[0].id)!.projectId).toBe(imported.project.id)
-    expect(imported.annotations.get(added[0].id)!.annotations[1].origin).toBe('automated')
-    const blob = await d.repo.getImageBlob(imported.project, added[0].id)
+    expect(imported.opened.project.id).not.toBe(p.id)
+    expect(imported.opened.warnings?.join(' ')).toMatch(/separate copy/)
+    expect(imported.opened.annotations.get(added[0].id)!.projectId).toBe(imported.projectId)
+    expect(imported.opened.annotations.get(added[0].id)!.annotations[1].origin).toBe('automated')
+    const blob = await imported.images.blob(added[0].id)
     expect(blob.size).toBe(PNG_1x1.length)
 
     const other = device(new FakeDrive())
     const fresh = await other.repo.importArchive(new File([zip], 'p.zip'))
-    expect(fresh.project.id).toBe(p.id)
-
-    const csv = await (await d.repo.exportSummaryCsv(p.id)).text()
-    expect(csv.split('\r\n')[1]).toContain(',1,1,0,1,') // confirmed, manual, accepted automated, unreviewed
+    expect(fresh.projectId).toBe(p.id)
   })
 
   it('keeps storage-owned fields when the editor saves a stale copy', async () => {
-    const { project } = await d.repo.createProject('P')
-    await d.local.saveProject({ ...project, storage: { kind: 'drive', folderId: 'F', folderName: 'F', files: { annotations: {} }, remoteVersions: {} } })
-    await d.repo.saveLocal({ ...project, name: 'Renamed' }, [])
+    const s = await d.repo.create('P')
+    const project = s.opened.project
+    await d.local.saveProject({ ...project, storage: { kind: 'drive', folderId: 'F', folderName: 'F' }, excludedDriveFileIds: ['x'] })
+    await s.save({ ...project, name: 'Renamed' }, [])
     const stored = await d.local.getProject(project.id)
     expect(stored!.name).toBe('Renamed')
     expect(stored!.storage.kind).toBe('drive')
+    expect(stored!.excludedDriveFileIds).toEqual(['x'])
   })
 })
 
@@ -161,13 +181,16 @@ describe('repository: Google Drive', () => {
   let drive: FakeDrive
   let a: Device
 
-  async function linkedProject(dev: Device) {
-    const { project } = await dev.repo.createProject('Plates')
-    const { added } = await dev.repo.importImageFiles(project, [pngFile('p1.png')])
-    const p = { ...project, images: added }
-    await dev.repo.saveLocal(p, [doc(p, added[0].id, [annotation('a1', 'g1')])])
-    const linked = await dev.repo.linkProjectToDrive(p.id, 'create-folder')
-    return linked
+  async function linkedProject(dev: Device): Promise<{ s: ProjectSession; project: Project; updates: Project[] }> {
+    const s = await dev.repo.create('Plates')
+    const updates: Project[] = []
+    s.onUpdated((p) => updates.push(p))
+    const { added } = await s.images.import([pngFile('p1.png')])
+    const p = { ...s.opened.project, images: added }
+    await s.save(p, [doc(p, added[0].id, [annotation('a1', 'g1')])])
+    const { warnings } = await s.drive.link('create-folder')
+    expect(warnings).toEqual([])
+    return { s, project: await dev.local.requireProject(p.id), updates }
   }
 
   beforeEach(() => {
@@ -175,82 +198,113 @@ describe('repository: Google Drive', () => {
     a = device(drive)
   })
 
-  it('links a project to a new folder, uploads it and reports saved-drive', async () => {
-    const updates: Project[] = []
-    a.repo.onProjectUpdated((p) => updates.push(p))
-    const linked = await linkedProject(a)
-    expect(a.repo.drive()).toMatchObject({ state: 'connected', account: 'tester@example.com' })
-    expect(linked.warnings).toBeUndefined()
-    expect(linked.project.storage.kind).toBe('drive')
-    expect(linked.project.images[0].source.kind).toBe('drive')
-    expect(a.repo.status().state).toBe('saved-drive')
-    expect(updates.length).toBeGreaterThan(0)
+  it('links a project to a new folder, uploads it and reports storage-owned changes (no reload)', async () => {
+    const { project, updates } = await linkedProject(a)
+    expect(a.repo.getDriveState()).toMatchObject({ state: 'connected', account: 'tester@example.com' })
+    expect(project.storage).toEqual({ kind: 'drive', folderId: expect.any(String), folderName: 'Plates', account: 'tester@example.com' })
+    expect(project.images[0].source.kind).toBe('drive')
+    expect(a.repo.getStatus().state).toBe('saved-drive')
+    // The editor learns about the link and uploaded image sources through onUpdated.
+    expect(updates.at(-1)!.storage.kind).toBe('drive')
+    expect(updates.at(-1)!.images[0].source.kind).toBe('drive')
     const folder = drive.findByName('root', 'Plates')!
     expect(drive.childrenOf(folder.id).map((f) => f.name).sort()).toEqual(['annotations', 'images', 'project.json', 'summary.csv'])
   })
 
   it('auto-saves after local edits when connected (debounced)', async () => {
-    const { project, annotations } = await linkedProject(a)
+    const { s, project } = await linkedProject(a)
     const imageId = project.images[0].id
-    const d2 = { ...annotations.get(imageId)!, annotations: [annotation('a1', 'g1'), annotation('a2', 'g1')] }
-    await a.repo.saveLocal(project, [d2])
-    expect(a.repo.status().state).toBe('pending')
+    const d2 = doc(project, imageId, [annotation('a1', 'g1'), annotation('a2', 'g1')])
+    await s.save(project, [d2])
+    expect(a.repo.getStatus().state).toBe('pending')
     expect(a.timers.pending).toHaveLength(1)
     await a.timers.runAll()
-    expect(a.repo.status().state).toBe('saved-drive')
-    const annId = (await a.local.getProject(project.id))!.storage
-    const fid = annId.kind === 'drive' ? annId.files.annotations[imageId] : ''
+    expect(a.repo.getStatus().state).toBe('saved-drive')
+    const fid = (await driveFilesOf(a, project.id)).annotations[imageId]
     expect(JSON.parse(drive.text(fid)).annotations).toHaveLength(2)
   })
 
-  it('needs reconnect after the token expires, without losing local edits', async () => {
-    const { project, annotations } = await linkedProject(a)
-    a.session.expire()
-    expect(a.repo.drive().state).toBe('expired')
+  it('keeps an edit dirty when it lands while a push is reading what to upload (B6)', async () => {
+    const { s, project } = await linkedProject(a)
     const imageId = project.images[0].id
-    await a.repo.saveLocal(project, [{ ...annotations.get(imageId)!, annotations: [] }])
-    expect(a.repo.status().state).toBe('reconnect-required')
-    expect((await a.repo.openProject(project.id)).annotations.get(imageId)!.annotations).toHaveLength(0)
+    await s.save(project, [doc(project, imageId, [annotation('first', 'g1')])])
+    // Hold the push between reading the annotation docs and reading the sync state,
+    // save a newer edit in that gap, then let the push continue with the OLD docs.
+    let release!: () => void
+    const gate = new Promise<void>((r) => (release = r))
+    const realGetSync = a.local.getSync.bind(a.local)
+    const realGetAnnotations = a.local.getAnnotations.bind(a.local)
+    let armed = false
+    a.local.getAnnotations = async (id) => {
+      const r = await realGetAnnotations(id)
+      armed = true
+      return r
+    }
+    a.local.getSync = async (id) => {
+      if (armed) {
+        armed = false
+        await gate
+      }
+      return realGetSync(id)
+    }
+    const pushing = s.drive.push()
+    for (let i = 0; i < 10; i++) await flush()
+    a.local.getAnnotations = realGetAnnotations
+    await s.save(project, [doc(project, imageId, [annotation('late', 'g1')])])
+    release()
+    await pushing
+    a.local.getSync = realGetSync
+    // The upload contained the old doc, so the late edit must still be marked dirty.
+    expect((await a.local.getSync(project.id)).dirtyImages).toContain(imageId)
+  })
+
+  it('needs reconnect after the token expires, without losing local edits', async () => {
+    const { s, project } = await linkedProject(a)
+    a.session.expire()
+    expect(a.repo.getDriveState().state).toBe('expired')
+    const imageId = project.images[0].id
+    await s.save(project, [doc(project, imageId, [])])
+    expect(a.repo.getStatus().state).toBe('reconnect-required')
+    expect((await a.repo.open(project.id)).opened.annotations.get(imageId)!.annotations).toHaveLength(0)
     await a.repo.connectDrive()
     await a.timers.runAll()
-    expect(a.repo.status().state).toBe('saved-drive')
+    expect(a.repo.getStatus().state).toBe('saved-drive')
   })
 
   it('stops on remote conflicts; takeRemote keeps a local backup', async () => {
-    const { project, annotations } = await linkedProject(a)
-    const link = (await a.local.getProject(project.id))!.storage
-    if (link.kind !== 'drive') throw new Error('not linked')
+    const { s, project } = await linkedProject(a)
+    const files = await driveFilesOf(a, project.id)
     // Another device rewrites project.json with a renamed project.
-    const remote = JSON.parse(drive.text(link.files.projectJson!))
-    drive.externalEdit(link.files.projectJson!, JSON.stringify({ ...remote, name: 'Renamed elsewhere' }))
+    const remote = JSON.parse(drive.text(files.projectJson!))
+    drive.externalEdit(files.projectJson!, JSON.stringify({ ...remote, name: 'Renamed elsewhere' }))
 
     const imageId = project.images[0].id
-    await a.repo.saveLocal(project, [{ ...annotations.get(imageId)!, annotations: [annotation('mine', 'g1')] }])
-    await a.repo.saveToDrive(project.id)
-    expect(a.repo.status()).toEqual({ state: 'conflict', files: ['project.json'] })
-    expect(JSON.parse(drive.text(link.files.projectJson!)).name).toBe('Renamed elsewhere')
+    await s.save(project, [doc(project, imageId, [annotation('mine', 'g1')])])
+    await s.drive.push()
+    expect(a.repo.getStatus()).toEqual({ state: 'conflict', files: ['project.json'] })
+    expect(JSON.parse(drive.text(files.projectJson!)).name).toBe('Renamed elsewhere')
 
-    const taken = await a.repo.takeRemote(project.id)
+    const taken = await s.drive.takeRemote()
     expect(taken.project.name).toBe('Renamed elsewhere')
     expect(taken.project.id).toBe(project.id)
-    const all = await a.repo.listProjects()
+    expect(a.repo.getStatus().state).toBe('saved-drive')
+    const all = await a.repo.list()
     const backup = all.find((p) => p.id !== project.id)!
     expect(backup.name).toMatch(/local copy/)
     expect(backup.storage).toBe('local')
-    const backupOpened = await a.repo.openProject(backup.id)
-    expect(backupOpened.annotations.get(imageId)!.annotations[0].id).toBe('mine')
+    const backupOpened = await a.repo.open(backup.id)
+    expect(backupOpened.opened.annotations.get(imageId)!.annotations[0].id).toBe('mine')
   })
 
   it('overwrite resolves a conflict in favour of local', async () => {
-    const { project } = await linkedProject(a)
-    const link = (await a.local.getProject(project.id))!.storage
-    if (link.kind !== 'drive') throw new Error('not linked')
-    drive.externalEdit(link.files.projectJson!, '{}')
-    await a.repo.saveToDrive(project.id)
-    expect(a.repo.status().state).toBe('conflict')
-    await a.repo.saveToDrive(project.id, { overwrite: true })
-    expect(a.repo.status().state).toBe('saved-drive')
-    expect(JSON.parse(drive.text(link.files.projectJson!)).id).toBe(project.id)
+    const { s, project } = await linkedProject(a)
+    const files = await driveFilesOf(a, project.id)
+    drive.externalEdit(files.projectJson!, '{}')
+    await s.drive.push()
+    expect(a.repo.getStatus().state).toBe('conflict')
+    await s.drive.push({ overwrite: true })
+    expect(a.repo.getStatus().state).toBe('saved-drive')
+    expect(JSON.parse(drive.text(files.projectJson!)).id).toBe(project.id)
   })
 
   it('reopens the project on another device from the Drive folder', async () => {
@@ -258,12 +312,30 @@ describe('repository: Google Drive', () => {
     const folder = drive.findByName('root', 'Plates')!
     const b = device(drive)
     b.picker.folders.push({ id: folder.id, name: folder.name, mimeType: folder.mimeType })
-    const opened = await b.repo.openProjectFromDrive()
-    expect(opened.project.id).toBe(project.id)
-    expect(opened.annotations.get(project.images[0].id)!.annotations).toHaveLength(1)
-    expect(b.repo.status().state).toBe('saved-drive')
-    const blob = await b.repo.getImageBlob(opened.project, project.images[0].id)
+    const opened = await b.repo.openFromDrive()
+    expect(opened.projectId).toBe(project.id)
+    expect(opened.opened.annotations.get(project.images[0].id)!.annotations).toHaveLength(1)
+    expect(b.repo.getStatus().state).toBe('saved-drive')
+    const blob = await opened.images.blob(project.images[0].id)
     expect(new Uint8Array(await blob.arrayBuffer())).toEqual(PNG_1x1)
+  })
+
+  it('removing a Drive image keeps the Drive file and stops it from being re-imported', async () => {
+    const { s, project, updates } = await linkedProject(a)
+    const folder = drive.findByName('root', 'Plates')!
+    const img = project.images[0]
+    const fileId = img.source.kind === 'drive' ? img.source.fileId : ''
+    await s.images.remove(img.id)
+    expect(updates.at(-1)!.excludedDriveFileIds).toEqual([fileId])
+    // The editor drops the record and saves; the exclusion survives (storage-owned).
+    await s.save({ ...project, images: [], excludedDriveFileIds: [] }, [])
+    await s.drive.push()
+    expect(drive.files.has(fileId)).toBe(true)
+    const b = device(drive)
+    b.picker.folders.push({ id: folder.id, name: folder.name, mimeType: folder.mimeType })
+    const opened = await b.repo.openFromDrive()
+    expect(opened.opened.project.images).toEqual([])
+    expect(opened.opened.project.excludedDriveFileIds).toEqual([fileId])
   })
 
   it('asks the user to grant access to files it cannot see (drive.file), then reads them', async () => {
@@ -282,17 +354,17 @@ describe('repository: Google Drive', () => {
       expect(opts.fileIds!.length).toBeGreaterThan(0)
       return opts.fileIds!.map((id) => ({ id, name: id, mimeType: 'x' }))
     })
-    const opened = await b.repo.openProjectFromDrive()
+    const opened = await b.repo.openFromDrive()
     expect(b.picker.requests).toHaveLength(2)
-    expect(opened.project.id).toBe(project.id)
-    expect(opened.annotations.size).toBe(1)
-    expect(opened.warnings).toBeUndefined()
+    expect(opened.projectId).toBe(project.id)
+    expect(opened.opened.annotations.size).toBe(1)
+    expect(opened.opened.warnings).toBeUndefined()
     // Device b edits and saves: same files updated, no duplicate folders or docs.
     const before = drive.files.size
     const imageId = project.images[0].id
-    await b.repo.saveLocal(opened.project, [{ ...opened.annotations.get(imageId)!, annotations: [] }])
-    await b.repo.saveToDrive(opened.project.id)
-    expect(b.repo.status().state).toBe('saved-drive')
+    await opened.save(opened.opened.project, [{ ...opened.opened.annotations.get(imageId)!, annotations: [] }])
+    await opened.drive.push()
+    expect(b.repo.getStatus().state).toBe('saved-drive')
     expect(drive.files.size).toBe(before)
   })
 
@@ -307,12 +379,12 @@ describe('repository: Google Drive', () => {
       { id: img1, name: 'plate-1.png', mimeType: 'image/png' },
       { id: img2, name: 'plate-2.png', mimeType: 'image/png' },
     ])
-    const opened = await a.repo.openProjectFromDrive()
-    expect(opened.project.name).toBe('Experiment 7')
-    expect(opened.project.images.map((i) => i.source.kind === 'drive' && i.source.fileId)).toEqual([img1, img2])
-    expect(a.repo.status().state).toBe('pending')
+    const opened = await a.repo.openFromDrive()
+    expect(opened.opened.project.name).toBe('Experiment 7')
+    expect(opened.opened.project.images.map((i) => i.source.kind === 'drive' && i.source.fileId)).toEqual([img1, img2])
+    expect(a.repo.getStatus().state).toBe('pending')
     await a.timers.runAll()
-    expect(a.repo.status().state).toBe('saved-drive')
+    expect(a.repo.getStatus().state).toBe('saved-drive')
     expect(drive.findByName(folder, 'project.json')).toBeTruthy()
     // the original images are referenced in place, not copied
     expect(drive.findByName(folder, 'images')).toBeUndefined()
@@ -326,16 +398,17 @@ describe('repository: Google Drive', () => {
     drive.externalEdit(fileId, new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0, 0, 0, 0, 1]))
     const b = device(drive)
     b.picker.folders.push({ id: folder.id, name: folder.name, mimeType: folder.mimeType })
-    const opened = await b.repo.openProjectFromDrive()
-    const flagged = opened.project.images[0]
+    const opened = await b.repo.openFromDrive()
+    const flagged = opened.opened.project.images[0]
     expect(flagged.sourceMismatch?.message).toMatch(/replaced/)
   })
 
   it('reports Drive as unconfigured but keeps working locally', async () => {
     const repo = createProjectRepository({ local: new LocalStore(new IDBFactory()), decoder: fakeDecoder, session: new DriveSession(null), drive: null })
-    expect(repo.drive().state).toBe('unconfigured')
+    expect(repo.getDriveState().state).toBe('unconfigured')
     await expect(repo.connectDrive()).rejects.toMatchObject({ kind: 'unconfigured' })
-    const { project } = await repo.createProject('Offline')
-    expect(project.storage.kind).toBe('local')
+    const s = await repo.create('Offline')
+    expect(s.opened.project.storage.kind).toBe('local')
+    await expect(s.drive.push()).rejects.toMatchObject({ kind: 'unconfigured' })
   })
 })

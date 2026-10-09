@@ -1,9 +1,17 @@
 /**
  * Contract between the app (src/state, src/ui) and persistence (src/storage).
+ * Framework-free: no Solid or other UI library types cross this boundary;
+ * src/state adapts `subscribe` to signals.
  *
  * Model: the browser's IndexedDB copy is ALWAYS the working copy and is written
  * on every change. A project may additionally be linked to a Google Drive folder
  * (the folder IS the project). Drive saves never discard the local copy.
+ *
+ * Sessions: project-scoped operations live on a `ProjectSession`, obtained from
+ * `create` / `open` / `importArchive` / `openFromDrive`. At most ONE session is
+ * open at a time: obtaining a new one closes the previous one, after which its
+ * methods reject. Repository-level status (`getStatus`) describes the open
+ * session (or `idle` / a startup storage failure when none is open).
  *
  * Folder / archive layout (identical for Drive folders and exported .zip files):
  *   project.json
@@ -11,7 +19,6 @@
  *   annotations/<imageId>.json
  *   images/<original file name>     (Drive: any images in the folder; zip: images/<imageId>.<ext>)
  */
-import type { Accessor } from 'solid-js'
 import type { ID, ImageAnnotations, ImageRecord, Project } from '../model/types'
 
 export type SaveStatus =
@@ -32,6 +39,9 @@ export type DriveState =
   | { state: 'connected'; account?: string; expiresAt: number }
   | { state: 'expired'; account?: string }
 
+/** How a local project gets its Drive folder. */
+export type DriveLinkMode = 'create-folder' | 'pick-folder'
+
 export interface ProjectSummary {
   id: ID
   name: string
@@ -41,7 +51,8 @@ export interface ProjectSummary {
   driveFolderName?: string
 }
 
-export interface OpenedProject {
+/** Full contents of a project as stored (what the editor loads). */
+export interface ProjectSnapshot {
   project: Project
   /** Keyed by imageId. Missing entries mean "no annotations yet". */
   annotations: Map<ID, ImageAnnotations>
@@ -55,53 +66,87 @@ export interface ImportResult {
 }
 
 export interface ProjectRepository {
-  /** Save status of the currently open project. */
-  readonly status: Accessor<SaveStatus>
-  readonly drive: Accessor<DriveState>
+  /** Save status of the open session (idle when none; local-error if storage is unusable). */
+  getStatus(): SaveStatus
+  getDriveState(): DriveState
+  /** Called after any change of getStatus() or getDriveState(). Returns an unsubscribe function. */
+  subscribe(listener: () => void): () => void
 
-  listProjects(): Promise<ProjectSummary[]>
-  createProject(name: string): Promise<OpenedProject>
-  openProject(id: ID): Promise<OpenedProject>
-  deleteProject(id: ID): Promise<void>
+  list(): Promise<ProjectSummary[]>
+  /** Create a new local project and open it. */
+  create(name: string): Promise<ProjectSession>
+  open(id: ID): Promise<ProjectSession>
+  /** Import a .zip produced by exportZip as a new local project (IDs kept unless they collide) and open it. */
+  importArchive(file: File): Promise<ProjectSession>
+  /** Pick a Drive folder and open it as a project (reads project.json + annotations + images). */
+  openFromDrive(): Promise<ProjectSession>
+  /** Delete the browser copy (never touches Drive). Closes the session if it is the open project. */
+  delete(id: ID): Promise<void>
 
   /**
-   * Persist to IndexedDB now (callers debounce). `annotations` = only the docs that changed.
-   * If the project is Drive-linked this marks it 'pending' and schedules a debounced Drive save.
+   * Sign in to Google. Opens a popup when no valid token exists, so call it
+   * synchronously from the user's click (Safari blocks popups after an await).
    */
-  saveLocal(project: Project, annotations: ImageAnnotations[]): Promise<void>
-  /**
-   * Storage owns `project.storage`, `project.revision` and each image's `source` /
-   * `sourceMismatch`: saveLocal keeps the repository's values for these fields, and
-   * the repository calls these listeners with the updated project whenever it changes
-   * them (Drive link created, image uploaded, replaced image detected, ...).
-   * Callers should merge those fields into editor state. Returns an unsubscribe function.
-   */
-  onProjectUpdated(listener: (project: Project) => void): () => void
-
-  /** Decode, measure (EXIF-oriented), fingerprint and store images. Rejects unsupported formats clearly. */
-  importImageFiles(project: Project, files: File[]): Promise<ImportResult>
-  /** Original bytes from local cache, fetching from Drive if needed. */
-  getImageBlob(project: Project, imageId: ID): Promise<Blob>
-  removeImage(project: Project, imageId: ID): Promise<void>
-
-  /** Download project as a .zip (same layout as the Drive folder). */
-  exportArchive(projectId: ID): Promise<Blob>
-  /** Import a .zip produced by exportArchive (new local project; IDs preserved, conflicts get a new project ID). */
-  importArchive(file: File): Promise<OpenedProject>
-  /** Summary CSV for the project (derived from annotation docs). */
-  exportSummaryCsv(projectId: ID): Promise<Blob>
-
-  // ---- Google Drive ----
   connectDrive(): Promise<void>
   disconnectDrive(): Promise<void>
-  /** Link a local project to a Drive folder (pick existing or create new) and upload it. */
-  linkProjectToDrive(projectId: ID, mode: 'create-folder' | 'pick-folder'): Promise<OpenedProject>
-  /** Pick a Drive folder and open it as a project (reads project.json + annotations + images). */
-  openProjectFromDrive(): Promise<OpenedProject>
-  /** Add images that already exist in Drive (Picker) to the project. */
-  importImagesFromDrive(project: Project): Promise<ImportResult>
-  /** Push local state to Drive now. `overwrite` resolves a conflict in favour of local. */
-  saveToDrive(projectId: ID, opts?: { overwrite?: boolean }): Promise<void>
-  /** Resolve a conflict in favour of the remote copy (local copy is kept as a backup project). */
-  takeRemote(projectId: ID): Promise<OpenedProject>
+}
+
+/**
+ * The open project. Storage owns `project.storage`, `project.revision`,
+ * `project.excludedDriveFileIds` and each image's `source` / `sourceMismatch`
+ * (see model/project.ts `applyStorageOwned`): `save` keeps storage's values for
+ * these, and `onUpdated` reports every change storage makes to them.
+ */
+export interface ProjectSession {
+  readonly projectId: ID
+  /** Contents when the session was opened. */
+  readonly opened: ProjectSnapshot
+  /** True once another session replaced this one or the project was deleted. */
+  readonly closed: boolean
+
+  /**
+   * Persist to IndexedDB now (callers debounce). `changedDocs` = only the docs that changed.
+   * If the project is Drive-linked this marks it pending and schedules a debounced Drive save.
+   */
+  save(project: Project, changedDocs: ImageAnnotations[]): Promise<void>
+  /** Storage changed storage-owned fields; merge them with `applyStorageOwned`. */
+  onUpdated(listener: (project: Project) => void): () => void
+
+  images: {
+    /** Decode, measure (EXIF-oriented), fingerprint and store images. Rejects unsupported formats clearly. */
+    import(files: File[]): Promise<ImportResult>
+    /** Add images that already exist in Drive (Picker). Requires a Drive connection. */
+    importFromDrive(): Promise<ImportResult>
+    /** Original bytes from the local cache, fetching from Drive if needed. */
+    blob(imageId: ID): Promise<Blob>
+    /**
+     * Forget an image's bytes and annotation document in this browser. A Drive file is
+     * never deleted: its ID is added to `excludedDriveFileIds` so it is not re-imported.
+     */
+    remove(imageId: ID): Promise<void>
+  }
+
+  /** Download as a .zip (same layout as the Drive folder). */
+  exportZip(): Promise<Blob>
+  /** Summary CSV derived from the annotation documents. */
+  exportCsv(): Promise<Blob>
+
+  drive: {
+    /**
+     * Link this local project to a Drive folder (create one, or pick an empty one) and
+     * upload it. Storage-owned changes arrive through `onUpdated`; nothing is reloaded.
+     * Resolves with non-fatal warnings (e.g. the first upload failed).
+     */
+    link(mode: DriveLinkMode): Promise<{ warnings: string[] }>
+    /** Push local state to Drive now. `overwrite` resolves a conflict in favour of local. */
+    push(opts?: { overwrite?: boolean }): Promise<void>
+    /**
+     * Resolve a conflict in favour of Drive: the local copy is kept as a separate
+     * backup project and the session's project is replaced by the Drive version.
+     */
+    takeRemote(): Promise<ProjectSnapshot>
+  }
+
+  /** Stop background work for this project. Idempotent. */
+  close(): void
 }

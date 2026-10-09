@@ -2,7 +2,7 @@ import { createEffect, createSignal, For, on, onCleanup, Show } from 'solid-js'
 import type { SourceMismatch } from '../../model/types'
 import { AlertTriangle, ChevronDown, ChevronUp, EyeOff, Lock } from '../icons'
 import { IconButton } from '../primitives'
-import { GroupSwatch } from '../toolbar/GroupSwatch'
+import { GroupSwatch } from '../shared/GroupSwatch'
 import { plural } from '../format'
 
 /** Per-group line in the header breakdown. */

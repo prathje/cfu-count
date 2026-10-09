@@ -72,3 +72,26 @@ describe('autosave', () => {
     expect(s.dirty()).toBe(false)
   })
 })
+
+describe('autosave flush result and suspension', () => {
+  it('flush resolves false while a save keeps failing (callers must not discard)', async () => {
+    const s = createAutosaver({ save: async () => Promise.reject(new Error('quota')) })
+    s.markDoc('a')
+    expect(await s.flush()).toBe(false)
+    expect(String(s.lastError())).toMatch(/quota/)
+    s.reset()
+    expect(await s.flush()).toBe(true)
+  })
+
+  it('does not save while suspended; resumes afterwards', async () => {
+    const save = vi.fn(async (_ids: string[]) => {})
+    const s = createAutosaver({ save })
+    s.suspend()
+    s.markDoc('a')
+    expect(await s.flush()).toBe(false)
+    expect(save).not.toHaveBeenCalled()
+    s.resume()
+    expect(await s.flush()).toBe(true)
+    expect(save).toHaveBeenCalledOnce()
+  })
+})

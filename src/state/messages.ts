@@ -1,6 +1,7 @@
-/** User-facing wording for blocked edits, shared by editor commands and the UI. */
+/** Notices, confirmations and the user-facing wording for blocked edits (shared by editor and UI). */
 import type { AnnotationGroup } from '../model/types'
 import type { OpBlock } from '../model/annotations'
+import type { EditBlockReason } from '../model/policy'
 
 export interface NoticeAction {
   label: string
@@ -18,6 +19,17 @@ export interface Notice {
 }
 
 export type Notify = (notice: Notice) => void
+
+/** A yes/no question for the user (rendered by the UI's dialog system). */
+export interface ConfirmRequest {
+  title: string
+  body?: string
+  confirmLabel: string
+  cancelLabel?: string
+  danger?: boolean
+}
+
+export type Confirm = (request: ConfirmRequest) => Promise<boolean>
 
 export function hiddenMessage(group: AnnotationGroup): string {
   return `“${group.name}” is hidden — show it to edit`
@@ -48,4 +60,10 @@ export function historyBlockMessage(block: OpBlock, direction: 'undo' | 'redo', 
     case 'invalid':
       return { message: `${verb} unavailable`, detail: block.detail }
   }
+}
+
+/** One-line explanation of why the active group cannot be edited (toasts and the viewport hint). */
+export function editBlockMessage(reason: EditBlockReason, group: AnnotationGroup | undefined): string {
+  if (reason === 'no-group' || !group) return 'Choose an annotation group first'
+  return reason === 'hidden' ? hiddenMessage(group) : lockedMessage(group)
 }

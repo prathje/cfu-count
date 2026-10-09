@@ -1,19 +1,19 @@
 /**
- * Image loading for the UI: decoded bitmaps for the viewport and small cached
- * thumbnails for the sidebar. Object URLs are revoked when images are removed
- * or the cache is cleared (project switch).
+ * Image loading for the UI: decoded images for the viewport and small cached
+ * thumbnails for the sidebar. Decoding uses the SAME path as import
+ * (storage/images.ts decodeImage), and the decoded size is compared with the
+ * stored record so a mismatch is reported instead of silently misplacing
+ * markers. Object URLs are revoked when images are removed or the cache is
+ * cleared (project switch).
  */
-import { createEffect, createSignal, onCleanup, type Accessor } from 'solid-js'
+import { createEffect, createMemo, createSignal, onCleanup, type Accessor } from 'solid-js'
 import type { ID } from '../model/types'
+import { decodeImage, type DecodedImage } from '../storage/images'
 
 /** Supplies original image bytes (bound to the repository + open project by the caller). */
 export type BlobSource = (imageId: ID) => Promise<Blob>
 
 const THUMB_SIZE = 96
-
-export function decodeImage(blob: Blob): Promise<ImageBitmap> {
-  return createImageBitmap(blob, { imageOrientation: 'from-image' })
-}
 
 /** Small JPEG thumbnail cache keyed by image id. Generation is serialised to bound memory on iPad. */
 export interface ThumbnailCache {
@@ -37,17 +37,17 @@ export function createThumbnailCache(source: Accessor<BlobSource | null>): Thumb
     const src = source()
     if (!src) return
     try {
-      const bitmap = await decodeImage(await src(imageId))
-      const scale = THUMB_SIZE / Math.min(bitmap.width, bitmap.height)
-      const w = Math.max(1, Math.round(bitmap.width * scale))
-      const h = Math.max(1, Math.round(bitmap.height * scale))
+      const decoded = await decodeImage(await src(imageId))
+      const scale = THUMB_SIZE / Math.min(decoded.width, decoded.height)
+      const w = Math.max(1, Math.round(decoded.width * scale))
+      const h = Math.max(1, Math.round(decoded.height * scale))
       const canvas = document.createElement('canvas')
       canvas.width = w
       canvas.height = h
       const ctx = canvas.getContext('2d')!
       ctx.imageSmoothingQuality = 'high'
-      ctx.drawImage(bitmap, 0, 0, w, h)
-      bitmap.close()
+      ctx.drawImage(decoded.source, 0, 0, w, h)
+      decoded.close()
       const blob = await new Promise<Blob | null>((r) => canvas.toBlob(r, 'image/jpeg', 0.8))
       if (!blob || gen !== generation || !requested.has(imageId)) return
       const url = URL.createObjectURL(blob)
@@ -87,39 +87,72 @@ export function createThumbnailCache(source: Accessor<BlobSource | null>): Thumb
 export type BitmapState =
   | { status: 'idle' }
   | { status: 'loading' }
-  | { status: 'ready'; bitmap: ImageBitmap }
+  | {
+      status: 'ready'
+      image: DecodedImage
+      /** Decoded size differs from the stored record: markers may not line up. */
+      sizeMismatch: { width: number; height: number } | null
+    }
   | { status: 'error'; message: string }
 
+/** The drawable image of a ready state, else null (narrows the union without casts). */
+export function readyImage(s: BitmapState): DecodedImage | null {
+  return s.status === 'ready' ? s.image : null
+}
+
+/** Decoded size when it differs from the stored record, else null. */
+export function bitmapSizeMismatch(s: BitmapState): { width: number; height: number } | null {
+  return s.status === 'ready' ? s.sizeMismatch : null
+}
+
+/** The error message of a failed state, else null. */
+export function bitmapError(s: BitmapState): string | null {
+  return s.status === 'error' ? s.message : null
+}
+
+export interface ExpectedImage {
+  id: ID
+  /** Oriented size stored in the ImageRecord at import. */
+  width: number
+  height: number
+}
+
 /**
- * Decodes the current image whenever `imageId` changes, closing the previous
- * bitmap to release memory. Stale decodes (user switched quickly) are discarded.
+ * Decodes the current image whenever it changes, closing the previous one to
+ * release memory. Stale decodes (user switched quickly) are discarded.
  */
-export function createCurrentBitmap(imageId: Accessor<ID | null>, source: Accessor<BlobSource | null>): Accessor<BitmapState> {
+export function createCurrentBitmap(image: Accessor<ExpectedImage | null>, source: Accessor<BlobSource | null>): Accessor<BitmapState> {
   const [state, setState] = createSignal<BitmapState>({ status: 'idle' })
   let token = 0
-  let current: ImageBitmap | null = null
+  let current: DecodedImage | null = null
   const release = () => {
     current?.close()
     current = null
   }
 
+  // Re-decode only when the image identity or its recorded size changes (not on rename).
+  const expected = createMemo(image, null, {
+    equals: (a, b) => a === b || (!!a && !!b && a.id === b.id && a.width === b.width && a.height === b.height),
+  })
   createEffect(() => {
-    const id = imageId()
+    const img = expected()
     const src = source()
     const mine = ++token
-    if (!id || !src) {
+    if (!img || !src) {
       release()
       setState({ status: 'idle' })
       return
     }
+    const { id, width, height } = img
     setState({ status: 'loading' })
     src(id)
       .then(decodeImage)
-      .then((bitmap) => {
-        if (mine !== token) return bitmap.close()
+      .then((decoded) => {
+        if (mine !== token) return decoded.close()
         release()
-        current = bitmap
-        setState({ status: 'ready', bitmap })
+        current = decoded
+        const sizeMismatch = decoded.width !== width || decoded.height !== height ? { width: decoded.width, height: decoded.height } : null
+        setState({ status: 'ready', image: decoded, sizeMismatch })
       })
       .catch((err: unknown) => {
         if (mine !== token) return

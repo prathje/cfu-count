@@ -32,8 +32,16 @@ export interface ViewportProps {
   image: ImageBitmap | HTMLImageElement | null
   imageWidth: number
   imageHeight: number
+  /**
+   * Annotations to draw, as an IMMUTABLE snapshot: plain objects (not store proxies)
+   * in an array that is replaced whenever anything changes. The viewport redraws and
+   * re-indexes when the array identity changes and never reads fields reactively.
+   */
   annotations: readonly Annotation[]
-  /** All annotation groups in display order (style, hidden, locked live here). */
+  /**
+   * All annotation groups in display order (style, hidden, locked live here). Same
+   * contract as `annotations`: an immutable snapshot whose identity changes on change.
+   */
   groups: readonly AnnotationGroup[]
   activeGroupId: ID | null
   tool: Tool

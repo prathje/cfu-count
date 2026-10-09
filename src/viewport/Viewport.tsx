@@ -94,6 +94,7 @@ export function Viewport(props: ViewportProps) {
   let gestureActive = false
   // Spatial index over all annotations, rebuilt lazily on the first query after a change.
   let index: PointIndex | null = null
+  let indexed: readonly unknown[] | null = null
   const machine = new GestureMachine()
 
   const [spaceHeld, setSpaceHeld] = createSignal(false)
@@ -235,19 +236,18 @@ export function Viewport(props: ViewportProps) {
     ),
   )
 
-  // Annotation layer depends on annotation geometry, group styles and the active group.
-  createEffect(() => {
-    const list = props.annotations
-    for (let i = 0; i < list.length; i++) {
-      const a = list[i]
-      void a.x, a.y, a.groupId
-    }
-    for (const g of props.groups) void g.color, g.render, g.opacity, g.size, g.labels, g.labelSize, g.hidden, g.locked
-    void props.activeGroupId
-    index = null
-    dirtyAnno = true
-    schedule()
-  })
+  // Annotation layer: `annotations` and `groups` are immutable snapshots (see api.ts), so
+  // tracking their identity is enough; no per-field reads.
+  createEffect(
+    on(
+      () => [props.annotations, props.groups, props.activeGroupId] as const,
+      ([annotations]) => {
+        if (annotations !== indexed) index = null
+        dirtyAnno = true
+        schedule()
+      },
+    ),
+  )
 
   createEffect(() => {
     void props.tool, spaceHeld(), activeGroup()
@@ -271,7 +271,10 @@ export function Viewport(props: ViewportProps) {
   }
 
   function scene(): InteractionScene {
-    index ??= createPointIndex(props.annotations)
+    if (!index) {
+      index = createPointIndex(props.annotations)
+      indexed = props.annotations
+    }
     return {
       view,
       imageWidth: props.imageWidth,

@@ -6,7 +6,7 @@
  *   projects     key: id                       value: Project
  *   annotations  key: [projectId, imageId]     value: ImageAnnotations
  *   blobs        key: [projectId, imageId]     value: { projectId, imageId, blob }
- *   sync         key: projectId                value: SyncState
+ *   sync         key: projectId                value: SyncState (dirty flags + Drive bookkeeping)
  *
  * Image blobs are keyed per project because an imported archive may legitimately
  * reuse image IDs from another local project.
@@ -18,7 +18,26 @@ import { openDatabase, promisifyRequest, runTransaction } from './idb'
 export const DB_NAME = 'cfu-count'
 const DB_VERSION = 1
 
-/** Local-only Drive bookkeeping; never exported or uploaded. */
+/**
+ * Drive file IDs of the outputs this browser writes for a linked project, plus
+ * the content token (Drive `md5Checksum`) of each as last read/written here, used
+ * for conflict checks. `version` is not used because it also changes on
+ * metadata-only edits (rename, sharing). Storage-internal: not part of the model.
+ */
+export interface DriveFiles {
+  projectJson?: string
+  summaryCsv?: string
+  annotationsFolder?: string
+  imagesFolder?: string
+  /** imageId -> Drive file ID of annotations/<imageId>.json */
+  annotations: Record<ID, string>
+  /** Drive file ID -> md5Checksum last read or written by this browser. */
+  remoteVersions: Record<string, string>
+}
+
+export const emptyDriveFiles = (): DriveFiles => ({ annotations: {}, remoteVersions: {} })
+
+/** Local-only sync bookkeeping; never exported or uploaded. */
 export interface SyncState {
   projectId: ID
   /** project.json / summary.csv need uploading. */
@@ -26,6 +45,8 @@ export interface SyncState {
   /** Image IDs whose annotation documents changed since the last successful Drive save. */
   dirtyImages: ID[]
   lastDriveSaveAt?: string
+  /** Present once the project is linked to a Drive folder. */
+  drive?: DriveFiles
 }
 
 interface BlobRow {

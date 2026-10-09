@@ -2,6 +2,8 @@
  * Debounced, serialised autosave. Callers mark what changed; after `delay` ms
  * of quiet (or on flush) the saver collects the dirty set and calls `save`.
  * Saves never overlap: changes made during a save are picked up by the next one.
+ * A failed save keeps its work marked, so `flush()` reports it and the next
+ * change or flush retries it.
  */
 import type { ID } from '../model/types'
 
@@ -17,11 +19,23 @@ export interface AutosaveOptions {
 export interface Autosaver {
   markProject(): void
   markDoc(imageId: ID): void
-  /** Save immediately (cancels the debounce). Resolves when everything marked so far is saved. */
-  flush(): Promise<void>
-  /** Forget pending changes (e.g. project closed after an explicit flush). */
+  /**
+   * Save immediately (cancels the debounce). Resolves `true` when everything
+   * marked so far is saved, `false` if work is still unsaved (the save failed,
+   * or saving is suspended). Never rejects.
+   */
+  flush(): Promise<boolean>
+  /** Forget pending changes (e.g. the project is being replaced or deleted). */
   reset(): void
+  /**
+   * Stop saving until resume() (marks are still recorded). Used while an operation
+   * replaces the whole project, so no half-old state is written in between.
+   */
+  suspend(): void
+  resume(): void
   readonly dirty: () => boolean
+  /** The error of the last failed save, cleared by the next successful one. */
+  readonly lastError: () => unknown
 }
 
 export function createAutosaver(opts: AutosaveOptions): Autosaver {
@@ -31,7 +45,10 @@ export function createAutosaver(opts: AutosaveOptions): Autosaver {
   let docs = new Set<ID>()
   let inFlight: Promise<void> | null = null
   let lastDirty = false
-  const isDirty = () => projectDirty || docs.size > 0 || inFlight !== null
+  let suspended = false
+  let lastError: unknown = undefined
+  const hasWork = () => projectDirty || docs.size > 0
+  const isDirty = () => hasWork() || inFlight !== null
   const report = () => {
     const d = isDirty()
     if (d !== lastDirty) {
@@ -42,6 +59,7 @@ export function createAutosaver(opts: AutosaveOptions): Autosaver {
 
   const schedule = () => {
     if (timer) clearTimeout(timer)
+    if (suspended) return
     timer = setTimeout(() => {
       timer = null
       void run()
@@ -51,20 +69,22 @@ export function createAutosaver(opts: AutosaveOptions): Autosaver {
   async function run(): Promise<void> {
     if (inFlight) {
       await inFlight
-      if (!projectDirty && docs.size === 0) return
+      if (!hasWork() || suspended) return
       return run()
     }
-    if (!projectDirty && docs.size === 0) return
+    if (!hasWork() || suspended) return
     const ids = [...docs]
     projectDirty = false
     docs = new Set()
     inFlight = (async () => {
       try {
         await opts.save(ids)
+        lastError = undefined
       } catch (err) {
         // Keep the work marked so the next change/flush retries it.
         projectDirty = true
         for (const id of ids) docs.add(id)
+        lastError = err
         opts.onError?.(err)
       }
     })()
@@ -95,14 +115,26 @@ export function createAutosaver(opts: AutosaveOptions): Autosaver {
         timer = null
       }
       await run()
+      return !isDirty()
     },
     reset() {
       if (timer) clearTimeout(timer)
       timer = null
       projectDirty = false
       docs = new Set()
+      lastError = undefined
       report()
     },
+    suspend() {
+      suspended = true
+      if (timer) clearTimeout(timer)
+      timer = null
+    },
+    resume() {
+      suspended = false
+      if (hasWork()) schedule()
+    },
     dirty: isDirty,
+    lastError: () => lastError,
   }
 }

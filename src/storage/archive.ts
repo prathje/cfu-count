@@ -38,7 +38,8 @@ export async function encodeArchive(c: ArchiveContents): Promise<Uint8Array> {
   }
   for (const image of c.project.images) {
     const doc = c.annotations.get(image.id)
-    if (doc) files[`annotations/${image.id}.json`] = utf8.encode(encodeJson(doc))
+    // Export refreshes each document's group snapshot (project.json is the source of truth).
+    if (doc) files[`annotations/${image.id}.json`] = utf8.encode(encodeJson({ ...doc, groups: c.project.annotationGroups }))
     const blob = c.images.get(image.id)
     if (blob) {
       // Already-compressed photo formats: store without deflate.

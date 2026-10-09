@@ -22,3 +22,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Local Google config (public IDs, but keep per-developer)
+.env

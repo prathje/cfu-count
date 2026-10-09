@@ -125,12 +125,15 @@ function validateStorage(v: unknown, path: string): ProjectStorageLink {
   if (kind === 'drive') {
     str(o, 'folderId', path)
     str(o, 'folderName', path)
-    const files = obj(o.files, `${path}.files`)
-    for (const k of ['projectJson', 'summaryCsv', 'annotationsFolder', 'imagesFolder']) optStr(files, k, `${path}.files`)
-    const ann = obj(files.annotations ?? {}, `${path}.files.annotations`)
-    for (const [k, id] of Object.entries(ann)) if (typeof id !== 'string') fail(`${path}.files.annotations.${k}`, 'expected a string')
-    files.annotations = ann
-    o.remoteVersions = obj(o.remoteVersions ?? {}, `${path}.remoteVersions`)
+    // Optional file-ID hints written for drive.file readers (see storage/documents.ts).
+    if (o.files !== undefined) {
+      const files = obj(o.files, `${path}.files`)
+      for (const k of ['projectJson', 'summaryCsv', 'annotationsFolder', 'imagesFolder']) optStr(files, k, `${path}.files`)
+      const ann = obj(files.annotations ?? {}, `${path}.files.annotations`)
+      for (const [k, id] of Object.entries(ann)) if (typeof id !== 'string') fail(`${path}.files.annotations.${k}`, 'expected a string')
+      files.annotations = ann
+    }
+    delete o.remoteVersions
   }
   return o as unknown as ProjectStorageLink
 }

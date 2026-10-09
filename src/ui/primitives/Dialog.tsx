@@ -30,7 +30,13 @@ type Pending =
   | { kind: 'confirm'; opts: ConfirmOptions; resolve(v: boolean): void }
   | { kind: 'prompt'; opts: PromptOptions; resolve(v: string | null): void }
 
-export function createDialogs(): Dialogs & { pending(): Pending | null; settle(value: unknown): void } {
+/** Dialogs plus the state DialogHost renders (created once by the composition root). */
+export interface DialogController extends Dialogs {
+  pending(): Pending | null
+  settle(value: unknown): void
+}
+
+export function createDialogs(): DialogController {
   const [pending, setPending] = createSignal<Pending | null>(null)
   const settle = (value: unknown) => {
     const p = pending()
@@ -56,7 +62,7 @@ export function createDialogs(): Dialogs & { pending(): Pending | null; settle(v
 }
 
 /** Renders whichever dialog is pending. */
-export function DialogHost(props: { dialogs: ReturnType<typeof createDialogs> }) {
+export function DialogHost(props: { dialogs: DialogController }) {
   let dialog: HTMLDialogElement | undefined
   let input: HTMLInputElement | undefined
   const [value, setValue] = createSignal('')

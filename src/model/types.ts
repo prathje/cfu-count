@@ -198,27 +198,17 @@ export interface ImageAnnotations {
   updatedAt: Timestamp
 }
 
+/**
+ * Where the project lives besides this browser. Drive sync bookkeeping (output
+ * file IDs, content tokens) is storage-internal and never part of the model.
+ */
 export type ProjectStorageLink =
   | { kind: 'local' }
   | {
       kind: 'drive'
       folderId: string
       folderName: string
-      /** Drive file IDs of outputs we own, so saves update instead of creating duplicates. */
-      files: {
-        projectJson?: string
-        summaryCsv?: string
-        annotationsFolder?: string
-        imagesFolder?: string
-        /** imageId -> Drive file ID of annotations/<imageId>.json */
-        annotations: Record<ID, string>
-      }
-      /**
-       * Content token (Drive `md5Checksum`) per output file ID as last read/written by this
-       * browser; used for conflict checks. `version` is not used because it also changes on
-       * metadata-only edits (rename, sharing). Not uploaded in project.json.
-       */
-      remoteVersions: Record<string, string>
+      /** Signed-in account, for display. Local only: never written to Drive or exported. */
       account?: string
     }
 

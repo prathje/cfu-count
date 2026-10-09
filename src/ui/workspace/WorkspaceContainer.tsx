@@ -1,29 +1,26 @@
 import { createMemo, createSignal, Show } from 'solid-js'
-import { unwrap } from 'solid-js/store'
 import { isConfirmed } from '../../model/annotations'
 import type { ViewportHandle } from '../../viewport/api'
 import { Viewport } from '../../viewport/Viewport'
 import { useApp } from '../context'
-import { createCurrentBitmap, type BlobSource } from '../images'
+import { bitmapError, bitmapSizeMismatch, createCurrentBitmap, readyImage, type BlobSource } from '../images'
 import { createElementWidth, createMediaQuery, MOD } from '../media'
 import { CANVAS_GUARD_ATTR } from '../primitives'
 import { FloatingToolbar, toolbarModeFor } from '../toolbar/FloatingToolbar'
-import { displayOrder } from '../../model/project'
-import { ImageHeader, type GroupTally } from './ImageHeader'
+import { groupTallies, interactionHint, sizeMismatchMessage } from './hints'
+import { ImageHeader } from './ImageHeader'
 import { ViewportFooter } from './ViewportFooter'
 import { NoImages } from './EmptyStates'
 import { AlertTriangle, Loader } from '../icons'
 
 /** Container: wires the editor to the image header, viewport, floating toolbar and footer. */
 export interface WorkspaceContainerProps {
-  onImportFiles(): void
-  onImportDrive?: () => void
   dragging: boolean
 }
 
 export function WorkspaceContainer(props: WorkspaceContainerProps) {
-  const { editor, dialogs } = useApp()
-  const { state } = editor
+  const { editor, actions } = useApp()
+  const { state, annotations, groups, images, view } = editor
   const [stage, setStage] = createSignal<HTMLElement>()
   const stageWidth = createElementWidth(stage)
   const mode = () => toolbarModeFor(stageWidth() || 1024)
@@ -32,82 +29,32 @@ export function WorkspaceContainer(props: WorkspaceContainerProps) {
   let handle: ViewportHandle | undefined
 
   // Re-created per project so a project switch re-decodes even for an identical image id.
-  const source = createMemo<BlobSource | null>(() => {
-    const id = state.project?.id
-    return id ? (imageId) => editor.getImageBlob(imageId) : null
-  })
-  const bitmap = createCurrentBitmap(() => state.currentImageId, source)
+  const source = createMemo<BlobSource | null>(() => (state.project?.id ? images.blob : null))
+  const bitmap = createCurrentBitmap(images.current, source)
 
-  const order = createMemo(() => (state.project ? displayOrder(state.project) : []))
-  const position = () => order().findIndex((i) => i.id === state.currentImageId) + 1
-  // Plain (unwrapped) records: the viewport iterates every point per redraw, and store
-  // proxies would make it subscribe to each coordinate. Reading `updatedAt` here keeps
-  // this memo (and therefore the viewport) reactive to in-place edits.
-  const confirmed = createMemo(() =>
-    editor
-      .currentAnnotations()
-      .filter((a) => (void a.updatedAt, isConfirmed(a)))
-      .map((a) => unwrap(a)),
-  )
+  const position = () => images.order().findIndex((i) => i.id === state.currentImageId) + 1
+  // Immutable snapshot (identity changes only on edits); filtering keeps that property.
+  const confirmed = createMemo(() => annotations.current().filter(isConfirmed))
   // Keep Fit clear of the floating toolbar (top) and the zoom footer (bottom).
   const fitInsets = { top: 64, right: 16, bottom: 56, left: 16 }
-  const tallies = createMemo<GroupTally[]>(() =>
-    editor.groups().map((g) => ({
-      id: g.id,
-      name: g.name,
-      color: g.color,
-      render: g.render,
-      count: editor.groupCounts().get(g.id) ?? 0,
-      hidden: g.hidden,
-      locked: g.locked,
-    })),
-  )
+  const tallies = createMemo(() => groupTallies(groups.list(), annotations.counts()))
   const imageGroupName = () => {
-    const img = editor.currentImage()
+    const img = images.current()
     return state.project?.imageGroups.find((g) => g.id === img?.imageGroupId)?.name ?? null
   }
-
-  const hint = () => {
-    const g = editor.activeGroup()
-    if (g?.hidden && state.tool !== 'pan') return `“${g.name}” is hidden — show it to edit`
-    if (g?.locked && state.tool !== 'pan') return `“${g.name}” is locked — unlock to edit`
-    if (coarse()) {
-      if (state.tool === 'pan') return 'Drag to pan · pinch to zoom'
-      const verb = state.tool === 'add' ? 'add' : 'erase'
-      return state.touchAnnotates
-        ? `Tap to ${verb} · two fingers to pan & zoom`
-        : `Pencil taps ${verb} · drag to pan · pinch to zoom · turn on touch annotates to use fingers`
-    }
-    if (state.tool === 'add') return 'Click to add · drag to pan · scroll to zoom'
-    if (state.tool === 'erase') return 'Click a marker to erase · drag to pan'
-    return 'Drag to pan · scroll to zoom'
-  }
-
-  async function deleteGroup(id: string) {
-    const g = editor.groupById(id)
-    if (!g) return
-    const usage = editor.groupUsage(id)
-    const ok = await dialogs.confirm({
-      title: `Delete “${g.name}”?`,
-      body: usage.annotations
-        ? `This removes ${usage.annotations.toLocaleString()} ${usage.annotations === 1 ? 'annotation' : 'annotations'} on ${usage.images} ${usage.images === 1 ? 'image' : 'images'}. This can’t be undone.`
-        : 'This group has no annotations.',
-      confirmLabel: 'Delete group',
-      danger: true,
-    })
-    if (ok) editor.deleteGroup(id)
-  }
+  const hint = () => interactionHint({ tool: state.tool, activeGroup: groups.active(), coarse: coarse(), touchAnnotates: state.touchAnnotates })
+  const driveConnected = () => editor.drive.state().state === 'connected'
 
   return (
     <section class="workspace" aria-label="Image workspace">
       <Show
-        when={editor.currentImage()}
+        when={images.current()}
         fallback={
           <NoImages
             dragging={props.dragging}
             importing={state.importing}
-            onImportFiles={props.onImportFiles}
-            onImportDrive={props.onImportDrive}
+            onImportFiles={() => void actions.chooseImages(null)}
+            onImportDrive={driveConnected() ? () => void images.importFromDrive(null) : undefined}
           />
         }
       >
@@ -118,75 +65,83 @@ export function WorkspaceContainer(props: WorkspaceContainerProps) {
               imageGroupName={imageGroupName()}
               width={image().width}
               height={image().height}
-              total={editor.total()}
+              total={annotations.total()}
               tallies={tallies()}
               mismatch={image().sourceMismatch}
               position={position()}
-              of={order().length}
-              onPrevious={() => editor.selectAdjacentImage(-1)}
-              onNext={() => editor.selectAdjacentImage(1)}
+              of={images.order().length}
+              onPrevious={() => images.selectAdjacent(-1)}
+              onNext={() => images.selectAdjacent(1)}
             />
             <div class="stage" ref={setStage} {...{ [CANVAS_GUARD_ATTR]: '' }}>
               <Viewport
-                image={bitmap().status === 'ready' ? (bitmap() as { bitmap: ImageBitmap }).bitmap : null}
+                image={readyImage(bitmap())?.source ?? null}
                 imageWidth={image().width}
                 imageHeight={image().height}
                 annotations={confirmed()}
                 fitInsets={fitInsets}
-                groups={editor.groups()}
+                groups={groups.list()}
                 activeGroupId={state.activeGroupId}
                 tool={state.tool}
                 touchAnnotates={state.touchAnnotates}
-                onAdd={(x, y) => editor.addAnnotation(x, y)}
-                onErase={(id) => editor.eraseAnnotation(id)}
-                onBlocked={(reason) => editor.explainBlocked(reason)}
+                onAdd={annotations.add}
+                onErase={annotations.erase}
+                onBlocked={annotations.explainBlocked}
                 onViewChange={(v) => setScale(v.scale)}
                 ref={(h) => (handle = h)}
-                label={`${image().name}: ${editor.total()} confirmed colonies. ${hint()}`}
+                label={`${image().name}: ${annotations.total()} confirmed colonies. ${hint()}`}
               />
               <Show when={bitmap().status === 'loading'}>
                 <div class="stage__overlay" role="status">
                   <Loader class="spin" size={20} aria-hidden="true" /> Loading image…
                 </div>
               </Show>
-              <Show when={bitmap().status === 'error' ? (bitmap() as { message: string }) : null}>
-                {(err) => (
+              <Show when={bitmapError(bitmap())}>
+                {(message) => (
                   <div class="stage__overlay stage__overlay--error" role="alert">
                     <AlertTriangle size={20} aria-hidden="true" />
                     <div>
                       <strong>This image can’t be displayed.</strong>
-                      <div>{err().message}</div>
+                      <div>{message()}</div>
                     </div>
+                  </div>
+                )}
+              </Show>
+              <Show when={bitmapSizeMismatch(bitmap())}>
+                {(decoded) => (
+                  <div class="stage__banner" role="alert">
+                    <AlertTriangle size={16} aria-hidden="true" />
+                    <span>{sizeMismatchMessage(image(), decoded())}</span>
                   </div>
                 )}
               </Show>
               <div class="toolbar-dock">
                 <FloatingToolbar
                   mode={mode()}
-                  groups={editor.groups()}
-                  counts={editor.groupCounts()}
-                  activeGroup={editor.activeGroup()}
+                  groups={groups.list()}
+                  counts={annotations.counts()}
+                  activeGroup={groups.active()}
                   tool={state.tool}
-                  canUndo={editor.canUndo()}
-                  canRedo={editor.canRedo()}
+                  canUndo={annotations.canUndo()}
+                  canRedo={annotations.canRedo()}
                   mod={MOD}
-                  onSelectGroup={editor.setActiveGroup}
-                  onCreateGroup={() => editor.createGroup()}
-                  onRenameGroup={editor.renameGroup}
-                  onDeleteGroup={deleteGroup}
-                  onMoveGroup={editor.moveGroup}
-                  onToggleHidden={() => state.activeGroupId && editor.toggleHidden(state.activeGroupId)}
-                  onToggleLocked={() => state.activeGroupId && editor.toggleLocked(state.activeGroupId)}
-                  onStyleChange={(patch) => state.activeGroupId && editor.setGroupStyle(state.activeGroupId, patch)}
-                  onTool={editor.setTool}
-                  onUndo={editor.undo}
-                  onRedo={editor.redo}
+                  onSelectGroup={view.setActiveGroup}
+                  onCreateGroup={() => groups.create()}
+                  onRenameGroup={groups.rename}
+                  onDeleteGroup={(id) => void actions.deleteAnnotationGroup(id)}
+                  onMoveGroup={groups.move}
+                  onToggleHidden={() => state.activeGroupId && groups.toggleHidden(state.activeGroupId)}
+                  onToggleLocked={() => state.activeGroupId && groups.toggleLocked(state.activeGroupId)}
+                  onStyleChange={(patch) => state.activeGroupId && groups.setStyle(state.activeGroupId, patch)}
+                  onTool={view.setTool}
+                  onUndo={annotations.undo}
+                  onRedo={annotations.redo}
                 />
               </div>
               <ViewportFooter
                 scale={bitmap().status === 'ready' ? scale() : null}
-                visible={editor.split().visible}
-                hidden={editor.split().hidden}
+                visible={annotations.split().visible}
+                hidden={annotations.split().hidden}
                 hint={hint()}
                 compact={stageWidth() > 0 && stageWidth() < 700}
                 showTouchToggle={coarse()}
@@ -195,7 +150,7 @@ export function WorkspaceContainer(props: WorkspaceContainerProps) {
                 onZoomOut={() => handle?.zoomOut()}
                 onFit={() => handle?.fit()}
                 onActualSize={() => handle?.setScale(1)}
-                onTouchAnnotates={editor.setTouchAnnotates}
+                onTouchAnnotates={view.setTouchAnnotates}
               />
             </div>
           </>

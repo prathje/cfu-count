@@ -87,7 +87,7 @@ describe('archive round trip', () => {
     const p = project()
     p.images[0].fingerprint = await sha256Hex(PNG_1x1)
     p.images[1].fingerprint = await sha256Hex(PNG_1x1)
-    p.storage = { kind: 'drive', folderId: 'F', folderName: 'Folder', files: { annotations: {} }, remoteVersions: { x: 'y' }, account: 'me@example.com' }
+    p.storage = { kind: 'drive', folderId: 'F', folderName: 'Folder', account: 'me@example.com' }
     const docs = new Map([['i1', doc(p, 'i1', [annotation('a1', 'g1'), annotation('a2', 'g1', { origin: 'automated', reviewStatus: 'accepted', manuallyAdjusted: true, detector: { name: 'd', version: '1', runId: 'r', confidence: null } })])]])
     const zip = await encodeArchive({ project: p, annotations: docs, images: new Map([['i1', new Blob([PNG_1x1], { type: 'image/png' })]]) })
     const out = await decodeArchive(zip)
@@ -95,7 +95,6 @@ describe('archive round trip', () => {
     expect(out.project.annotationGroups).toEqual(p.annotationGroups)
     // browser-local data is not exported
     expect(out.project.storage.kind === 'drive' && out.project.storage.account).toBeFalsy()
-    expect(out.project.storage.kind === 'drive' && out.project.storage.remoteVersions).toEqual({})
     expect(out.annotations.get('i1')).toEqual(docs.get('i1'))
     expect(out.annotations.get('i1')!.annotations[1].origin).toBe('automated')
     expect(new Uint8Array(await out.images.get('i1')!.arrayBuffer())).toEqual(PNG_1x1)

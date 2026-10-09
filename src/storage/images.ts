@@ -58,33 +58,52 @@ export interface DecodedSize {
 /** Returns oriented (EXIF-applied) pixel dimensions or throws if the browser cannot decode. */
 export type ImageDecoder = (blob: Blob) => Promise<DecodedSize>
 
+/** A decoded, drawable image (EXIF orientation applied). Call close() to release memory. */
+export interface DecodedImage {
+  source: ImageBitmap | HTMLImageElement
+  /** Oriented pixel size, as stored in ImageRecord.width/height at import. */
+  width: number
+  height: number
+  close(): void
+}
+
 /**
- * Default browser decoder. createImageBitmap with imageOrientation 'from-image'
- * applies EXIF orientation; the <img> fallback relies on CSS `image-orientation:
- * from-image`, the default in all current browsers, which also orients naturalWidth/Height.
+ * THE browser decode path, shared by import (measuring) and display (drawing) so both
+ * see the same oriented pixel size. createImageBitmap with imageOrientation
+ * 'from-image' applies EXIF orientation; the <img> fallback relies on CSS
+ * `image-orientation: from-image`, the default in all current browsers, which also
+ * orients naturalWidth/Height.
  */
-export const browserDecoder: ImageDecoder = async (blob) => {
+export async function decodeImage(blob: Blob): Promise<DecodedImage> {
   if (typeof createImageBitmap === 'function') {
     try {
       const bmp = await createImageBitmap(blob, { imageOrientation: 'from-image' })
-      const size = { width: bmp.width, height: bmp.height }
+      if (bmp.width > 0 && bmp.height > 0) return { source: bmp, width: bmp.width, height: bmp.height, close: () => bmp.close() }
       bmp.close()
-      if (size.width > 0 && size.height > 0) return size
     } catch {
       // fall through to <img> (e.g. Safari builds without Blob/option support)
     }
   }
   if (typeof document === 'undefined') throw new Error('no image decoder available')
   const url = URL.createObjectURL(blob)
+  const img = new Image()
+  img.decoding = 'async'
+  img.src = url
   try {
-    const img = new Image()
-    img.decoding = 'async'
-    img.src = url
     await img.decode()
-    return { width: img.naturalWidth, height: img.naturalHeight }
-  } finally {
+  } catch (e) {
     URL.revokeObjectURL(url)
+    throw e
   }
+  return { source: img, width: img.naturalWidth, height: img.naturalHeight, close: () => URL.revokeObjectURL(url) }
+}
+
+/** Default import decoder: measures with decodeImage. */
+export const browserDecoder: ImageDecoder = async (blob) => {
+  const decoded = await decodeImage(blob)
+  const size = { width: decoded.width, height: decoded.height }
+  decoded.close()
+  return size
 }
 
 export async function sha256Hex(data: Blob | ArrayBuffer | Uint8Array): Promise<string> {
