@@ -339,7 +339,7 @@ export function Viewport(props: ViewportProps) {
     if (!props.onSuggestionTap || !list?.length) return null
     if (!suggestionIndex) {
       const pts: SuggestionPoint[] = []
-      list.forEach((s, index) => s.state !== 'alternative' && pts.push({ x: s.x, y: s.y, r: s.r, index }))
+      list.forEach((s, index) => s.tappable !== false && pts.push({ x: s.x, y: s.y, r: s.r, index }))
       suggestionIndex = { index: createPointIndex(pts), maxR: pts.reduce((m, p) => Math.max(m, p.r), 0) }
     }
     return suggestionAt(suggestionIndex.index, suggestionIndex.maxR, view, sx, sy, pointer)

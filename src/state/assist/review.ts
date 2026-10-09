@@ -43,6 +43,90 @@ export const DEFAULT_REVIEW_SETTINGS: ReviewSettings = { method: 'fitter', sensi
 
 /** A suggestion within this fraction of its radius of an existing annotation is the same colony. */
 export const COVER_FRACTION = 0.7
+/** Two suggestions whose centres are closer than this fraction of the larger radius are one colony. */
+export const DUPLICATE_FRACTION = 0.5
+
+const support = (s: { score?: number | null }) => (typeof s.score === 'number' ? s.score : -Infinity)
+
+/**
+ * Indices of near-duplicate circles (centres within DUPLICATE_FRACTION of the
+ * larger radius of a better one). The higher-support circle is kept; ties keep
+ * the earlier one. Grid-bucketed, so thousands of suggestions stay cheap.
+ */
+export function nearDuplicates(list: readonly { x: number; y: number; r: number; score?: number | null }[]): Set<number> {
+  const dropped = new Set<number>()
+  if (list.length < 2) return dropped
+  const cell = Math.max(4, maxRadius(list))
+  const grid = new Map<string, number[]>()
+  const order = list.map((_, i) => i).sort((a, b) => support(list[b]) - support(list[a]) || a - b)
+  for (const i of order) {
+    const s = list[i]
+    const cx = Math.floor(s.x / cell)
+    const cy = Math.floor(s.y / cell)
+    let dup = false
+    for (let y = cy - 1; y <= cy + 1 && !dup; y++)
+      for (let x = cx - 1; x <= cx + 1 && !dup; x++)
+        for (const j of grid.get(`${x},${y}`) ?? []) {
+          const k = list[j]
+          if (Math.hypot(k.x - s.x, k.y - s.y) < DUPLICATE_FRACTION * Math.max(k.r, s.r)) {
+            dup = true
+            break
+          }
+        }
+    if (dup) {
+      dropped.add(i)
+      continue
+    }
+    const key = `${cx},${cy}`
+    const bucket = grid.get(key)
+    if (bucket) bucket.push(i)
+    else grid.set(key, [i])
+  }
+  return dropped
+}
+
+/** How the detector's choice and the runner-up differ in one review region. */
+export interface OptionDiff {
+  /** Pairs present in both options (primary suggestion index, alternative colony index). */
+  shared: { primary: number; alternative: number }[]
+  /** Suggestion indices only in the detector's choice. */
+  primaryOnly: number[]
+  /** Alternative colony indices only in the runner-up. */
+  alternativeOnly: number[]
+}
+
+/**
+ * Match the two explanations of a region circle by circle (nearest first,
+ * centres within DUPLICATE_FRACTION of the larger radius), so the UI can show
+ * exactly what the choice changes.
+ */
+export function diffOptions(
+  primary: readonly { index: number; x: number; y: number; r: number }[],
+  alternative: readonly { x: number; y: number; r: number }[],
+): OptionDiff {
+  const pairs: { p: number; a: number; d: number }[] = []
+  primary.forEach((p, pi) =>
+    alternative.forEach((a, ai) => {
+      const d = Math.hypot(p.x - a.x, p.y - a.y)
+      if (d < DUPLICATE_FRACTION * Math.max(p.r, a.r)) pairs.push({ p: pi, a: ai, d })
+    }),
+  )
+  pairs.sort((x, y) => x.d - y.d)
+  const usedP = new Set<number>()
+  const usedA = new Set<number>()
+  const shared: OptionDiff['shared'] = []
+  for (const { p, a } of pairs) {
+    if (usedP.has(p) || usedA.has(a)) continue
+    usedP.add(p)
+    usedA.add(a)
+    shared.push({ primary: primary[p].index, alternative: a })
+  }
+  return {
+    shared,
+    primaryOnly: primary.filter((_, i) => !usedP.has(i)).map((p) => p.index),
+    alternativeOnly: alternative.map((_, i) => i).filter((i) => !usedA.has(i)),
+  }
+}
 
 // ---------------------------------------------------------------------------
 // The layer and the per-image store
@@ -183,8 +267,10 @@ export interface ReviewCluster {
   primary: number[]
   /** Rejected suggestion indices in this cluster. */
   rejected: number[]
-  /** The runner-up explanation (new colonies only), when the detector produced one. */
+  /** The runner-up explanation (new colonies only, near-duplicates removed), when the detector produced one. */
   alternative: { k: number; colonies: { x: number; y: number; r: number }[] } | null
+  /** Circle-by-circle comparison of `primary` and `alternative` (null without an alternative). */
+  diff: OptionDiff | null
   /** Short question for the chip, e.g. "2 or 3?". */
   question: string
 }
@@ -201,6 +287,8 @@ export interface PendingView {
   /** Pending, non-rejected suggestions inside review clusters. */
   needReview: number
   rejected: number
+  /** Near-duplicate suggestions hidden (a better circle sits on the same colony). */
+  duplicates: number
 }
 
 /** Uniform grid over annotation positions for cover queries. */
@@ -262,6 +350,7 @@ function question(chosen: number, alt: number | null): string {
 export function pendingView(layer: SuggestionLayer, annotations: readonly Annotation[]): PendingView {
   const { suggestions, clusters } = layer.result
   const covered = coverChecker(annotations, maxRadius(suggestions))
+  const duplicate = nearDuplicates(suggestions)
   const resolved = resolvedClusters(layer, annotations)
   const clusterById = new Map(clusters.map((c) => [c.clusterId, c]))
   const reviewIds = new Set(clusters.filter((c) => c.status === 'review').map((c) => c.clusterId))
@@ -272,7 +361,7 @@ export function pendingView(layer: SuggestionLayer, annotations: readonly Annota
   const byCluster = new Map<string, { primary: number[]; rejected: number[] }>()
   let rejectedCount = 0
   suggestions.forEach((s, index) => {
-    if (resolved.has(s.clusterId) || covered(s.x, s.y, s.r)) return
+    if (duplicate.has(index) || resolved.has(s.clusterId) || covered(s.x, s.y, s.r)) return
     const inReview = reviewIds.has(s.clusterId)
     const isRejected = layer.rejected.has(index)
     marks.push({ index, x: s.x, y: s.y, r: s.r, state: isRejected ? 'rejected' : inReview ? 'review' : 'ok' })
@@ -289,7 +378,11 @@ export function pendingView(layer: SuggestionLayer, annotations: readonly Annota
     if (resolved.has(id)) continue
     const c = clusterById.get(id)
     const e = byCluster.get(id) ?? { primary: [], rejected: [] }
-    const alt = c?.alternative && c.alternative.colonies.length > 0 ? c.alternative : null
+    const altRaw = c?.alternative && c.alternative.colonies.length > 0 ? c.alternative : null
+    // Drop the runner-up's own near-duplicates and circles already marked by an annotation.
+    const altDup = altRaw ? nearDuplicates(altRaw.colonies) : new Set<number>()
+    const altColonies = altRaw ? altRaw.colonies.filter((p, i) => !altDup.has(i) && !covered(p.x, p.y, p.r)) : []
+    const alt = altRaw && altColonies.length > 0 ? { k: altRaw.k, colonies: altColonies } : null
     // Nothing left to decide: every suggestion here is covered and there is no alternative.
     if (e.primary.length === 0 && e.rejected.length === 0 && !alt) continue
     const pts = e.primary.concat(e.rejected).map((i) => suggestions[i])
@@ -298,7 +391,8 @@ export function pendingView(layer: SuggestionLayer, annotations: readonly Annota
       bbox: c?.bbox ?? bboxOf(pts),
       primary: e.primary,
       rejected: e.rejected,
-      alternative: alt ? { k: alt.k, colonies: alt.colonies } : null,
+      alternative: alt,
+      diff: alt ? diffOptions(e.primary.map((i) => ({ index: i, ...suggestions[i] })), alt.colonies) : null,
       question: question(e.primary.length, alt ? alt.colonies.length : null),
     })
   }
@@ -314,6 +408,7 @@ export function pendingView(layer: SuggestionLayer, annotations: readonly Annota
     suggested: okIndices.length + needReview,
     needReview,
     rejected: rejectedCount,
+    duplicates: duplicate.size,
   }
 }
 
@@ -398,9 +493,10 @@ export function planAccept(layer: SuggestionLayer, view: PendingView, scope: Acc
   }
   const covered = coverChecker(ctx.annotations, maxRadius(picked))
   const kept: Suggestion[] = []
-  for (const s of picked) {
+  // Higher support first, so a near-duplicate pair keeps its better circle.
+  for (const s of [...picked].sort((a, b) => support(b) - support(a))) {
     if (covered(s.x, s.y, s.r)) continue
-    if (kept.some((k) => Math.hypot(k.x - s.x, k.y - s.y) < COVER_FRACTION * Math.max(k.r, s.r))) continue
+    if (kept.some((k) => Math.hypot(k.x - s.x, k.y - s.y) < DUPLICATE_FRACTION * Math.max(k.r, s.r))) continue
     kept.push(s)
   }
   if (kept.length === 0) return null
@@ -463,4 +559,45 @@ export function planRejectRun(layer: SuggestionLayer, view: PendingView, storedR
   if (layer.reference) run.seedImageFingerprints = { [layer.reference.imageId]: layer.reference.fingerprint }
   else delete run.seedImageFingerprints
   return run
+}
+
+// ---------------------------------------------------------------------------
+// What to draw
+// ---------------------------------------------------------------------------
+
+/** Which option of the selected review region is shown (and would be accepted). */
+export type ReviewChoice = 'primary' | 'alternative'
+
+/** A ring to draw. `index` is the suggestion index, or -1 for a runner-up circle. */
+export interface DisplayMark {
+  x: number
+  y: number
+  r: number
+  state: PendingState | 'changed'
+  index: number
+  tappable: boolean
+}
+
+/**
+ * Rings for the viewport: ONE ring per colony. Outside the selected region the
+ * detector's choice is drawn; inside it only the shown option, with the circles
+ * that option has and the other lacks marked 'changed'. Runner-up circles are
+ * drawn but not tappable (rejecting applies to the detector's suggestions).
+ */
+export function displayMarks(view: PendingView, focus: { clusterId: string; choice: ReviewChoice } | null): DisplayMark[] {
+  const rc = focus ? view.reviewClusters.find((c) => c.clusterId === focus.clusterId) : undefined
+  if (!rc || !rc.diff || !rc.alternative) return view.marks.map((m) => ({ ...m, tappable: true }))
+  const region = new Set([...rc.primary, ...rc.rejected])
+  const out: DisplayMark[] = view.marks.filter((m) => !region.has(m.index)).map((m) => ({ ...m, tappable: true }))
+  if (focus!.choice === 'primary') {
+    const changed = new Set(rc.diff.primaryOnly)
+    for (const m of view.marks) {
+      if (!region.has(m.index)) continue
+      out.push({ ...m, state: m.state === 'rejected' ? 'rejected' : changed.has(m.index) ? 'changed' : 'review', tappable: true })
+    }
+  } else {
+    const changed = new Set(rc.diff.alternativeOnly)
+    rc.alternative.colonies.forEach((c, i) => out.push({ x: c.x, y: c.y, r: c.r, state: changed.has(i) ? 'changed' : 'review', index: -1, tappable: false }))
+  }
+  return out
 }

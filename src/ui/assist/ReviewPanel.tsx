@@ -1,6 +1,6 @@
 import { For, Show } from 'solid-js'
 import type { DetectMethod } from '../../detection/types'
-import type { ReviewSettings, ReferenceCandidate, SeedSource, ReviewCluster } from '../../state/assist'
+import type { ReviewSettings, ReferenceCandidate, SeedSource, ReviewCluster, ReviewChoice } from '../../state/assist'
 import { AlertTriangle, Check, ChevronLeft, ChevronRight, Loader, Sparkles, Undo, X } from '../icons'
 import { Button, IconButton, SegmentedControl, Slider } from '../primitives'
 import { GroupSwatch } from '../shared/GroupSwatch'
@@ -14,6 +14,8 @@ export interface ReviewSummary {
   rejected: number
   okCount: number
   tooLarge: number
+  /** Near-duplicate circles hidden (detector proposed two circles on one colony). */
+  duplicates: number
   calibration: { summary: string; warnings: readonly string[]; tentative: boolean }
   /** Rim band excluded from the search, in image px. */
   rimPx: number
@@ -45,8 +47,10 @@ export interface ReviewPanelProps {
   review: { position: number; total: number; cluster: ReviewCluster } | null
   onPrevReview(): void
   onNextReview(): void
-  onAcceptPrimary(): void
-  onAcceptAlternative(): void
+  /** Option of the selected region that is shown in the image and accepted. */
+  reviewChoice: ReviewChoice
+  onReviewChoice(choice: ReviewChoice): void
+  onAcceptReview(): void
   onAcceptOk(): void
   onRejectAll(): void
   onRestoreAll(): void
@@ -64,6 +68,19 @@ const METHODS: { value: DetectMethod; label: string }[] = [
 
 const sensitivityText = (v: number) => (v < 0.35 ? 'Fewer' : v > 0.65 ? 'More' : 'Balanced') + ` (${Math.round(v * 100)} %)`
 const toleranceText = (v: number) => (v < 0.85 ? 'Strict' : v > 1.25 ? 'Loose' : 'Normal') + ` (×${v.toFixed(2)})`
+/** Colonies the shown option of a review region would add. */
+const shownCount = (c: ReviewCluster, choice: ReviewChoice) => (choice === 'alternative' && c.alternative ? c.alternative.colonies.length : c.primary.length)
+
+/** "3 colonies | 4 colonies" (letters disambiguate equal counts). */
+function optionLabels(primary: number, alternative: number): { value: ReviewChoice; label: string }[] {
+  const label = (n: number) => (n === 0 ? 'None' : plural(n, 'colony', 'colonies'))
+  const same = primary === alternative
+  return [
+    { value: 'primary', label: label(primary) + (same ? ' (A)' : '') },
+    { value: 'alternative', label: label(alternative) + (same ? ' (B)' : '') },
+  ]
+}
+
 const seconds = (ms: number) => `${(ms / 1000).toFixed(1)} s`
 
 /**
@@ -215,6 +232,9 @@ export function ReviewPanel(props: ReviewPanelProps) {
                   <li>
                     A band of about {Math.round(sum().rimPx)} px along the plate wall is not searched. Mark colonies there by hand.
                   </li>
+                  <Show when={sum().duplicates > 0}>
+                    <li>{plural(sum().duplicates, 'duplicate circle', 'duplicate circles')} on the same colony hidden (the better-supported one is kept).</li>
+                  </Show>
                   <Show when={sum().tooLarge > 0}>
                     <li>{plural(sum().tooLarge, 'area is', 'areas are')} too dense to separate (red outline): count by hand.</li>
                   </Show>
@@ -235,25 +255,28 @@ export function ReviewPanel(props: ReviewPanelProps) {
                       </span>
                       <IconButton icon={ChevronRight} label="Next region" size="sm" onClick={() => props.onNextReview()} />
                     </div>
+                    <Show when={r().cluster.alternative}>
+                      {(alt) => (
+                        <SegmentedControl
+                          label="Number of colonies in this region"
+                          value={props.reviewChoice}
+                          options={optionLabels(r().cluster.primary.length, alt().colonies.length)}
+                          onChange={(v) => props.onReviewChoice(v)}
+                        />
+                      )}
+                    </Show>
                     <div class="review-nav__actions">
-                      <Show when={r().cluster.primary.length > 0}>
-                        <Button size="sm" icon={Check} onClick={() => props.onAcceptPrimary()}>
-                          {`Accept ${r().cluster.primary.length}`}
+                      <Show when={shownCount(r().cluster, props.reviewChoice) > 0}>
+                        <Button size="sm" icon={Check} onClick={() => props.onAcceptReview()}>
+                          {`Accept ${plural(shownCount(r().cluster, props.reviewChoice), 'colony', 'colonies')}`}
                         </Button>
-                      </Show>
-                      <Show when={r().cluster.alternative}>
-                        {(alt) => (
-                          <Button size="sm" icon={Check} onClick={() => props.onAcceptAlternative()}>
-                            {r().cluster.primary.length > 0 ? `Accept ${alt().colonies.length} instead` : `Add ${alt().colonies.length}`}
-                          </Button>
-                        )}
                       </Show>
                       <Button size="sm" variant="ghost" onClick={() => props.onNextReview()}>
                         Skip
                       </Button>
                     </div>
                     <Show when={r().cluster.alternative}>
-                      <p class="review-nav__legend">Dashed rings: the suggestion · dotted amber rings: the alternative.</p>
+                      <p class="review-nav__legend">Solid amber rings: where this option differs from the other.</p>
                     </Show>
                   </div>
                 )}

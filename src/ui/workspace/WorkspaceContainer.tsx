@@ -4,7 +4,7 @@ import { imagesInGroup } from '../../model/project'
 import type { ImageDisplayAdjust } from '../../model/types'
 import { isConfirmed, labelNumber } from '../../model/annotations'
 import type { AddInfo, BlockedReason, ReviewClusterMark, SuggestionMark, ViewportHandle } from '../../viewport/api'
-import { MIN_SEEDS, stageLabel, type AcceptScope } from '../../state/assist'
+import { MIN_SEEDS, displayMarks, stageLabel, type AcceptScope, type ReviewChoice } from '../../state/assist'
 import { ReviewPanel, type ReviewSummary } from '../assist/ReviewPanel'
 import { Viewport } from '../../viewport/Viewport'
 import { useApp } from '../context'
@@ -110,12 +110,15 @@ export function WorkspaceContainer(props: WorkspaceContainerProps) {
   createEffect(() => assist.setSizeMismatch(!!bitmapSizeMismatch(bitmap())))
   const pending = assist.view
   const [reviewIdx, setReviewIdx] = createSignal(0)
-  // Pending rings, plus the runner-up explanation of the selected review region (for comparison).
+  // Which option of the selected review region is shown (and accepted); resets per region.
+  const [reviewChoice, setReviewChoice] = createSignal<ReviewChoice>('primary')
+  createEffect(on(() => currentReview()?.cluster.clusterId, () => setReviewChoice('primary')))
+  // One ring per colony: the detector's choice, or in the selected region only the shown option.
   const suggestionMarks = createMemo<readonly (SuggestionMark & { index: number })[]>(() => {
     const v = assist.open() ? pending() : null
     if (!v) return []
-    const alt = currentReview()?.cluster.alternative?.colonies ?? []
-    return alt.length ? [...v.marks, ...alt.map((c) => ({ ...c, state: 'alternative' as const, index: -1 }))] : v.marks
+    const c = currentReview()?.cluster
+    return displayMarks(v, c ? { clusterId: c.clusterId, choice: reviewChoice() } : null)
   })
   createEffect(on(() => assist.layer()?.result, () => setReviewIdx(0)))
   const reviewList = () => pending()?.reviewClusters ?? []
@@ -176,6 +179,7 @@ export function WorkspaceContainer(props: WorkspaceContainerProps) {
       rejected: v.rejected,
       okCount: v.okIndices.length,
       tooLarge: v.tooLarge.length,
+      duplicates: v.duplicates,
       calibration: l.result.calibration,
       rimPx: l.result.roi.marginPx,
       elapsedMs: l.elapsedMs,
@@ -405,13 +409,11 @@ export function WorkspaceContainer(props: WorkspaceContainerProps) {
                   review={currentReview()}
                   onPrevReview={() => focusReview(reviewIdx() - 1)}
                   onNextReview={() => focusReview(reviewIdx() + 1)}
-                  onAcceptPrimary={() => {
+                  reviewChoice={reviewChoice()}
+                  onReviewChoice={setReviewChoice}
+                  onAcceptReview={() => {
                     const c = currentReview()
-                    if (c) accept({ kind: 'cluster', clusterId: c.cluster.clusterId, choice: 'primary' })
-                  }}
-                  onAcceptAlternative={() => {
-                    const c = currentReview()
-                    if (c) accept({ kind: 'cluster', clusterId: c.cluster.clusterId, choice: 'alternative' })
+                    if (c) accept({ kind: 'cluster', clusterId: c.cluster.clusterId, choice: c.cluster.alternative ? reviewChoice() : 'primary' })
                   }}
                   onAcceptOk={() => accept({ kind: 'ok' })}
                   onRejectAll={assist.rejectAll}

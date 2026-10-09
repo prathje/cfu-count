@@ -426,7 +426,7 @@ function quantiseRadius(r: number): number {
   return r < 16 ? Math.round(r * 2) / 2 : Math.round(r)
 }
 
-type SuggestionState = 'ok' | 'review' | 'rejected' | 'alternative'
+type SuggestionState = 'ok' | 'review' | 'rejected' | 'changed'
 
 const suggestionSpriteCache = new Map<string, MarkerSprite>()
 const SUGGESTION_SPRITE_MAX = 160
@@ -446,12 +446,13 @@ function strokeSuggestion(
   c.beginPath()
   c.arc(x, y, r, 0, Math.PI * 2)
   c.strokeStyle = state === 'rejected' ? 'rgba(0,0,0,0.35)' : 'rgba(0,0,0,0.55)'
-  c.lineWidth = 3.25
+  c.lineWidth = state === 'changed' ? 4.5 : 3.25
   c.stroke()
   c.setLineDash([dash, dash * 0.75])
-  c.strokeStyle = state === 'rejected' ? REJECTED_COLOR : state === 'alternative' ? REVIEW_OUTLINE : color
-  c.lineWidth = state === 'rejected' || state === 'alternative' ? 1.25 : 1.75
-  if (state === 'alternative') c.setLineDash([1.5, 3])
+  c.strokeStyle = state === 'rejected' ? REJECTED_COLOR : state === 'changed' ? REVIEW_OUTLINE : color
+  c.lineWidth = state === 'rejected' ? 1.25 : state === 'changed' ? 2.5 : 1.75
+  // What the review choice changes: a solid amber ring, unlike every dashed suggestion.
+  if (state === 'changed') c.setLineDash([])
   c.stroke()
   c.setLineDash([])
   if (state === 'rejected') {

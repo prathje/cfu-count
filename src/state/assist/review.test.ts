@@ -4,6 +4,9 @@ import { makeManualAnnotation } from '../../model/annotations'
 import type { ClusterResult, Suggestion } from '../../detection/types'
 import {
   carryRejections,
+  diffOptions,
+  displayMarks,
+  nearDuplicates,
   dropLayer,
   emptyStore,
   makeLayer,
@@ -265,5 +268,96 @@ describe('reject-only run', () => {
     const v = pendingView(l, plan.annotations)
     expect(planRejectRun(l, v, new Set(['acc-1']), '')).toBeNull()
     expect(planRejectRun(l, pendingView(l, []), new Set(), '')!.negatives).toEqual([{ x: 50, y: 10 }])
+  })
+})
+
+describe('near-duplicate suggestions', () => {
+  const scored = (x: number, y: number, score: number | null, clusterId = 'c1', r = 10): Suggestion => ({ x, y, r, score, clusterId, status: 'ok' })
+
+  it('keeps the higher-support circle of a pair within 0.5 r', () => {
+    expect([...nearDuplicates([scored(100, 100, 0.2), scored(103, 101, 0.9), scored(200, 100, 0.1)])]).toEqual([0])
+    expect(nearDuplicates([scored(100, 100, 0.2), scored(106, 100, 0.9)]).size).toBe(0) // touching neighbours are distinct
+    expect([...nearDuplicates([scored(0, 0, null), scored(1, 1, 0.1)])]).toEqual([0]) // no score loses
+  })
+
+  it('hides duplicates from the pending view and its counts, and never accepts both', () => {
+    const l = layer([scored(100, 100, 0.2), scored(102, 100, 0.9), scored(300, 300, 0.5, 'c2')], [cluster('c1', 'ok'), cluster('c2', 'ok')])
+    const v = pendingView(l, [])
+    expect(v.marks.map((m) => m.index)).toEqual([1, 2])
+    expect(v.suggested).toBe(2)
+    expect(v.duplicates).toBe(1)
+    const plan = planAccept(l, v, { kind: 'ok' }, ctx([]))!
+    expect(plan.annotations.map((a) => a.x)).toEqual([102, 300])
+  })
+})
+
+describe('review options', () => {
+  it('matches the two explanations circle by circle', () => {
+    const d = diffOptions(
+      [
+        { index: 4, x: 0, y: 0, r: 10 },
+        { index: 5, x: 30, y: 0, r: 10 },
+      ],
+      [
+        { x: 2, y: 1, r: 10 },
+        { x: 26, y: 0, r: 8 },
+        { x: 38, y: 0, r: 8 },
+      ],
+    )
+    expect(d.shared).toEqual([
+      { primary: 4, alternative: 0 },
+      { primary: 5, alternative: 1 },
+    ])
+    expect(d.primaryOnly).toEqual([])
+    expect(d.alternativeOnly).toEqual([2])
+  })
+
+  it('gives each review region a diff and drops the runner-up\'s own duplicates', () => {
+    const l = layer(
+      [sug(100, 100, 'c3', 'review'), sug(130, 100, 'c3', 'review')],
+      [cluster('c3', 'review', { chosenK: 2, runnerUpK: 3, alternative: { k: 3, colonies: [{ x: 101, y: 100, r: 10 }, { x: 102, y: 101, r: 10 }, { x: 129, y: 100, r: 10 }, { x: 150, y: 100, r: 8 }] } })],
+    )
+    const rc = pendingView(l, []).reviewClusters[0]
+    expect(rc.alternative!.colonies).toHaveLength(3)
+    expect(rc.question).toBe('2 or 3?')
+    expect(rc.diff).toEqual({ shared: [{ primary: 0, alternative: 0 }, { primary: 1, alternative: 1 }], primaryOnly: [], alternativeOnly: [2] })
+  })
+})
+
+describe('display marks', () => {
+  const l = layer(
+    [sug(10, 10, 'c1'), sug(100, 100, 'c3', 'review'), sug(130, 100, 'c3', 'review')],
+    [cluster('c1', 'ok'), cluster('c3', 'review', { chosenK: 2, runnerUpK: 3, alternative: { k: 3, colonies: [{ x: 101, y: 100, r: 10 }, { x: 129, y: 101, r: 10 }, { x: 150, y: 100, r: 8 }] } })],
+  )
+  const v = pendingView(l, [])
+
+  it('draws one ring per colony: the detector choice outside the selected region', () => {
+    expect(displayMarks(v, null).map((m) => [m.index, m.state])).toEqual([
+      [0, 'ok'],
+      [1, 'review'],
+      [2, 'review'],
+    ])
+  })
+
+  it('shows only the selected option in the region and marks what it changes', () => {
+    const primary = displayMarks(v, { clusterId: 'c3', choice: 'primary' })
+    expect(primary).toHaveLength(3)
+    expect(primary.filter((m) => m.state === 'changed')).toEqual([])
+    const alt = displayMarks(v, { clusterId: 'c3', choice: 'alternative' })
+    expect(alt.map((m) => [m.x, m.state, m.tappable])).toEqual([
+      [10, 'ok', true],
+      [101, 'review', false],
+      [129, 'review', false],
+      [150, 'changed', false],
+    ])
+  })
+
+  it('marks the circles only the detector choice has when it is the larger option', () => {
+    const l2 = layer([sug(100, 100, 'c3', 'review'), sug(130, 100, 'c3', 'review')], [cluster('c3', 'review', { chosenK: 2, runnerUpK: 1, alternative: { k: 1, colonies: [{ x: 101, y: 100, r: 12 }] } })])
+    const m = displayMarks(pendingView(l2, []), { clusterId: 'c3', choice: 'primary' })
+    expect(m.map((x) => [x.index, x.state])).toEqual([
+      [0, 'review'],
+      [1, 'changed'],
+    ])
   })
 })
