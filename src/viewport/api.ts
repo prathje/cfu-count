@@ -47,4 +47,9 @@ export interface ViewportProps {
   ref?: (handle: ViewportHandle) => void
   /** Optional aria label / description for the canvas. */
   label?: string
+  /**
+   * Screen areas (CSS px) covered by overlaid UI (floating toolbar, zoom footer).
+   * Fit and auto-fit contain the image within the viewport minus these insets.
+   */
+  fitInsets?: { top: number; right: number; bottom: number; left: number }
 }

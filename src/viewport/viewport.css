@@ -1,0 +1,90 @@
+.cfu-viewport {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #dfe2e6;
+  outline: none;
+  /* No text selection / iOS long-press callout anywhere inside the viewport. */
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.cfu-viewport:focus-visible {
+  box-shadow: inset 0 0 0 2px #2f6fde;
+}
+
+.cfu-viewport__layer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  pointer-events: none;
+}
+
+/* The input surface: only this element suppresses browser touch gestures. */
+.cfu-viewport__surface {
+  pointer-events: auto;
+  touch-action: none;
+}
+
+.cfu-viewport__hover {
+  position: absolute;
+  left: 0;
+  top: 0;
+  box-sizing: border-box;
+  border-radius: 50%;
+  pointer-events: none;
+  will-change: transform;
+}
+
+.cfu-viewport__hover--add {
+  border: 1.5px dashed var(--ring-color, #fff);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45), inset 0 0 0 1px rgba(0, 0, 0, 0.35);
+}
+
+.cfu-viewport__hover--erase-hit {
+  border: 2px solid #fff;
+  box-shadow: 0 0 0 2px #d13438, inset 0 0 0 1px rgba(0, 0, 0, 0.5);
+}
+
+.cfu-viewport__hover--erase-miss {
+  border: 1px dashed rgba(255, 255, 255, 0.85);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
+}
+
+/* Positioned with left/top only: the animation owns `transform` (scale about the
+   element centre). Never combine a translate with an animated scale here, or the
+   offset gets scaled too and the ring flies across the viewport. */
+.cfu-viewport__pulse {
+  position: absolute;
+  box-sizing: border-box;
+  border-radius: 50%;
+  pointer-events: none;
+  border: 2px solid #ffb000;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.6);
+  animation: cfu-viewport-pulse 700ms ease-out forwards;
+}
+
+@keyframes cfu-viewport-pulse {
+  0% {
+    opacity: 1;
+    transform: scale(0.7);
+  }
+  60% {
+    opacity: 0.9;
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.8);
+  }
+}
+
+/* Reduced motion: a static ring, removed by a timer in Viewport.tsx (so global
+   "animation-duration: 0.01ms" overrides cannot hide it instantly). */
+.cfu-viewport__pulse--static {
+  animation: none;
+}
