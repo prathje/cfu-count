@@ -7,6 +7,7 @@ import { AppContext, type AppServices } from './ui/context'
 import { createThumbnailCache } from './ui/images'
 import { createDialogs, createToaster } from './ui/primitives'
 import { createProjectActions } from './ui/projectActions'
+import { shouldWarnBeforeUnload } from './state/unload'
 import { AppShell } from './ui/AppShell'
 
 /** Composition root: chooses the repository (the demo one is a lazily loaded chunk), then builds the services once. */
@@ -29,6 +30,15 @@ function AppRoot(props: { choice: RepositoryChoice }) {
   const services: AppServices = { editor, assist, toaster, dialogs, thumbnails, actions, isDemo }
 
   onMount(() => void editor.projects.init())
+
+  // Warn before closing the tab only when local work is at risk (state/unload.ts).
+  const onBeforeUnload = (e: BeforeUnloadEvent) => {
+    if (!shouldWarnBeforeUnload({ status: editor.saveStatus(), saveFailed: editor.saveFailed(), dirtySince: editor.dirtySince(), now: Date.now() })) return
+    e.preventDefault()
+    e.returnValue = '' // older Safari / Chrome need returnValue set
+  }
+  window.addEventListener('beforeunload', onBeforeUnload)
+  onCleanup(() => window.removeEventListener('beforeunload', onBeforeUnload))
 
   return (
     <AppContext.Provider value={services}>

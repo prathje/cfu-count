@@ -52,6 +52,10 @@ export interface Editor {
   readonly saveStatus: Accessor<SaveStatus>
   /** True while edits wait for (or are in) the debounced local save. */
   readonly isDirty: Accessor<boolean>
+  /** When the editor last became dirty (ms epoch), or null when everything is saved locally. */
+  readonly dirtySince: Accessor<number | null>
+  /** The last local save failed and nothing has been saved since. */
+  readonly saveFailed: Accessor<boolean>
 
   readonly annotations: AnnotationCommands
   readonly groups: GroupCommands
@@ -94,6 +98,8 @@ export function createEditor(repo: ProjectRepository, deps: EditorDeps): Editor 
     let session: ProjectSession | null = null
     let unsubscribeSession: (() => void) | null = null
     const [dirty, setDirty] = createSignal(false)
+    const [dirtySince, setDirtySince] = createSignal<number | null>(null)
+    const [saveFailed, setSaveFailed] = createSignal(false)
 
     const saver = createAutosaver({
       delay: deps.autosaveDelay ?? 400,
@@ -109,8 +115,15 @@ export function createEditor(repo: ProjectRepository, deps: EditorDeps): Editor 
         }
         await session.save(snapshot, docs)
       },
-      onDirtyChange: setDirty,
+      onDirtyChange(d) {
+        batch(() => {
+          setDirty(d)
+          setDirtySince(d ? Date.now() : null)
+          if (!d) setSaveFailed(false)
+        })
+      },
       onError(err) {
+        setSaveFailed(true)
         console.error('Local save failed', err)
         notify({
           tone: 'error',
@@ -250,6 +263,8 @@ export function createEditor(repo: ProjectRepository, deps: EditorDeps): Editor 
       state,
       saveStatus,
       isDirty: dirty,
+      dirtySince,
+      saveFailed,
       annotations,
       groups,
       images,

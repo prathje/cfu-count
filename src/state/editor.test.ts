@@ -395,6 +395,23 @@ describe('editor', () => {
     expect(repo.open).toHaveBeenCalledTimes(1) // only the initial open
   })
 
+  it('tracks when edits became unsaved and whether the last local save failed (beforeunload)', async () => {
+    const { editor, control } = await setup()
+    await editor.projects.flush() // the default group created on open
+    expect(editor.dirtySince()).toBeNull()
+    editor.annotations.add(1, 1)
+    expect(editor.dirtySince()).toEqual(expect.any(Number))
+    control.failSave = true
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    expect(await editor.projects.flush()).toBe(false)
+    expect(editor.saveFailed()).toBe(true)
+    control.failSave = false
+    expect(await editor.projects.flush()).toBe(true)
+    expect(editor.saveFailed()).toBe(false)
+    expect(editor.dirtySince()).toBeNull()
+    err.mockRestore()
+  })
+
   it('switches after the user agrees to discard unsaved edits', async () => {
     const { editor, control } = await setup({ confirm: async () => true })
     editor.annotations.add(1, 1)
