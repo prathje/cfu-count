@@ -17,6 +17,7 @@ import { createPointIndex, type PointIndex } from './spatial-index'
 import { displayRadius } from './marker-size'
 import { displayKey } from '../model/display'
 import { AdjustedLayer } from './adjusted-layer'
+import { attachInputDebug, inputDebugEnabled } from './input-debug'
 import { createAdjustProcessor } from './adjust-processor'
 import {
   buildPyramid,
@@ -632,6 +633,7 @@ export function Viewport(props: ViewportProps) {
     surface.addEventListener('touchmove', prevent, opts)
     surface.addEventListener('contextmenu', prevent, opts)
     surface.addEventListener('dblclick', prevent, opts)
+    if (inputDebugEnabled()) onCleanup(attachInputDebug(surface, root, () => machine.modeKind))
     root.addEventListener('selectstart', prevent, opts)
     root.addEventListener('dragstart', prevent, opts)
     root.addEventListener('keydown', onKeyDown)

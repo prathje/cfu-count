@@ -194,10 +194,19 @@ describe('touch', () => {
     expect(m.modeKind).toBe('idle')
   })
 
-  it('large contacts are ignored as palms', () => {
+  it('large contacts are ignored as palms while a pen is in use', () => {
+    m.down(s(9, 'pen', 0, 0), add)
+    m.up(s(9, 'pen', 0, 0))
     m.down(s(1, 'touch', 0, 0, { width: 120, height: 120 }), addTouch)
     expect(m.modeKind).toBe('idle')
     expect(m.up(s(1, 'touch', 0, 0))).toEqual([])
+  })
+
+  it('large finger contacts still navigate without a pen (iPad Safari reports big touch sizes)', () => {
+    m.down(s(1, 'touch', 0, 0, { width: 80, height: 80 }), add)
+    expect(m.modeKind).toBe('drag')
+    m.down(s(2, 'touch', 100, 0, { width: 120, height: 120 }), add)
+    expect(m.modeKind).toBe('pinch')
   })
 
   it('touch during a mouse press is ignored', () => {

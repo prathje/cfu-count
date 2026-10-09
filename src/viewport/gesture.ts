@@ -69,8 +69,13 @@ export const DRAG_THRESHOLD: Record<PointerKind, number> = { mouse: 4, pen: 8, t
 export const TOUCH_TAP_MAX_MS = 500
 /** After any pen activity, fingers navigate only for this long. */
 export const PEN_RECENT_MS = 10_000
-/** Contacts larger than this (CSS px, either dimension) are treated as palms, where reported. */
-export const PALM_CONTACT_PX = 60
+/**
+ * Contacts larger than this (CSS px, either dimension) are treated as palms, but only
+ * while a pen is in use. iPadOS Safari reports finger contact sizes well above
+ * desktop emulation (a normal fingertip can exceed 60 px), so size alone must never
+ * block navigation; iPadOS does its own palm rejection while the Pencil is in use.
+ */
+export const PALM_CONTACT_PX = 100
 
 interface Tracked {
   id: number
@@ -172,8 +177,9 @@ export class GestureMachine {
     }
 
     // touch
-    const palm =
+    const large =
       (p.width !== undefined && p.width > PALM_CONTACT_PX) || (p.height !== undefined && p.height > PALM_CONTACT_PX)
+    const palm = large && this.penSeenRecently(p.time)
     if (palm || this.hasActivePointerOfType('pen') || this.ownerType() === 'mouse') {
       t.ignored = true
       return fx
