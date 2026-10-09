@@ -2,38 +2,49 @@
  * Mainline H: seed-constrained union-of-circles fitter (method brief §3–5).
  *
  * Per foreground cluster (connected component of the mask):
- *  1. Candidates: distance-transform peaks, circles fitted to contour arcs
- *     between concave points (outer and hole contours), LoG peaks at the prior
- *     scales; de-duplicated.
+ *  1. Partition into UNITS (sub-clusters): watershed basins of the lightly
+ *     smoothed contrast plane (plus a little distance-transform depth), so cuts
+ *     follow the darker seams between colonies; neighbouring basins merge when
+ *     there is evidence of neither a seam nor a neck, up to ~6 typical colonies;
+ *     a unit larger than ~10 colonies is cut geometrically (k-means on its
+ *     pixels). Units are fitted independently: the other units' pixels are
+ *     "someone else's" (covering them costs half a background pixel, leaving
+ *     them uncovered costs nothing).
  *  2. Objective, in units of ONE TYPICAL COLONY (A0 = π r_med²):
- *       J = (FN + FP)/A0                       soft mask: Σ m over uncovered px + Σ (1 − m) over covered px,
- *                                              m = smoothstep of F over 0.3–0.7 × the cluster's brightness (0 on background and
+ *       J = (FN + wFP·FP)/A0                   soft mask: Σ m over uncovered px + Σ (1 − m) over covered px,
+ *                                              m = smoothstep of F over 0.3–0.7 × the unit's brightness (0 on background and
  *                                              in the 1–2 px seams between touching colonies, 1 inside)
  *         + α Σ_i E_i                          edge: exposed disk boundary away from the observed boundary
- *         + β Σ_i huber±((log r_i − μ)/s)      seed-derived size prior (oversize ×2, undersize ×0.5)
+ *         + β Σ_i huber±((log r_i − μ)/s)      seed-derived size prior (oversize ×2, undersize ×0.5; 'brief': ½ z²)
  *         + γ Σ_i A_i                          appearance: disk interior dimmer than the seeds, or ring-like
  *         + λ Σ_i (r_i/r_med)²                 count penalty, proportional to disk area ('brief': λ K)
  *         + ω Σ_pairs overlap                  deep overlaps (centres closer than 0.7 (r_i + r_j))
  *     Existing annotations (any group) are fixed disks: they cover pixels and
  *     hide boundaries but pay no prior/appearance/count terms and never move.
- *  3. Search: lazy greedy forward selection from the candidates, local
- *     coordinate refinement of (x, y, r), pruning of disks whose removal lowers
- *     J, and a second greedy pass.
- *  4. Diagnostics: per-colony support m_i = J(without i) − J; runner-up K from
- *     the best removal (K−1) or addition (K+1); cluster status 'review' when
- *     the gap is below `reviewGap`, 'too-large' above kMax typical colonies.
+ *  3. A TRUE K SWEEP per unit: K_est = open area / A0, and for every K in
+ *     0 … K_max = min(⌈2 K_est⌉ + 2, 30) the best K-circle configuration from
+ *     several starts (previous K plus a disk at the residual peak; farthest-point
+ *     k-means; distance/core-peak seeding; seeded random k-means++), each jointly
+ *     refined in (x, y, r); then a backward pass (K+1 minus its weakest disk).
+ *     Deterministic: a seeded RNG per unit, no dependence on the slider.
+ *  4. The sweep tables store, per K, the best few configurations with their
+ *     λ- and prior-free objective, so a slider change (λ, prior width) only
+ *     re-scores: pick the minimum over all K; the runner-up is the best
+ *     configuration of any OTHER K. A unit is flagged for review when its chosen
+ *     K is not stable within a small slider neighbourhood (sensitivity ± 0.05,
+ *     size tolerance ± 10 %).
  *
- * All terms are evaluated incrementally on the cluster patch raster, so the
+ * All terms are evaluated incrementally on the unit patch raster, so the
  * cost of a move is O(disk area + neighbouring boundary samples).
  */
-import { fillHoles, labelComponents } from '../image/components.ts'
-import { arcSpan, circleResidual, concavePoints, fitCircleKasa, refineCircle, splitArcs, traceAllOuterContours } from '../image/contour.ts'
+import { labelComponents } from '../image/components.ts'
 import { distanceTransform, squaredDistanceTo } from '../image/distance.ts'
-import { detectBlobsLoG, localMaxima, logResponse, nmsCircles } from '../image/blobs.ts'
-import { cropPlane, makeMask, type Mask, type Plane } from '../image/plane.ts'
+import { gaussianBlur } from '../image/filters.ts'
+import { localMaxima } from '../image/blobs.ts'
+import { makeMask, type Mask, type Plane } from '../image/plane.ts'
+import { watershed } from '../image/watershed.ts'
 import type { ClusterResult, Suggestion } from '../types.ts'
 import { bboxToOriginal, clusterId, foregroundMask, sensitivityParams, type AnalysisPrior, type FixedColony, type MethodContext } from './common.ts'
-import { priorRadii } from './log.ts'
 import type { MethodOutput } from './watershed.ts'
 
 export interface FitWeights {
@@ -107,14 +118,18 @@ export interface ClusterFitParams {
   /** Edge tolerance τ (px): misalignment saturates at τ. */
   tau: number
   rMaxFit: number
-  /** F level of the "core" mask used for extra candidates (≈ 0.75 × seed contrast). */
+  /** F level of the "core" mask used for extra start positions (≈ 0.75 × seed contrast). */
   coreLevel: number
 }
 
 /** Weight of exposed disk boundary that lies INSIDE the foreground, relative to on the background. */
 export const INTERIOR_EDGE = 0.25
+/** Cost of covering a pixel that belongs to a NEIGHBOURING unit (relative to a background pixel). */
+export const NEIGHBOUR_COVER = 0.5
 
-/** Fit state for one cluster patch. Exposed for unit tests. */
+type Bounds = { minX: number; minY: number; maxX: number; maxY: number }
+
+/** Fit state for one unit patch. Exposed for unit tests. */
 export class ClusterFit {
   readonly w: number
   readonly h: number
@@ -125,16 +140,18 @@ export class ClusterFit {
   readonly dEdge: Float32Array
   readonly coverPx: Int16Array
   readonly a0: number
-  /** Σ m over uncovered pixels (float). */
+  /** Σ over uncovered pixels of their uncovered cost (m on own pixels, 0 elsewhere). */
   FN = 0
-  /** Σ (1 − m) over covered pixels (float). */
+  /** Σ over covered pixels of their covered cost (1 − m own, NEIGHBOUR_COVER on other units, 1 on background). */
   FP = 0
-  /** Per-pixel soft membership m ∈ [0, 1]. */
+  /** Per-pixel soft membership m ∈ [0, 1] (own pixels; 0 elsewhere). */
   readonly mIn: Float32Array
+  private readonly uncov: Float32Array
+  private readonly cov: Float32Array
   sumEdge = 0
   sumPrior = 0
   sumApp = 0
-  /** Σ (r_i / r_med)² over free disks: the count penalty scales with disk area so small colonies are not priced out. */
+  /** Σ (r_i / r_med)² over free disks (or K for the brief's flat count). */
   sumCount = 0
   /** Σ over free-disk pairs of max(0, 0.7 (r_i + r_j) − d_ij)² / r_med². */
   sumOverlap = 0
@@ -146,7 +163,11 @@ export class ClusterFit {
   private grid = new Map<number, Disk[]>()
   private cell: number
 
-  constructor(mask: Mask, F: Plane, ox: number, oy: number, p: ClusterFitParams) {
+  /**
+   * @param mask  foreground of the whole cluster (patch raster)
+   * @param own   pixels of the unit being fitted (default: the whole mask)
+   */
+  constructor(mask: Mask, F: Plane, ox: number, oy: number, p: ClusterFitParams, own?: Uint8Array) {
     this.p = p
     this.hideTol = 0.5 * p.tau
     this.w = mask.width
@@ -157,22 +178,30 @@ export class ClusterFit {
     this.F = F.data
     this.a0 = Math.PI * p.prior.rMed * p.prior.rMed
     this.coverPx = new Int16Array(this.w * this.h)
-    // soft membership: smoothstep of F between 0.3 and 0.7 of the CLUSTER's own brightness (90th
-    // percentile, at least half the seed contrast), inside the cluster only. Uncovered pixels cost m,
-    // covered pixels cost 1 − m: seams between touching colonies argue against a disk spanning them.
-    // Relative to the cluster (not the seeds) so colonies dimmer than the seeds are not priced out.
-    this.mIn = new Float32Array(this.M.length)
+    const n = this.M.length
+    const mine = own ?? this.M
+    // soft membership: smoothstep of F between 0.3 and 0.7 of the unit's own brightness (90th
+    // percentile, at least half the seed contrast). Uncovered pixels cost m, covered pixels 1 − m:
+    // seams between touching colonies argue against a disk spanning them. Relative to the unit (not
+    // the seeds) so colonies dimmer than the seeds are not priced out.
+    this.mIn = new Float32Array(n)
+    this.uncov = new Float32Array(n)
+    this.cov = new Float32Array(n)
     const inside: number[] = []
-    for (let i = 0; i < this.M.length; i++) if (this.M[i]) inside.push(F.data[i])
+    for (let i = 0; i < n; i++) if (mine[i]) inside.push(F.data[i])
     inside.sort((a, b) => a - b)
     const refC = Math.max(0.5 * p.contrastRef, inside.length ? inside[Math.floor(0.9 * (inside.length - 1))] : p.contrastRef)
     const lo = 0.3 * refC
     const hi = 0.7 * refC
-    for (let i = 0; i < this.M.length; i++) {
-      if (!this.M[i]) continue
-      const t = Math.min(1, Math.max(0, (F.data[i] - lo) / (hi - lo)))
-      this.mIn[i] = t * t * (3 - 2 * t)
-      this.FN += this.mIn[i]
+    for (let i = 0; i < n; i++) {
+      if (mine[i]) {
+        const t = Math.min(1, Math.max(0, (F.data[i] - lo) / (hi - lo)))
+        const m = t * t * (3 - 2 * t)
+        this.mIn[i] = m
+        this.uncov[i] = m
+        this.cov[i] = 1 - m
+        this.FN += m
+      } else this.cov[i] = this.M[i] ? NEIGHBOUR_COVER : 1
     }
     // distance to the observed boundary (boundary = mask pixels with a background 4-neighbour)
     const w = this.w
@@ -213,7 +242,10 @@ export class ClusterFit {
     const c1y = Math.floor((y + r + this.p.rMaxFit) / this.cell)
     for (let cy = c0y; cy <= c1y; cy++)
       for (let cx = c0x; cx <= c1x; cx++)
-        for (const d of this.grid.get(this.key(cx, cy)) ?? []) if (d.alive && Math.hypot(d.x - x, d.y - y) < d.r + r + this.hideTol) out.push(d)
+        for (const d of this.grid.get(this.key(cx, cy)) ?? []) {
+          const lim = d.r + r + this.hideTol
+          if (d.alive && (d.x - x) ** 2 + (d.y - y) ** 2 < lim * lim) out.push(d)
+        }
     return out
   }
 
@@ -247,29 +279,32 @@ export class ClusterFit {
     return cost
   }
 
+  /** Misalignment cost of one boundary sample at (px, py). */
+  private sampleCost(px: number, py: number): number {
+    const xi = Math.floor(px)
+    const yi = Math.floor(py)
+    if (xi < 0 || yi < 0 || xi >= this.w || yi >= this.h) return 1
+    const i = yi * this.w + xi
+    const d = this.dEdge[i]
+    const tau2 = this.p.tau * this.p.tau
+    const c = Math.min(d * d, tau2) / tau2
+    // a disk edge running through foreground (where a neighbour is not explained yet) is
+    // mostly priced by the mask term; only an edge out on the background is a true misfit
+    return this.M[i] ? INTERIOR_EDGE * c : c
+  }
+
   private makeDisk(x: number, y: number, r: number, fixed: boolean, id?: string): Disk {
-    const n = Math.max(16, Math.ceil(2 * Math.PI * r))
+    const n = samplesFor(r)
+    const [cs, sn] = trig(n)
     const sx = new Float32Array(n)
     const sy = new Float32Array(n)
     const cost = new Float32Array(n)
-    const tau2 = this.p.tau * this.p.tau
     for (let k = 0; k < n; k++) {
-      const t = (k / n) * 2 * Math.PI
-      const px = x + r * Math.cos(t)
-      const py = y + r * Math.sin(t)
+      const px = x + r * cs[k]
+      const py = y + r * sn[k]
       sx[k] = px
       sy[k] = py
-      const xi = Math.floor(px)
-      const yi = Math.floor(py)
-      if (xi < 0 || yi < 0 || xi >= this.w || yi >= this.h) cost[k] = 1
-      else {
-        const i = yi * this.w + xi
-        const d = this.dEdge[i]
-        const c = Math.min(d * d, tau2) / tau2
-        // a disk edge running through foreground (where a neighbour is not explained yet) is
-        // mostly priced by the mask term; only an edge out on the background is a true misfit
-        cost[k] = this.M[i] ? INTERIOR_EDGE * c : c
-      }
+      cost[k] = this.sampleCost(px, py)
     }
     return {
       x, y, r, fixed, id, alive: false, sx, sy, cost, cover: new Int16Array(n),
@@ -298,18 +333,18 @@ export class ClusterFit {
         if (dx * dx + dy * dy > r2) continue
         const i = yy * this.w + xx
         if (this.coverPx[i] === 0) {
-          this.FN -= this.mIn[i]
-          this.FP += 1 - this.mIn[i]
+          this.FN -= this.uncov[i]
+          this.FP += this.cov[i]
         }
         this.coverPx[i]++
       }
     }
     // edge term: hide neighbours' samples, count own exposure
     const nb = this.neighbours(x, y, r)
-    const hideR = r + this.hideTol
+    const hideR2 = (r + this.hideTol) ** 2
     for (const o of nb) {
       for (let k = 0; k < o.cover.length; k++) {
-        if (Math.hypot(o.sx[k] - x, o.sy[k] - y) < hideR) {
+        if ((o.sx[k] - x) ** 2 + (o.sy[k] - y) ** 2 < hideR2) {
           if (o.cover[k] === 0) {
             o.edge -= o.cost[k] * o.sw
             this.sumEdge -= o.cost[k] * o.sw
@@ -321,7 +356,7 @@ export class ClusterFit {
     let e = 0
     for (let k = 0; k < d.cover.length; k++) {
       let c = 0
-      for (const o of nb) if (Math.hypot(d.sx[k] - o.x, d.sy[k] - o.y) < o.r + this.hideTol) c++
+      for (const o of nb) if ((d.sx[k] - o.x) ** 2 + (d.sy[k] - o.y) ** 2 < (o.r + this.hideTol) ** 2) c++
       d.cover[k] = c
       if (c === 0) e += d.cost[k] * d.sw
     }
@@ -360,16 +395,16 @@ export class ClusterFit {
         const i = yy * this.w + xx
         this.coverPx[i]--
         if (this.coverPx[i] === 0) {
-          this.FN += this.mIn[i]
-          this.FP -= 1 - this.mIn[i]
+          this.FN += this.uncov[i]
+          this.FP -= this.cov[i]
         }
       }
     }
     const nb = this.neighbours(x, y, r)
-    const hideR = r + this.hideTol
+    const hideR2 = (r + this.hideTol) ** 2
     for (const o of nb) {
       for (let k = 0; k < o.cover.length; k++) {
-        if (Math.hypot(o.sx[k] - x, o.sy[k] - y) < hideR) {
+        if ((o.sx[k] - x) ** 2 + (o.sy[k] - y) ** 2 < hideR2) {
           o.cover[k]--
           if (o.cover[k] === 0) {
             o.edge += o.cost[k] * o.sw
@@ -388,14 +423,54 @@ export class ClusterFit {
     }
   }
 
-  /** ΔJ of adding a circle, without changing the state. */
+  /** ΔJ of adding a free circle, without changing the state (read-only; equals insert's change of J). */
   deltaAdd(x: number, y: number, r: number): number {
-    const before = this.J()
-    const d = this.makeDisk(x, y, r, false)
-    this.insert(d)
-    const after = this.J()
-    this.remove(d)
-    return after - before
+    const wt = this.p.weights
+    let dFN = 0
+    let dFP = 0
+    const r2 = r * r
+    for (let yy = Math.max(0, Math.floor(y - r)); yy < Math.min(this.h, Math.ceil(y + r) + 1); yy++) {
+      const dy = yy + 0.5 - y
+      for (let xx = Math.max(0, Math.floor(x - r)); xx < Math.min(this.w, Math.ceil(x + r) + 1); xx++) {
+        const dx = xx + 0.5 - x
+        if (dx * dx + dy * dy > r2) continue
+        const i = yy * this.w + xx
+        if (this.coverPx[i] === 0) {
+          dFN -= this.uncov[i]
+          dFP += this.cov[i]
+        }
+      }
+    }
+    const nb = this.neighbours(x, y, r)
+    const hideR2 = (r + this.hideTol) ** 2
+    let dEdge = 0
+    let dOverlap = 0
+    for (const o of nb) {
+      for (let k = 0; k < o.cover.length; k++) if (o.cover[k] === 0 && (o.sx[k] - x) ** 2 + (o.sy[k] - y) ** 2 < hideR2) dEdge -= o.cost[k] * o.sw
+      dOverlap += this.overlap({ x, y, r }, o)
+    }
+    const n = samplesFor(r)
+    const [cs, sn] = trig(n)
+    const sw = r / (n * this.p.prior.rMed)
+    for (let k = 0; k < n; k++) {
+      const px = x + r * cs[k]
+      const py = y + r * sn[k]
+      let hidden = false
+      for (const o of nb)
+        if ((px - o.x) ** 2 + (py - o.y) ** 2 < (o.r + this.hideTol) ** 2) {
+          hidden = true
+          break
+        }
+      if (!hidden) dEdge += this.sampleCost(px, py) * sw
+    }
+    return (
+      (dFN + wt.wFP * dFP) / this.a0 +
+      wt.alpha * dEdge +
+      wt.beta * this.priorCost(r) +
+      wt.gamma * this.appearanceCost(x, y, r) +
+      wt.lambda * countTerm(r, this.p.prior.rMed, wt.areaCount) +
+      wt.omega * dOverlap
+    )
   }
 
   /** ΔJ of removing a disk, without changing the state. */
@@ -408,10 +483,10 @@ export class ClusterFit {
   }
 
   /** Coordinate-descent refinement of one free disk; returns the (possibly replaced) disk. */
-  refine(d: Disk, bounds: { minX: number; minY: number; maxX: number; maxY: number }, rMin: number): Disk {
+  refine(d: Disk, bounds: Bounds, rMin: number, maxIt = 8): Disk {
     let cur = d
     for (const step of [1, 0.5]) {
-      for (let it = 0; it < 8; it++) {
+      for (let it = 0; it < maxIt; it++) {
         const base = this.J()
         this.remove(cur)
         const j0 = this.J()
@@ -441,312 +516,34 @@ export class ClusterFit {
   }
 }
 
-/** Candidate circles for one cluster patch (patch coordinates). */
-export function clusterCandidates(
-  mask: Mask,
-  prior: AnalysisPrior,
-  rMaxFit: number,
-  logBlobs: Circle3[],
-  core?: { F: Plane; level: number },
-): (Circle3 & { score: number })[] {
-  const out: (Circle3 & { score: number })[] = []
-  const dt = distanceTransform(mask)
-  const rMinC = Math.max(1, 0.6 * prior.rLo)
-  // 0. peaks of the CORE mask (F above a high level): seams between touching colonies
-  //    usually stay below it, so its distance-transform peaks separate them
-  if (core) {
-    const cm = makeMask(mask.width, mask.height)
-    for (let i = 0; i < cm.data.length; i++) cm.data[i] = mask.data[i] && core.F.data[i] > core.level ? 1 : 0
-    const cdt = distanceTransform(cm)
-    for (const p of localMaxima(cdt, Math.max(1, Math.round(0.3 * prior.rMed)), Math.max(1, 0.25 * prior.rLo), cm.data)) {
-      out.push({ x: p.x, y: p.y, r: Math.min(prior.rMed, rMaxFit), score: p.value * 1.2 })
+/** Boundary samples of a disk of radius r. */
+const samplesFor = (r: number): number => Math.max(16, Math.ceil(2 * Math.PI * r))
+const trigCache = new Map<number, [Float64Array, Float64Array]>()
+/** cos/sin of k/n · 2π, cached per n. */
+function trig(n: number): [Float64Array, Float64Array] {
+  let t = trigCache.get(n)
+  if (!t) {
+    const c = new Float64Array(n)
+    const s = new Float64Array(n)
+    for (let k = 0; k < n; k++) {
+      c[k] = Math.cos((k / n) * 2 * Math.PI)
+      s[k] = Math.sin((k / n) * 2 * Math.PI)
     }
+    trigCache.set(n, (t = [c, s]))
   }
-  // 1. DT peaks
-  for (const p of localMaxima(dt, Math.max(1, Math.round(0.25 * prior.rMed)), 0.4 * prior.rLo, mask.data)) {
-    const r = Math.min(Math.max(p.value, rMinC), rMaxFit)
-    out.push({ x: p.x, y: p.y, r, score: p.value })
-    if (Math.abs(Math.log(r / prior.rMed)) > 0.25) out.push({ x: p.x, y: p.y, r: Math.min(prior.rMed, rMaxFit), score: p.value * 0.9 })
-  }
-  // 2. arcs between concave points on outer and hole contours
-  const k = Math.max(2, Math.round(0.5 * prior.rMed))
-  const contours = traceAllOuterContours(mask, 6)
-  const filled = fillHoles(mask)
-  const holes = makeMask(mask.width, mask.height)
-  for (let i = 0; i < holes.data.length; i++) holes.data[i] = filled.data[i] && !mask.data[i] ? 1 : 0
-  contours.push(...traceAllOuterContours(holes, 6))
-  const minArc = Math.max(5, Math.round(0.8 * prior.rMed))
-  for (const c of contours) {
-    for (const arc of splitArcs(c, concavePoints(c, mask, k))) {
-      if (arc.length < minArc) continue
-      const kasa = fitCircleKasa(arc)
-      if (!kasa) continue
-      const fit = refineCircle(arc, kasa, 6)
-      if (!(fit.r >= rMinC && fit.r <= rMaxFit)) continue
-      if (circleResidual(arc, fit) > 0.12 * fit.r + 0.6) continue
-      if (arcSpan(arc, fit) < Math.PI / 3) continue
-      const xi = Math.floor(fit.x)
-      const yi = Math.floor(fit.y)
-      if (xi < 0 || yi < 0 || xi >= mask.width || yi >= mask.height || dt.data[yi * mask.width + xi] < 0.3 * fit.r) continue
-      out.push({ x: fit.x, y: fit.y, r: fit.r, score: fit.r })
-    }
-  }
-  // 3. LoG peaks inside the mask
-  for (const b of logBlobs) {
-    const xi = Math.floor(b.x)
-    const yi = Math.floor(b.y)
-    if (xi < 0 || yi < 0 || xi >= mask.width || yi >= mask.height || !mask.data[yi * mask.width + xi]) continue
-    out.push({ x: b.x, y: b.y, r: Math.min(Math.max(b.r, rMinC), rMaxFit), score: b.r })
-  }
-  // de-duplicate near-identical circles
-  return nmsCircles(out, 0.25, (c) => c.score)
-}
-
-/** Candidates at peaks of the uncovered foreground (what the current disks fail to explain). */
-function residualCandidates(fit: ClusterFit, params: ClusterFitParams, w: number, h: number): (Circle3 & { score: number })[] {
-  const res = makeMask(w, h)
-  let n = 0
-  for (let i = 0; i < res.data.length; i++) {
-    if (fit.M[i] && fit.coverPx[i] === 0) {
-      res.data[i] = 1
-      n++
-    }
-  }
-  const { prior, rMaxFit } = params
-  if (n < 0.25 * fit.a0) return []
-  const dt = distanceTransform(res)
-  const out: (Circle3 & { score: number })[] = []
-  for (const p of localMaxima(dt, Math.max(1, Math.round(0.5 * prior.rMed)), Math.max(1, 0.35 * prior.rLo), res.data)) {
-    out.push({ x: p.x, y: p.y, r: Math.min(Math.max(p.value, 0.8 * prior.rMed), rMaxFit), score: p.value })
-    out.push({ x: p.x, y: p.y, r: Math.min(prior.rMed, rMaxFit), score: p.value })
-  }
-  return out
-}
-
-
-/**
- * Fit one cluster. `mask` / `F` are patch rasters; `fixed` and `logBlobs` in
- * patch coordinates. Pure.
- */
-export function fitCluster(mask: Mask, F: Plane, ox: number, oy: number, params: ClusterFitParams, fixed: FixedColony[], logBlobs: Circle3[]): ClusterSolution {
-  const fit = new ClusterFit(mask, F, ox, oy, params)
-  for (const f of fixed) fit.add(f.x, f.y, f.r, true, f.id)
-  const cands = clusterCandidates(mask, params.prior, params.rMaxFit, logBlobs, { F, level: params.coreLevel })
-  const bounds = { minX: 0, minY: 0, maxX: mask.width, maxY: mask.height }
-  const rMin = Math.max(1, 0.5 * params.prior.rLo)
-  let used = new Uint8Array(cands.length)
-  let cache = new Float64Array(cands.length)
-  let dirty = new Uint8Array(cands.length).fill(1)
-  let bestR = new Float64Array(cands.length)
-
-  /** Best ΔJ over a few radii at the candidate's centre (NMS keeps one radius per centre). */
-  const evalCand = (c: number): number => {
-    const k = cands[c]
-    const rs = [k.r, params.prior.rMed, 0.85 * k.r, 1.15 * k.r]
-    let best = Infinity
-    for (const r0 of rs) {
-      const r = Math.min(Math.max(r0, rMin), params.rMaxFit)
-      const d = fit.deltaAdd(k.x, k.y, r)
-      if (d < best) {
-        best = d
-        bestR[c] = r
-      }
-    }
-    return best
-  }
-  const greedy = () => {
-    for (;;) {
-      let best = -1
-      let bestD = -1e-9
-      for (let c = 0; c < cands.length; c++) {
-        if (used[c]) continue
-        if (dirty[c]) {
-          cache[c] = evalCand(c)
-          dirty[c] = 0
-        }
-        if (cache[c] < bestD) {
-          bestD = cache[c]
-          best = c
-        }
-      }
-      if (best < 0) return
-      used[best] = 1
-      const d = fit.add(cands[best].x, cands[best].y, bestR[best])
-      markDirty(d.x, d.y, d.r)
-    }
-  }
-  /** Accept additions that only pay off after local refinement (top few candidates). */
-  const polish = (): boolean => {
-    let changed = false
-    for (let it = 0; it < 50; it++) {
-      const order: number[] = []
-      for (let c = 0; c < cands.length; c++) if (!used[c]) order.push(c)
-      for (const c of order) if (dirty[c]) {
-        cache[c] = evalCand(c)
-        dirty[c] = 0
-      }
-      order.sort((a, b) => cache[a] - cache[b])
-      let accepted = false
-      for (const c of order.slice(0, 6)) {
-        const j0 = fit.J()
-        const d = fit.add(cands[c].x, cands[c].y, bestR[c])
-        const nd = fit.refine(d, bounds, rMin)
-        if (fit.J() < j0 - 1e-6) {
-          used[c] = 1
-          markDirty(nd.x, nd.y, nd.r)
-          accepted = changed = true
-          break
-        }
-        fit.remove(nd)
-      }
-      if (!accepted) break
-    }
-    return changed
-  }
-  const markDirty = (x: number, y: number, r: number) => {
-    for (let c = 0; c < cands.length; c++) {
-      if (!used[c] && Math.hypot(cands[c].x - x, cands[c].y - y) < cands[c].r + r + params.tau + 1) dirty[c] = 1
-    }
-  }
-  const refineAll = () => {
-    for (const d of fit.disks.filter((q) => !q.fixed)) {
-      if (!d.alive) continue
-      const nd = fit.refine(d, bounds, rMin)
-      if (nd !== d) {
-        markDirty(d.x, d.y, d.r)
-        markDirty(nd.x, nd.y, nd.r)
-      }
-    }
-    // split move: an over-large disk may be two touching colonies
-    const big = Math.exp(params.prior.s) * params.prior.rMed
-    for (const d of fit.disks.filter((q) => !q.fixed && q.r > big)) {
-      if (!d.alive) continue
-      const j0 = fit.J()
-      fit.remove(d)
-      let best: [Circle3, Circle3] | null = null
-      let bestJ = j0
-      const r2 = Math.min(params.prior.rMed, d.r)
-      for (let a = 0; a < 4; a++) {
-        const t = (a / 4) * Math.PI
-        const off = Math.max(0.5 * d.r, d.r - r2)
-        const A = { x: d.x + off * Math.cos(t), y: d.y + off * Math.sin(t), r: r2 }
-        const B = { x: d.x - off * Math.cos(t), y: d.y - off * Math.sin(t), r: r2 }
-        const da = fit.add(A.x, A.y, A.r)
-        const db = fit.add(B.x, B.y, B.r)
-        const ra = fit.refine(da, bounds, rMin)
-        const rb = fit.refine(db, bounds, rMin)
-        const j = fit.J()
-        if (j < bestJ - 1e-9) {
-          bestJ = j
-          best = [{ x: ra.x, y: ra.y, r: ra.r }, { x: rb.x, y: rb.y, r: rb.r }]
-        }
-        fit.remove(ra)
-        fit.remove(rb)
-      }
-      if (best) {
-        for (const c of best) fit.add(c.x, c.y, c.r)
-        markDirty(d.x, d.y, d.r * 2)
-      } else fit.add(d.x, d.y, d.r)
-    }
-  }
-  const prune = () => {
-    for (;;) {
-      let worst: Disk | null = null
-      let worstD = -1e-9
-      // snapshot: deltaRemove re-inserts disks, which reorders fit.disks
-      for (const d of fit.disks.slice()) {
-        if (d.fixed) continue
-        const dr = fit.deltaRemove(d)
-        if (dr < worstD) {
-          worstD = dr
-          worst = d
-        }
-      }
-      if (!worst) return
-      fit.remove(worst)
-      markDirty(worst.x, worst.y, worst.r)
-    }
-  }
-
-  for (let round = 0; round < 4; round++) {
-    const before = fit.kNew
-    greedy()
-    refineAll()
-    prune()
-    // residual-driven candidates: peaks of the distance transform of still-uncovered foreground
-    const added = residualCandidates(fit, params, mask.width, mask.height)
-    const n0 = cands.length
-    for (const c of added) cands.push(c)
-    if (cands.length > n0) {
-      const grow = (a: Uint8Array | Float64Array, fill: number) => {
-        const b = new (a.constructor as Uint8ArrayConstructor)(cands.length)
-        b.set(a as Uint8Array)
-        b.fill(fill, a.length)
-        return b
-      }
-      used = grow(used, 0)
-      dirty = grow(dirty, 1)
-      cache = Float64Array.from({ length: cands.length }, (_, i) => (i < cache.length ? cache[i] : 0))
-      bestR = Float64Array.from({ length: cands.length }, (_, i) => (i < bestR.length ? bestR[i] : cands[i].r))
-    }
-    if (round > 0 && fit.kNew === before && cands.length === n0) break
-  }
-  if (polish()) {
-    refineAll()
-    prune()
-  }
-
-  return sweepGroups(fit, mask, params, bounds, rMin)
+  return t
 }
 
 // ---------------------------------------------------------------------------
-// Groups (sub-clusters) and the per-group K sweep
+// Size prior and scoring
 // ---------------------------------------------------------------------------
 
-/** One explanation of a group: K new colonies and the λ/prior-free part of J. */
-export interface GroupConfig {
-  k: number
-  /** Patch coordinates. */
-  disks: Circle3[]
-  /** J of the whole cluster with this config, minus its count and size-prior terms. */
-  base: number
-  /** Σ (r_i / r̃)², multiplies λ. */
-  count: number
-}
-
-export interface GroupFit {
-  /** Configurations tried (one per K, best found for that K), sorted by k. */
-  configs: GroupConfig[]
-  fixedIds: string[]
-  /** Inclusive patch bbox of the group's pixels. */
-  bbox: [number, number, number, number]
-  /** Foreground pixels of the group. */
-  area: number
-  /** Smallest and largest K swept; a best K on an open edge means the table may be incomplete. */
-  kRange: [number, number]
-}
-
-export interface ClusterSolution {
-  groups: GroupFit[]
-  /** Patch raster: group index per foreground pixel, −1 elsewhere. */
-  groupOf: Int32Array
-  /**
-   * Add a configuration with `k` colonies to group `gi`'s table (no-op if present).
-   * Used by re-runs whose best K falls on the edge of the swept range: only that
-   * group is fitted, not the whole cluster. Keeps the cluster's fit state alive.
-   */
-  extend: (gi: number, k: number) => void
-}
-
-const MAX_GROUP = 3
-const MAX_SWEEP_K = 8
-
-/** Size-prior cost of a set of radii under (logR, s, huber δ). */
 /**
  * Asymmetric Huber size cost. A disk LARGER than the prior is the typical
  * signature of merged colonies explained as one (the field failure "a cluster
  * of 3 became one"), while colonies smaller than the seeds are common and
- * legitimate, so the upper side counts double.
+ * legitimate, so the upper side counts double. huber = ∞ and both
+ * multipliers 1 give the brief's ½ z².
  */
 export function sizeCost(r: number, logR: number, s: number, huber: number, oversize: number, undersize = 1): number {
   const zs = (Math.log(r) - logR) / s
@@ -761,168 +558,530 @@ export function priorSum(disks: readonly Circle3[], logR: number, s: number, hub
   return t
 }
 
+/** One explanation of a unit: K new colonies and the λ/prior-free part of J. */
+export interface GroupConfig {
+  k: number
+  /** Cluster-patch coordinates. */
+  disks: Circle3[]
+  /** J of the unit with this config, minus its count and size-prior terms. */
+  base: number
+  /** Σ (r_i / r̃)² (or K), multiplies λ. */
+  count: number
+}
+
 /** Score of a stored configuration for the given count penalty and prior spread. */
 export function configScore(c: GroupConfig, w: ScoreWeights, logR: number, s: number): number {
   return c.base + w.lambda * c.count + w.beta * priorSum(c.disks, logR, s, w.huber, w.oversize, w.undersize)
 }
 
-function sweepGroups(fit: ClusterFit, mask: Mask, params: ClusterFitParams, bounds: { minX: number; minY: number; maxX: number; maxY: number }, rMin: number): ClusterSolution {
-  const { prior, weights } = params
+export interface GroupFit {
+  /** Configurations kept by the sweep (the best few per K), sorted by k. */
+  configs: GroupConfig[]
+  fixedIds: string[]
+  /** Inclusive cluster-patch bbox of the unit's pixels. */
+  bbox: [number, number, number, number]
+  /** Foreground pixels of the unit. */
+  area: number
+  /** Open area (not covered by existing colonies) / A0. */
+  kEst: number
+  /** Swept K range (inclusive). */
+  kRange: [number, number]
+}
+
+export interface ClusterSolution {
+  groups: GroupFit[]
+  /** Cluster-patch raster: unit index per foreground pixel, −1 elsewhere. */
+  groupOf: Int32Array
+}
+
+/** Hard cap on K per unit (the sweep cost grows ~K_max²). */
+export const SWEEP_K_CAP = 30
+/** Basins are merged into units up to this many typical colonies. */
+const UNIT_MERGE_EST = 6
+/** A unit larger than this is cut geometrically (k-means) before the sweep. */
+const UNIT_SPLIT_EST = 10
+/** Basins whose distance-transform saddle is at least this fraction of the shallower basin's depth have a wide neck. */
+const NECK = 0.7
+/** Basins whose brightness saddle is at least this fraction of the dimmer peak show no seam between them. */
+const SEAM = 0.85
+/**
+ * Recall bias for "colony or nothing?": when the best explanation of a unit is
+ * empty but colonies cost less than this much more (typical-colony units), the
+ * colonies are suggested (rejecting is one tap, a miss is a manual add).
+ */
+const EXISTENCE_MARGIN = 0.05
+/** Configurations kept per K (for re-scoring under other λ / prior widths). */
+const KEEP_PER_K = 3
+/** Smallest λ the slider can produce: the sweep must cover the best K at λ = LAMBDA_MIN. */
+const LAMBDA_MIN = 0
+
+// ---------------------------------------------------------------------------
+// Partition: brightness basins → units
+// ---------------------------------------------------------------------------
+
+/**
+ * Split a cluster into units. Basins: watershed of the lightly smoothed contrast
+ * plane F from its maxima, so cuts run along the darker seams between colonies
+ * (a distance transform sees no seam inside a dense streak). Two neighbouring
+ * basins join when there is evidence of neither a seam (brightness saddle ≥ SEAM
+ * × the dimmer peak) nor a neck (distance-transform saddle ≥ NECK × the shallower
+ * depth), largest seam ratio first, up to UNIT_MERGE_EST colonies; basins smaller
+ * than 0.35 colonies join their brightest neighbour; units larger than
+ * UNIT_SPLIT_EST colonies are cut by k-means. Deterministic. Returns the unit
+ * index per pixel (−1 off the mask).
+ */
+export function partitionCluster(mask: Mask, F: Plane, prior: AnalysisPrior): { unitOf: Int32Array; n: number } {
   const w = mask.width
-  const n = w * mask.height
+  const h = mask.height
+  const N = w * h
+  const a0 = Math.PI * prior.rMed * prior.rMed
   const dt = distanceTransform(mask)
-  const all = fit.disks.slice() // free + fixed, current greedy solution
-  // --- group the disks: merged unless a clear neck separates them (Kruskal with a size cap)
-  const parent = all.map((_, i) => i)
-  const size = all.map(() => 1)
+  const Fm: Plane = { width: w, height: h, data: new Float32Array(N) }
+  for (let i = 0; i < N; i++) Fm.data[i] = mask.data[i] ? Math.max(0, F.data[i]) : 0
+  const fs = gaussianBlur(Fm, Math.max(0.7, 0.2 * prior.rMed))
+  for (let i = 0; i < N; i++) if (!mask.data[i]) fs.data[i] = 0
+  // flooding landscape: brightness (seams) plus a little depth (necks), both normalised; uniformly
+  // bright colonies (no brightness peak of their own) still get a basin from the depth term
+  const inside: number[] = []
+  for (let i = 0; i < N; i++) if (mask.data[i]) inside.push(fs.data[i])
+  inside.sort((a, b) => a - b)
+  const refF = Math.max(1e-6, inside.length ? inside[Math.floor(0.9 * (inside.length - 1))] : 1)
+  const land: Plane = { width: w, height: h, data: new Float32Array(N) }
+  for (let i = 0; i < N; i++) if (mask.data[i]) land.data[i] = fs.data[i] / refF + 0.5 * Math.min(1, dt.data[i] / prior.rMed)
+  // markers: maxima of the landscape and of the distance transform (over-segmentation is fine; merging follows)
+  const markers = new Int32Array(N)
+  let nb = 0
+  const mr = Math.max(1, Math.round(0.35 * prior.rMed))
+  for (const p of [...localMaxima(land, mr, 1e-6, mask.data), ...localMaxima(dt, mr, Math.max(0.5, 0.25 * prior.rLo), mask.data)]) {
+    const i = Math.floor(p.y) * w + Math.floor(p.x)
+    if (!markers[i]) markers[i] = ++nb
+  }
+  if (nb === 0) {
+    let best = -1
+    for (let i = 0; i < N; i++) if (mask.data[i] && (best < 0 || dt.data[i] > dt.data[best])) best = i
+    if (best < 0) return { unitOf: new Int32Array(N).fill(-1), n: 0 }
+    markers[best] = ++nb
+  }
+  const cost = { width: w, height: h, data: new Float32Array(N) }
+  for (let i = 0; i < N; i++) cost.data[i] = -land.data[i]
+  const lab = watershed(cost, markers, mask.data)
+  for (let i = 0; i < N; i++) if (mask.data[i] && !lab[i]) lab[i] = 1
+  // basin stats
+  const area = new Float64Array(nb + 1)
+  const depth = new Float64Array(nb + 1)
+  const peakF = new Float64Array(nb + 1)
+  for (let i = 0; i < N; i++) {
+    const l = lab[i]
+    if (!l) continue
+    area[l]++
+    if (dt.data[i] > depth[l]) depth[l] = dt.data[i]
+    if (fs.data[i] > peakF[l]) peakF[l] = fs.data[i]
+  }
+  // saddles between adjacent basins: max over the shared boundary of min(·_i, ·_j)
+  const sadD = new Map<number, number>()
+  const sadF = new Map<number, number>()
+  const pairKey = (a: number, b: number) => (a < b ? a * (nb + 1) + b : b * (nb + 1) + a)
+  for (let y = 0; y < h; y++)
+    for (let x = 0; x < w; x++) {
+      const i = y * w + x
+      const a = lab[i]
+      if (!a) continue
+      for (const j of [x + 1 < w ? i + 1 : -1, y + 1 < h ? i + w : -1]) {
+        if (j < 0) continue
+        const b = lab[j]
+        if (!b || b === a) continue
+        const k = pairKey(a, b)
+        const vd = Math.min(dt.data[i], dt.data[j])
+        if (vd > (sadD.get(k) ?? -1)) sadD.set(k, vd)
+        const vf = Math.min(fs.data[i], fs.data[j])
+        if (vf > (sadF.get(k) ?? -1)) sadF.set(k, vf)
+      }
+    }
+  const parent = Array.from({ length: nb + 1 }, (_, i) => i)
+  const uArea = Array.from(area)
   const find = (a: number): number => (parent[a] === a ? a : (parent[a] = find(parent[a])))
-  const edges: [number, number, number][] = []
-  for (let i = 0; i < all.length; i++)
-    for (let j = i + 1; j < all.length; j++) {
-      const a = all[i]
-      const b = all[j]
-      const d = Math.hypot(a.x - b.x, a.y - b.y)
-      if (d > a.r + b.r + 1) continue
-      let neck = Infinity
-      for (let t = 0.15; t <= 0.85; t += 0.05) {
-        const x = Math.floor(a.x + (b.x - a.x) * t)
-        const y = Math.floor(a.y + (b.y - a.y) * t)
-        neck = Math.min(neck, x >= 0 && y >= 0 && x < w && y < mask.height ? dt.data[y * w + x] : 0)
-      }
-      const ratio = neck / Math.min(a.r, b.r)
-      if (ratio >= 0.7) edges.push([i, j, ratio])
-    }
-  edges.sort((p, q) => q[2] - p[2])
-  for (const [i, j] of edges) {
-    const ri = find(i)
-    const rj = find(j)
-    if (ri === rj || size[ri] + size[rj] > MAX_GROUP) continue
-    parent[rj] = ri
-    size[ri] += size[rj]
+  const union = (a: number, b: number) => {
+    const ra = find(a)
+    const rb = find(b)
+    if (ra === rb) return
+    const [lo, hi] = ra < rb ? [ra, rb] : [rb, ra]
+    parent[hi] = lo
+    uArea[lo] += uArea[hi]
   }
-  // --- assign foreground pixels to the nearest disk (distance relative to radius)
-  const groupOf = new Int32Array(n).fill(-1)
-  const roots = new Map<number, number>()
-  const diskGroup = all.map((_, i) => {
-    const r = find(i)
-    if (!roots.has(r)) roots.set(r, roots.size)
-    return roots.get(r)!
+  const edges = [...sadD.entries()].map(([k, vd]) => {
+    const a = Math.floor(k / (nb + 1))
+    const b = k % (nb + 1)
+    const vf = sadF.get(k)!
+    return { a, b, vf, neck: vd / Math.max(1e-6, Math.min(depth[a], depth[b])), seam: vf / Math.max(1e-6, Math.min(peakF[a], peakF[b])) }
   })
-  if (all.length === 0) {
-    for (let i = 0; i < n; i++) if (mask.data[i]) groupOf[i] = 0
-  } else {
-    for (let i = 0; i < n; i++) {
-      if (!mask.data[i]) continue
-      const x = (i % w) + 0.5
-      const y = Math.floor(i / w) + 0.5
-      let best = 0
-      let bd = Infinity
-      for (let k = 0; k < all.length; k++) {
-        const d = Math.hypot(all[k].x - x, all[k].y - y) / all[k].r
-        if (d < bd) {
-          bd = d
-          best = k
-        }
-      }
-      groupOf[i] = diskGroup[best]
-    }
+  edges.sort((p, q) => q.seam - p.seam || q.neck - p.neck || p.a - q.a || p.b - q.b)
+  for (const e of edges) {
+    if (e.seam < SEAM || e.neck < NECK) continue
+    const ra = find(e.a)
+    const rb = find(e.b)
+    if (ra !== rb && uArea[ra] + uArea[rb] <= UNIT_MERGE_EST * a0) union(ra, rb)
   }
-  const nGroups = Math.max(1, roots.size)
-  const groups: GroupFit[] = []
-  const extenders: ((k: number) => void)[] = []
-  for (let g = 0; g < nGroups; g++) {
-    const members = all.filter((_, k) => diskGroup[k] === g)
-    const pix: number[] = []
-    for (let i = 0; i < n; i++) if (groupOf[i] === g) pix.push(i)
-    if (!pix.length && !members.some((d) => !d.fixed)) continue
-    let minX = w, minY = mask.height, maxX = -1, maxY = -1
-    for (const i of pix) {
-      const x = i % w
-      const y = Math.floor(i / w)
-      if (x < minX) minX = x
-      if (x > maxX) maxX = x
-      if (y < minY) minY = y
-      if (y > maxY) maxY = y
+  // tiny units (noise maxima, slivers, filled holes) join the neighbour across their brightest saddle
+  edges.sort((p, q) => q.vf - p.vf || p.a - q.a || p.b - q.b)
+  for (let pass = 0; pass < 2; pass++)
+    for (const e of edges) {
+      const ra = find(e.a)
+      const rb = find(e.b)
+      if (ra === rb) continue
+      if (Math.min(uArea[ra], uArea[rb]) < 0.35 * a0) union(ra, rb)
     }
-    const fixedHere = members.filter((d) => d.fixed)
-    const free = members.filter((d) => !d.fixed)
-    // pixels not explained by fixed colonies drive the expected count
-    const open = pix.filter((i) => !fixedHere.some((f) => Math.hypot((i % w) + 0.5 - f.x, Math.floor(i / w) + 0.5 - f.y) < f.r))
-    const k0 = free.length
-    const ka = Math.round(open.length / (0.85 * fit.a0))
-    // a clear single (one disk already, area for one) only compares K = 0 and 1; a group the greedy
-    // left EMPTY still tries K = 1 (and more if the area says so)
-    const clearSingle = k0 === 1 && ka <= 1
-    const kLo = clearSingle ? 0 : Math.max(0, Math.min(k0, ka) - 1)
-    const kHi = clearSingle ? 1 : Math.min(MAX_SWEEP_K, Math.max(k0, ka, open.length >= 0.3 * fit.a0 ? 1 : 0) + 1)
-    const configs: GroupConfig[] = []
-    const gf: GroupFit = { configs, fixedIds: fixedHere.map((f) => f.id!).filter(Boolean), bbox: [minX, minY, maxX, maxY], area: pix.length, kRange: [kLo, kHi] }
-    // the greedy solution for k0
-    recordInto(fit, configs, free, k0, params)
-    for (const d of free) fit.remove(d)
-    const tryK = (k: number) => {
-      if (k === 0) return recordInto(fit, configs, [], 0, params)
-      const init = kmeansInit(open.length ? open : pix, w, dt, k, prior, rMin, params.rMaxFit)
-      let placed = init.map((c) => fit.add(c.x, c.y, c.r))
-      for (let pass = 0; pass < 2; pass++) placed = placed.map((d) => fit.refine(d, bounds, rMin))
-      recordInto(fit, configs, placed, k, params)
-      for (const d of placed) fit.remove(d)
-    }
-    for (let k = kLo; k <= kHi; k++) if (!(k === k0 && clearSingle)) tryK(k)
-    configs.sort((a, b) => a.k - b.k)
-    // leave the best configuration in place so later groups are fitted against it
-    const best = configs.reduce((a, b) => (configScore(b, weights, prior.logR, prior.s) < configScore(a, weights, prior.logR, prior.s) ? b : a))
-    let placedBest = best.disks.map((d) => fit.add(d.x, d.y, d.r))
-    groups.push(gf)
-    extenders.push((k: number) => {
-      // extend this group's table by one K, against the same state the table was built in
-      if (configs.some((c) => c.k === k) || k < 0 || k > MAX_SWEEP_K) return
-      for (const d of placedBest) fit.remove(d)
-      tryK(k)
-      configs.sort((a, b) => a.k - b.k)
-      gf.kRange = [Math.min(gf.kRange[0], k), Math.max(gf.kRange[1], k)]
-      placedBest = best.disks.map((d) => fit.add(d.x, d.y, d.r))
-    })
+  // compact unit ids
+  const ids = new Map<number, number>()
+  const unitOf = new Int32Array(N).fill(-1)
+  for (let i = 0; i < N; i++) {
+    if (!lab[i]) continue
+    const r = find(lab[i])
+    let id = ids.get(r)
+    if (id === undefined) ids.set(r, (id = ids.size))
+    unitOf[i] = id
   }
-  return { groups, groupOf, extend: (gi, k) => extenders[gi]?.(k) }
+  let n = ids.size
+  // oversized units: geometric cut (k-means on pixel coordinates, deterministic init)
+  const pixOf: number[][] = Array.from({ length: n }, () => [])
+  for (let i = 0; i < N; i++) if (unitOf[i] >= 0) pixOf[unitOf[i]].push(i)
+  for (let u = 0, n0 = n; u < n0; u++) {
+    const pix = pixOf[u]
+    const est = pix.length / a0
+    if (est <= UNIT_SPLIT_EST) continue
+    const parts = Math.ceil(est / UNIT_MERGE_EST)
+    const assign = kmeansPixels(pix, w, dt, parts)
+    for (let j = 0; j < pix.length; j++) if (assign[j] > 0) unitOf[pix[j]] = n + assign[j] - 1
+    n += parts - 1
+  }
+  return { unitOf, n }
 }
 
-/** Record a configuration (keeps the better one per K under the table weights). */
-function recordInto(fit: ClusterFit, configs: GroupConfig[], disks: readonly Circle3[], k: number, params: ClusterFitParams): void {
-  const { prior, weights } = params
-  const count = disks.reduce((a, d) => a + countTerm(d.r, prior.rMed, weights.areaCount), 0)
-  const base = fit.J() - weights.lambda * count - weights.beta * priorSum(disks, prior.logR, prior.s, weights.huber, weights.oversize, weights.undersize)
-  const prev = configs.find((c) => c.k === k)
-  const cand: GroupConfig = { k, disks: disks.map(({ x, y, r }) => ({ x, y, r })), base, count }
-  if (!prev) configs.push(cand)
-  else if (configScore(cand, weights, prior.logR, prior.s) < configScore(prev, weights, prior.logR, prior.s)) configs[configs.indexOf(prev)] = cand
-}
-
-
-/** Farthest-point seeding on deep pixels, then a few Lloyd iterations; radii from the assigned areas. */
-function kmeansInit(pix: number[], w: number, dt: Plane, k: number, prior: AnalysisPrior, rMin: number, rMax: number): Circle3[] {
-  const deep = pix.filter((i) => dt.data[i] >= 0.4 * prior.rLo)
-  const pts = deep.length >= k ? deep : pix
-  const xs = pts.map((i) => (i % w) + 0.5)
-  const ys = pts.map((i) => Math.floor(i / w) + 0.5)
+/** k-means on pixel coordinates: farthest-point init from the deepest pixel, 8 Lloyd iterations. */
+function kmeansPixels(pix: number[], w: number, dt: Plane, k: number): Int32Array {
+  const xs = pix.map((i) => (i % w) + 0.5)
+  const ys = pix.map((i) => Math.floor(i / w) + 0.5)
   let first = 0
-  for (let j = 1; j < pts.length; j++) if (dt.data[pts[j]] > dt.data[pts[first]]) first = j
+  for (let j = 1; j < pix.length; j++) if (dt.data[pix[j]] > dt.data[pix[first]]) first = j
   const cx = [xs[first]]
   const cy = [ys[first]]
   const md = xs.map((x, j) => Math.hypot(x - cx[0], ys[j] - cy[0]))
   while (cx.length < k) {
     let far = 0
-    for (let j = 1; j < pts.length; j++) if (md[j] > md[far]) far = j
+    for (let j = 1; j < pix.length; j++) if (md[j] > md[far]) far = j
     cx.push(xs[far])
     cy.push(ys[far])
-    for (let j = 0; j < pts.length; j++) md[j] = Math.min(md[j], Math.hypot(xs[j] - xs[far], ys[j] - ys[far]))
+    for (let j = 0; j < pix.length; j++) md[j] = Math.min(md[j], Math.hypot(xs[j] - xs[far], ys[j] - ys[far]))
   }
-  const cnt = new Array(k).fill(0)
+  const assign = new Int32Array(pix.length)
+  for (let it = 0; it < 8; it++) {
+    const sx = new Float64Array(k)
+    const sy = new Float64Array(k)
+    const cnt = new Float64Array(k)
+    for (let j = 0; j < pix.length; j++) {
+      let b = 0
+      let bd = Infinity
+      for (let c = 0; c < k; c++) {
+        const d = (xs[j] - cx[c]) ** 2 + (ys[j] - cy[c]) ** 2
+        if (d < bd) {
+          bd = d
+          b = c
+        }
+      }
+      assign[j] = b
+      sx[b] += xs[j]
+      sy[b] += ys[j]
+      cnt[b]++
+    }
+    for (let c = 0; c < k; c++)
+      if (cnt[c]) {
+        cx[c] = sx[c] / cnt[c]
+        cy[c] = sy[c] / cnt[c]
+      }
+  }
+  return assign
+}
+
+// ---------------------------------------------------------------------------
+// The per-unit K sweep
+// ---------------------------------------------------------------------------
+
+/** Deterministic PRNG (mulberry32). */
+export function mulberry32(seed: number): () => number {
+  let a = seed >>> 0
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0
+    let t = a
+    t = Math.imul(t ^ (t >>> 15), t | 1)
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61)
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
+}
+
+/** Per-K table of the best few distinct configurations under the table weights. */
+class SweepTable {
+  readonly byK = new Map<number, { c: GroupConfig; j: number }[]>()
+  private readonly params: ClusterFitParams
+  constructor(params: ClusterFitParams) {
+    this.params = params
+  }
+  record(fit: ClusterFit, disks: readonly Circle3[]): void {
+    const { prior, weights } = this.params
+    const k = disks.length
+    const count = disks.reduce((a, d) => a + countTerm(d.r, prior.rMed, weights.areaCount), 0)
+    const j = fit.J()
+    const base = j - weights.lambda * count - weights.beta * priorSum(disks, prior.logR, prior.s, weights.huber, weights.oversize, weights.undersize)
+    const c: GroupConfig = { k, disks: disks.map(({ x, y, r }) => ({ x, y, r })), base, count }
+    const list = this.byK.get(k) ?? []
+    // the same explanation found twice (every disk matched): keep the better copy
+    const same = list.findIndex((e) => sameConfig(e.c.disks, c.disks))
+    if (same >= 0) {
+      if (j < list[same].j) list[same] = { c, j }
+    } else list.push({ c, j })
+    list.sort((a, b) => a.j - b.j)
+    if (list.length > KEEP_PER_K) list.length = KEEP_PER_K
+    this.byK.set(k, list)
+  }
+  best(k: number): GroupConfig | null {
+    return this.byK.get(k)?.[0]?.c ?? null
+  }
+  /** K of the best configuration under a different λ (same prior). */
+  argminK(lambda: number): number {
+    const { prior, weights } = this.params
+    let bk = 0
+    let bj = Infinity
+    for (const [k, list] of this.byK)
+      for (const e of list) {
+        const j = configScore(e.c, { ...weights, lambda }, prior.logR, prior.s)
+        if (j < bj - 1e-12 || (Math.abs(j - bj) <= 1e-12 && k < bk)) {
+          bj = j
+          bk = k
+        }
+      }
+    return bk
+  }
+  configs(): GroupConfig[] {
+    return [...this.byK.keys()].sort((a, b) => a - b).flatMap((k) => this.byK.get(k)!.map((e) => e.c))
+  }
+}
+
+function sameConfig(a: readonly Circle3[], b: readonly Circle3[]): boolean {
+  if (a.length !== b.length) return false
+  const used = new Uint8Array(b.length)
+  for (const d of a) {
+    let hit = -1
+    for (let j = 0; j < b.length; j++)
+      if (!used[j] && Math.abs(d.x - b[j].x) < 0.75 && Math.abs(d.y - b[j].y) < 0.75 && Math.abs(d.r - b[j].r) < 0.75) {
+        hit = j
+        break
+      }
+    if (hit < 0) return false
+    used[hit] = 1
+  }
+  return true
+}
+
+export interface UnitInput {
+  /** Foreground of the whole cluster, unit patch raster. */
+  mask: Mask
+  F: Plane
+  /** Pixels of this unit (patch raster). */
+  own: Uint8Array
+  /** Patch origin in analysis px. */
+  ox: number
+  oy: number
+  /** Existing colonies overlapping the patch (patch coordinates). */
+  fixed: FixedColony[]
+  /** RNG seed (deterministic per unit). */
+  seed: number
+}
+
+/**
+ * The K sweep for one unit. For K = 0 … K_max: several starts, each jointly
+ * refined; a backward pass from K_max down; extended while the best K at the
+ * smallest slider λ sits on the upper edge. Returns the table in patch coordinates.
+ */
+export function sweepUnit(u: UnitInput, params: ClusterFitParams): { configs: GroupConfig[]; kRange: [number, number]; kEst: number } {
+  const { prior } = params
+  const fit = new ClusterFit(u.mask, u.F, u.ox, u.oy, params, u.own)
+  for (const f of u.fixed) fit.add(f.x, f.y, f.r, true, f.id)
+  const w = u.mask.width
+  const h = u.mask.height
+  const rMin = Math.max(1, 0.5 * prior.rLo)
+  const ownPix: number[] = []
+  let minX = w, minY = h, maxX = 0, maxY = 0
+  for (let i = 0; i < u.own.length; i++)
+    if (u.own[i]) {
+      ownPix.push(i)
+      const x = i % w
+      const y = (i / w) | 0
+      if (x < minX) minX = x
+      if (x > maxX) maxX = x
+      if (y < minY) minY = y
+      if (y > maxY) maxY = y
+    }
+  // centres stay on (or right next to) the unit's own pixels
+  const bounds: Bounds = { minX: minX - 1, minY: minY - 1, maxX: maxX + 2, maxY: maxY + 2 }
+  const openPix = ownPix.filter((i) => fit.coverPx[i] === 0)
+  const kEst = openPix.length / fit.a0
+  let kMax = Math.min(SWEEP_K_CAP, Math.ceil(2 * kEst) + 2)
+  const ownMask: Mask = { width: w, height: h, data: u.own }
+  const dt = distanceTransform(ownMask)
+  const pts = openPix.length ? openPix : ownPix
+  const deep = pts.filter((i) => dt.data[i] >= 0.4 * prior.rLo)
+  const kmPts = deep.length >= 4 ? deep : pts
+  const peaks = unitPeaks(u, dt, params, ownPix)
+  const rand = mulberry32(u.seed)
+  const table = new SweepTable(params)
+  const rClamp = (r: number) => Math.min(params.rMaxFit, Math.max(rMin, r))
+
+  table.record(fit, [])
+  const place = (cs: readonly Circle3[]) => cs.map((c) => fit.add(c.x, c.y, rClamp(c.r)))
+  const jointRefine = (ds: Disk[], first: Disk | null, passes: number): Disk[] => {
+    if (first) ds[ds.indexOf(first)] = fit.refine(first, bounds, rMin)
+    for (let p = 0; p < passes; p++) {
+      const j0 = fit.J()
+      for (let q = 0; q < ds.length; q++) ds[q] = fit.refine(ds[q], bounds, rMin, 6)
+      if (j0 - fit.J() < 1e-4) break
+    }
+    return ds
+  }
+  const seen = new Set<string>()
+  const startKey = (cs: readonly Circle3[]) =>
+    cs
+      .map((c) => `${Math.round(c.x)},${Math.round(c.y)}`)
+      .sort()
+      .join(';')
+  const tryStart = (init: Circle3[], newIdx: number | null, passes: number) => {
+    const key = startKey(init)
+    if (seen.has(key)) return
+    seen.add(key)
+    let ds = place(init)
+    ds = jointRefine(ds, newIdx === null ? null : ds[newIdx], passes)
+    table.record(fit, ds)
+    for (const d of ds) fit.remove(d)
+  }
+  const forward = (k: number) => {
+    // 1. the best K−1 explanation plus a disk at the residual peak
+    const prev = table.best(k - 1)
+    if (prev) {
+      const ds = place(prev.disks)
+      const add = residualPeak(fit, w, h, prior, ownPix)
+      for (const d of ds) fit.remove(d)
+      if (add) tryStart([...prev.disks, add], prev.disks.length, 2)
+    }
+    // full multi-start only in the plausible range (beyond it the augmented start suffices)
+    if (k <= Math.ceil(1.5 * kEst) + 2) {
+      tryStart(kmeansStart(kmPts, w, dt, k, prior, pts.length, null), null, 3)
+      tryStart(peakStart(peaks, kmPts, w, dt, k, prior, pts.length), null, 3)
+      const nRandom = k >= 3 ? 2 : k === 2 ? 1 : 0
+      for (let s = 0; s < nRandom; s++) tryStart(kmeansStart(kmPts, w, dt, k, prior, pts.length, rand), null, 3)
+    }
+  }
+  for (let k = 1; k <= kMax; k++) forward(k)
+  // the table must contain the best K for every slider position (λ ≥ LAMBDA_MIN)
+  while (kMax < SWEEP_K_CAP && table.argminK(LAMBDA_MIN) >= kMax) forward(++kMax)
+  // backward pass: K+1 minus its weakest disk, refined
+  for (let k = kMax - 1; k >= 1; k--) {
+    const next = table.best(k + 1)
+    if (!next) continue
+    const ds = place(next.disks)
+    let worst = 0
+    let worstD = Infinity
+    ds.forEach((d, i) => {
+      const dr = fit.deltaRemove(d)
+      if (dr < worstD) {
+        worstD = dr
+        worst = i
+      }
+    })
+    fit.remove(ds[worst])
+    const rest = ds.filter((_, i) => i !== worst)
+    const init = rest.map(({ x, y, r }) => ({ x, y, r }))
+    for (const d of rest) fit.remove(d)
+    tryStart(init, null, 2)
+  }
+  for (const f of fit.disks.slice()) fit.remove(f)
+  return { configs: table.configs(), kRange: [0, kMax], kEst }
+}
+
+/** Start positions from the unit's core-mask and distance-transform peaks (best first). */
+function unitPeaks(u: UnitInput, dt: Plane, params: ClusterFitParams, ownPix: number[]): Circle3[] {
+  const { prior } = params
+  const w = u.mask.width
+  const h = u.mask.height
+  const out: (Circle3 & { s: number })[] = []
+  // core mask: seams between touching colonies usually stay below its level
+  const cm = makeMask(w, h)
+  for (const i of ownPix) cm.data[i] = u.F.data[i] > params.coreLevel ? 1 : 0
+  const cdt = distanceTransform(cm)
+  for (const p of localMaxima(cdt, Math.max(1, Math.round(0.3 * prior.rMed)), Math.max(1, 0.25 * prior.rLo), cm.data)) out.push({ x: p.x, y: p.y, r: prior.rMed, s: p.value + 0.5 * prior.rMed })
+  for (const p of localMaxima(dt, Math.max(1, Math.round(0.25 * prior.rMed)), 0.4 * prior.rLo, u.own)) out.push({ x: p.x, y: p.y, r: Math.min(Math.max(p.value, 0.8 * prior.rMed), 1.15 * prior.rMed), s: p.value })
+  out.sort((a, b) => b.s - a.s || a.y - b.y || a.x - b.x)
+  const kept: Circle3[] = []
+  for (const c of out) if (!kept.some((k) => Math.hypot(k.x - c.x, k.y - c.y) < 0.6 * prior.rMed)) kept.push({ x: c.x, y: c.y, r: c.r })
+  return kept
+}
+
+/** The top-k peaks, completed by farthest-point picks when there are fewer. */
+function peakStart(peaks: Circle3[], pts: number[], w: number, dt: Plane, k: number, prior: AnalysisPrior, nPix: number): Circle3[] {
+  if (peaks.length >= k) return peaks.slice(0, k)
+  const km = kmeansStart(pts, w, dt, k, prior, nPix, null, peaks)
+  return km
+}
+
+/**
+ * k-means start on the unit's (deep) pixels. Initial centres: given ones, then
+ * farthest-point (rand = null) or k-means++ (D² sampling with the seeded RNG);
+ * a few Lloyd iterations; radii from the cell areas, bounded near the prior.
+ */
+function kmeansStart(pix: number[], w: number, dt: Plane, k: number, prior: AnalysisPrior, nPix: number, rand: (() => number) | null, init: Circle3[] = []): Circle3[] {
+  const n = pix.length
+  const xs = new Float64Array(n)
+  const ys = new Float64Array(n)
+  for (let j = 0; j < n; j++) {
+    xs[j] = (pix[j] % w) + 0.5
+    ys[j] = Math.floor(pix[j] / w) + 0.5
+  }
+  const cx: number[] = []
+  const cy: number[] = []
+  const fixedN = Math.min(init.length, k)
+  for (let c = 0; c < fixedN; c++) {
+    cx.push(init[c].x)
+    cy.push(init[c].y)
+  }
+  if (!cx.length) {
+    let first = 0
+    if (rand) first = Math.min(n - 1, Math.floor(rand() * n))
+    else for (let j = 1; j < n; j++) if (dt.data[pix[j]] > dt.data[pix[first]]) first = j
+    cx.push(xs[first])
+    cy.push(ys[first])
+  }
+  const md = new Float64Array(n).fill(Infinity)
+  const upd = (c: number) => {
+    for (let j = 0; j < n; j++) md[j] = Math.min(md[j], (xs[j] - cx[c]) ** 2 + (ys[j] - cy[c]) ** 2)
+  }
+  for (let c = 0; c < cx.length; c++) upd(c)
+  while (cx.length < k) {
+    let pick = 0
+    if (rand) {
+      let tot = 0
+      for (let j = 0; j < n; j++) tot += md[j]
+      let t = rand() * tot
+      for (pick = 0; pick < n - 1; pick++) {
+        t -= md[pick]
+        if (t <= 0) break
+      }
+    } else for (let j = 1; j < n; j++) if (md[j] > md[pick]) pick = j
+    cx.push(xs[pick])
+    cy.push(ys[pick])
+    upd(cx.length - 1)
+  }
+  const cnt = new Float64Array(k)
   for (let it = 0; it < 5; it++) {
-    const sx = new Array(k).fill(0)
-    const sy = new Array(k).fill(0)
+    const sx = new Float64Array(k)
+    const sy = new Float64Array(k)
     cnt.fill(0)
-    for (let j = 0; j < pts.length; j++) {
+    for (let j = 0; j < n; j++) {
       let b = 0
       let bd = Infinity
       for (let c = 0; c < k; c++) {
@@ -942,12 +1101,109 @@ function kmeansInit(pix: number[], w: number, dt: Plane, k: number, prior: Analy
         cy[c] = sy[c] / cnt[c]
       }
   }
-  // radius: area of the Voronoi cell among ALL group pixels would bias low on deep-only points; use the prior median, bounded
-  return cx.map((x, c) => ({ x, y: cy[c], r: Math.min(rMax, Math.max(rMin, cnt[c] ? Math.min(prior.rMed * 1.15, Math.max(prior.rMed * 0.8, Math.sqrt((cnt[c] * pix.length) / pts.length / Math.PI))) : prior.rMed)) }))
+  // radius: the cell's share of the unit's area, bounded to 0.8–1.15 × the prior median
+  return cx.map((x, c) => ({ x, y: cy[c], r: cnt[c] ? Math.min(prior.rMed * 1.15, Math.max(prior.rMed * 0.8, Math.sqrt((cnt[c] * nPix) / Math.max(1, n) / Math.PI))) : prior.rMed }))
 }
+
+/** A disk at the deepest point of the unit's still-uncovered foreground (null if nothing is left). */
+function residualPeak(fit: ClusterFit, w: number, h: number, prior: AnalysisPrior, ownPix: number[]): Circle3 | null {
+  const res = makeMask(w, h)
+  let n = 0
+  for (const i of ownPix)
+    if (fit.coverPx[i] === 0 && fit.mIn[i] > 0.25) {
+      res.data[i] = 1
+      n++
+    }
+  if (n === 0) {
+    // everything is covered: the own pixel farthest from every disk centre
+    let best = -1
+    let bd = -1
+    for (const i of ownPix) {
+      const x = (i % w) + 0.5
+      const y = Math.floor(i / w) + 0.5
+      let d = Infinity
+      for (const q of fit.disks) d = Math.min(d, Math.hypot(q.x - x, q.y - y) - q.r)
+      if (d > bd) {
+        bd = d
+        best = i
+      }
+    }
+    return best < 0 ? null : { x: (best % w) + 0.5, y: Math.floor(best / w) + 0.5, r: 0.8 * prior.rMed }
+  }
+  const dt = distanceTransform(res)
+  let best = -1
+  for (const i of ownPix) if (res.data[i] && (best < 0 || dt.data[i] > dt.data[best])) best = i
+  return { x: (best % w) + 0.5, y: Math.floor(best / w) + 0.5, r: Math.min(1.1 * prior.rMed, Math.max(0.7 * prior.rMed, dt.data[best])) }
+}
+
+/**
+ * Fit one cluster: partition into units, sweep each. `mask` / `F` are cluster
+ * patch rasters; `fixed` in patch coordinates. Pure and deterministic.
+ */
+export function fitClusterSweep(mask: Mask, F: Plane, ox: number, oy: number, params: ClusterFitParams, fixed: FixedColony[], seed = 1): ClusterSolution {
+  const { unitOf, n } = partitionCluster(mask, F, params.prior)
+  const groups: GroupFit[] = []
+  const w = mask.width
+  const h = mask.height
+  const pad = Math.ceil(params.rMaxFit) + 2
+  for (let g = 0; g < n; g++) {
+    let minX = w, minY = h, maxX = -1, maxY = -1
+    let area = 0
+    for (let i = 0; i < unitOf.length; i++)
+      if (unitOf[i] === g) {
+        area++
+        const x = i % w
+        const y = (i / w) | 0
+        if (x < minX) minX = x
+        if (x > maxX) maxX = x
+        if (y < minY) minY = y
+        if (y > maxY) maxY = y
+      }
+    const x0 = Math.max(0, minX - pad)
+    const y0 = Math.max(0, minY - pad)
+    const x1 = Math.min(w - 1, maxX + pad)
+    const y1 = Math.min(h - 1, maxY + pad)
+    const pw = x1 - x0 + 1
+    const ph = y1 - y0 + 1
+    const pm = makeMask(pw, ph)
+    const own = new Uint8Array(pw * ph)
+    const pF: Plane = { width: pw, height: ph, data: new Float32Array(pw * ph) }
+    for (let y = 0; y < ph; y++)
+      for (let x = 0; x < pw; x++) {
+        const i = (y + y0) * w + x + x0
+        const j = y * pw + x
+        pm.data[j] = mask.data[i]
+        own[j] = unitOf[i] === g ? 1 : 0
+        pF.data[j] = F.data[i]
+      }
+    const fixedHere = fixed.filter((f) => f.x + f.r > x0 && f.x - f.r < x1 + 1 && f.y + f.r > y0 && f.y - f.r < y1 + 1).map((f) => ({ ...f, x: f.x - x0, y: f.y - y0 }))
+    const fixedIds = fixed
+      .filter((f) => {
+        const xi = Math.floor(f.x)
+        const yi = Math.floor(f.y)
+        return xi >= 0 && yi >= 0 && xi < w && yi < h && unitOf[yi * w + xi] === g
+      })
+      .map((f) => f.id)
+    const sw = sweepUnit({ mask: pm, F: pF, own, ox: ox + x0, oy: oy + y0, fixed: fixedHere, seed: (Math.imul(seed, 0x9e3779b1) ^ Math.imul(g + 1, 0x85ebca6b)) >>> 0 }, params)
+    groups.push({
+      configs: sw.configs.map((c) => ({ ...c, disks: c.disks.map((d) => ({ x: d.x + x0, y: d.y + y0, r: d.r })) })),
+      fixedIds,
+      bbox: [minX, minY, maxX, maxY],
+      area,
+      kEst: sw.kEst,
+      kRange: sw.kRange,
+    })
+  }
+  return { groups, groupOf: unitOf }
+}
+
+// ---------------------------------------------------------------------------
+// Decisions (re-scoring) and review alternatives
+// ---------------------------------------------------------------------------
 
 export interface GroupDecision {
   best: GroupConfig
+  /** Best configuration of any OTHER K (second-best K across the whole sweep). */
   runnerUp: GroupConfig | null
   /** J(runner-up) − J(best), in units of one typical colony. */
   gap: number | null
@@ -957,8 +1213,6 @@ export interface GroupDecision {
    * contested colony — not biased against small colonies like the raw gap.
    */
   relativeGap: number | null
-  /** The best K lies on an open edge of the swept range: the table may miss a better K. */
-  incomplete: boolean
 }
 
 /** Area (in typical-colony units) of disks in `a` with no counterpart in `b` and vice versa. */
@@ -1009,16 +1263,22 @@ export function diffSets(primary: readonly Circle3[], alt: readonly Circle3[], t
   return { added: alt.filter((_, j) => !usedAlt[j]).map(toOrig), removed }
 }
 
-/** Pick the best and runner-up configuration of a group for the given weights and prior spread. */
+/** Pick the best configuration and the best one of any other K for the given weights and prior spread. */
 export function decideGroup(g: GroupFit, wts: ScoreWeights, logR: number, s: number, rMed = Math.exp(logR)): GroupDecision {
-  const scored = g.configs.map((c) => ({ c, j: configScore(c, wts, logR, s) })).sort((a, b) => a.j - b.j)
-  const best = scored[0]
-  const runner = scored[1] ?? null
-  const k = best.c.k
-  const incomplete = (k === g.kRange[1] && k < MAX_SWEEP_K && g.configs.length > 1) || (k === g.kRange[0] && k > 0 && g.configs.length > 1)
-  const gap = runner ? runner.j - best.j : null
-  const relativeGap = runner && gap !== null ? gap / Math.max(0.25, contestedArea(best.c.disks, runner.c.disks, rMed)) : null
-  return { best: best.c, runnerUp: runner?.c ?? null, gap, relativeGap, incomplete }
+  let best: { c: GroupConfig; j: number } | null = null
+  for (const c of g.configs) {
+    const j = configScore(c, wts, logR, s)
+    if (!best || j < best.j - 1e-12 || (Math.abs(j - best.j) <= 1e-12 && c.k < best.c.k)) best = { c, j }
+  }
+  let runner: { c: GroupConfig; j: number } | null = null
+  for (const c of g.configs) {
+    if (c.k === best!.c.k) continue
+    const j = configScore(c, wts, logR, s)
+    if (!runner || j < runner.j - 1e-12 || (Math.abs(j - runner.j) <= 1e-12 && c.k < runner.c.k)) runner = { c, j }
+  }
+  const gap = runner ? runner.j - best!.j : null
+  const relativeGap = runner && gap !== null ? gap / Math.max(0.25, contestedArea(best!.c.disks, runner.c.disks, rMed)) : null
+  return { best: best!.c, runnerUp: runner?.c ?? null, gap, relativeGap }
 }
 
 /** Best explanation of a whole cluster under the fit weights (tests and tools). */
@@ -1032,6 +1292,10 @@ export function summarizeSolution(sol: ClusterSolution, params: ClusterFitParams
     fixedIds: sol.groups.flatMap((g) => g.fixedIds),
   }
 }
+
+// ---------------------------------------------------------------------------
+// Whole image: cached tables, re-scoring per run
+// ---------------------------------------------------------------------------
 
 /** Everything the fitter computed that does not depend on λ (sensitivity) or the prior width. */
 export interface FitterState {
@@ -1050,24 +1314,21 @@ export interface FitterState {
   /** Cluster labels of the mask (analysis px). */
   labels: Int32Array
   width: number
-  logCandidateThreshold: number
   baseWeights: FitWeights
+  /** Sweep statistics (diagnostics). */
+  sweep: { units: number; configs: number; maxKSwept: number; buildMs: number }
 }
 
 /** Reference sensitivity at which the configuration tables are built. */
 const TABLE_SENSITIVITY = 0.5
 
-async function buildFitterState(ctx: MethodContext, seedPts: { x: number; y: number }[], key: string): Promise<FitterState> {
+async function buildFitterState(ctx: MethodContext, key: string): Promise<FitterState> {
+  const t0 = Date.now()
   const { prior, settings } = ctx
   const sp = sensitivityParams(TABLE_SENSITIVITY)
   const baseWeights: FitWeights = { ...OBJECTIVES[settings.objective ?? 'tuned'], lambda: sp.lambda, ...settings.fitWeights }
   // the mask does not follow the sensitivity slider (so the expensive part can be cached)
   const mask = foregroundMask(ctx, maskThresholdAt(ctx, TABLE_SENSITIVITY))
-  await ctx.checkpoint(0.5)
-  // LoG candidates per cluster patch (no whole-image LoG stack in memory), with a
-  // permissive threshold relative to the seeds' response: they only propose
-  const radii = priorRadii(prior)
-  const logThreshold = sp.logFrac * 0.6 * (seedLogReference(ctx.F, seedPts, radii, prior) ?? 0.5 * ctx.contrastRef)
   await ctx.checkpoint(0.55)
   const cl = labelComponents(mask, 8)
   const rMaxFit = Math.max(prior.rHi * 1.3, prior.rMed * 1.8)
@@ -1083,6 +1344,7 @@ async function buildFitterState(ctx: MethodContext, seedPts: { x: number; y: num
     coreLevel: 0.75 * ctx.contrastRef,
   }
   const clusters: FitterState['clusters'] = []
+  const stats = { units: 0, configs: 0, maxKSwept: 0, buildMs: 0 }
   let lastYield = Date.now()
   const order = cl.stats.slice().sort((a, b) => a.minY - b.minY || a.minX - b.minX)
   for (let ci = 0; ci < order.length; ci++) {
@@ -1097,14 +1359,6 @@ async function buildFitterState(ctx: MethodContext, seedPts: { x: number; y: num
     const y1 = Math.min(mask.height - 1, st.maxY + pad)
     const pw = x1 - x0 + 1
     const ph = y1 - y0 + 1
-    const pm = makeMask(pw, ph)
-    const pF: Plane = { width: pw, height: ph, data: new Float32Array(pw * ph) }
-    for (let y = 0; y < ph; y++)
-      for (let x = 0; x < pw; x++) {
-        const i = (y + y0) * mask.width + x + x0
-        pm.data[y * pw + x] = cl.labels[i] === st.label ? 1 : 0
-        pF.data[y * pw + x] = ctx.F.data[i]
-      }
     const fixedHere = ctx.fixed
       .filter((f) => {
         const xi = Math.floor(f.x)
@@ -1112,42 +1366,29 @@ async function buildFitterState(ctx: MethodContext, seedPts: { x: number; y: num
         return xi >= 0 && yi >= 0 && xi < mask.width && yi < mask.height && cl.labels[yi * mask.width + xi] === st.label
       })
       .map((f) => ({ ...f, x: f.x - x0, y: f.y - y0 }))
-    const tooBig = st.area > settings.kMax * a0
-    const blobs: Circle3[] = tooBig ? [] : detectBlobsLoG(pF, radii, logThreshold, pm.data, 0.7).blobs.map((b) => ({ x: b.x, y: b.y, r: b.r }))
-    const tooLarge = tooBig
-    const refit = (w: FitWeights = baseWeights, s = prior.s) => fitCluster(pm, pF, x0, y0, { ...params, weights: w, prior: { ...prior, s } }, fixedHere, blobs)
-    clusters.push({
-      label: st.label,
-      stats: st,
-      x0,
-      y0,
-      pw,
-      tooLarge,
-      fixedIds: fixedHere.map((f) => f.id),
-      sol: tooLarge ? null : refit(),
-    })
+    const tooLarge = st.area > settings.kMax * a0
+    let sol: ClusterSolution | null = null
+    if (!tooLarge) {
+      const pm = makeMask(pw, ph)
+      const pF: Plane = { width: pw, height: ph, data: new Float32Array(pw * ph) }
+      for (let y = 0; y < ph; y++)
+        for (let x = 0; x < pw; x++) {
+          const i = (y + y0) * mask.width + x + x0
+          pm.data[y * pw + x] = cl.labels[i] === st.label ? 1 : 0
+          pF.data[y * pw + x] = ctx.F.data[i]
+        }
+      // seed from the cluster's position: the result does not depend on processing order
+      sol = fitClusterSweep(pm, pF, x0, y0, params, fixedHere, (st.minX * 73856093) ^ (st.minY * 19349663) ^ st.area)
+      stats.units += sol.groups.length
+      for (const g of sol.groups) {
+        stats.configs += g.configs.length
+        stats.maxKSwept = Math.max(stats.maxKSwept, g.kRange[1])
+      }
+    }
+    clusters.push({ label: st.label, stats: st, x0, y0, pw, tooLarge, fixedIds: fixedHere.map((f) => f.id), sol })
   }
-  return { key, clusters, labels: cl.labels, width: mask.width, logCandidateThreshold: logThreshold, baseWeights }
-}
-
-/** Median LoG response at the seeds (scale nearest r̃), from small patches around each seed. */
-function seedLogReference(F: Plane, seeds: { x: number; y: number }[], radii: number[], prior: AnalysisPrior): number | null {
-  if (!seeds.length) return null
-  const k = radii.reduce((bi, r, i) => (Math.abs(r - prior.rMed) < Math.abs(radii[bi] - prior.rMed) ? i : bi), 0)
-  const half = Math.ceil(3 * prior.rHi + 3 * (radii[k] / Math.SQRT2))
-  const vals: number[] = []
-  for (const s of seeds) {
-    const x0 = Math.floor(s.x) - half
-    const y0 = Math.floor(s.y) - half
-    const patch = cropPlane(F, x0, y0, 2 * half + 1, 2 * half + 1)
-    const resp = logResponse(patch, radii[k] / Math.SQRT2)
-    let best = -Infinity
-    const rr = Math.max(1, Math.round(prior.rMed * 0.3))
-    for (let dy = -rr; dy <= rr; dy++) for (let dx = -rr; dx <= rr; dx++) best = Math.max(best, resp.data[(half + dy) * patch.width + half + dx])
-    if (Number.isFinite(best)) vals.push(best)
-  }
-  vals.sort((a, b) => a - b)
-  return vals.length ? vals[Math.floor(vals.length / 2)] : null
+  stats.buildMs = Date.now() - t0
+  return { key, clusters, labels: cl.labels, width: mask.width, baseWeights, sweep: stats }
 }
 
 /** Mask threshold for a given sensitivity (the fitter uses the table sensitivity). */
@@ -1156,24 +1397,33 @@ function maskThresholdAt(ctx: MethodContext, sensitivity: number): number {
   return Math.max(noiseK * ctx.noise, thrFrac * ctx.contrastRef)
 }
 
-export async function runFitter(ctx: MethodContext, seedPts: { x: number; y: number }[], cached?: { key: string; get: () => FitterState | null; set: (s: FitterState) => void }): Promise<MethodOutput> {
+export async function runFitter(ctx: MethodContext, cached?: { key: string; get: () => FitterState | null; set: (s: FitterState) => void }): Promise<MethodOutput> {
   const { prior, prep, settings } = ctx
   const scale = prep.scale
   const t0 = Date.now()
   let state = cached?.get() ?? null
   const reused = !!state && state.key === cached?.key
   if (!reused) {
-    state = await buildFitterState(ctx, seedPts, cached?.key ?? '')
+    state = await buildFitterState(ctx, cached?.key ?? '')
     cached?.set(state)
   } else await ctx.checkpoint(0.6)
   const st = state!
-  // scoring for THIS run: λ from the sensitivity, s from the prior width
+  // scoring for THIS run: λ from the sensitivity, s from the prior width. The tables are
+  // read-only here, so the same settings always give the same result.
   const wts = { ...st.baseWeights, lambda: sensitivityParams(settings.sensitivity).lambda, ...(settings.fitWeights?.lambda !== undefined ? { lambda: settings.fitWeights.lambda } : {}) }
   const s = prior.s * settings.priorWidth
+  // the slider neighbourhood used for the review flag: sensitivity ± δ (λ moves 0.2 δ), size tolerance × (1 ± 2δ)
+  const dl = 0.2 * settings.reviewStability
+  const perturbed: [ScoreWeights, number][] = [
+    [{ ...wts, lambda: Math.max(0, wts.lambda - dl) }, s],
+    [{ ...wts, lambda: wts.lambda + dl }, s],
+    [wts, s * (1 + 2 * settings.reviewStability)],
+    [wts, s / (1 + 2 * settings.reviewStability)],
+  ]
   const suggestions: Suggestion[] = []
   const clustersOut: ClusterResult[] = []
   const labels = new Int32Array(st.labels.length)
-  const counts = { ok: 0, review: 0, tooLarge: 0, refitted: 0 }
+  const counts = { ok: 0, review: 0, tooLarge: 0 }
   let nextId = 1
   for (const c of st.clusters) {
     const { minX, minY, maxX, maxY, area } = c.stats
@@ -1181,30 +1431,39 @@ export async function runFitter(ctx: MethodContext, seedPts: { x: number; y: num
       counts.tooLarge++
       const id = clusterId(nextId++)
       clustersOut.push({ clusterId: id, bbox: bboxToOriginal(minX, minY, maxX, maxY, scale), area: area / (scale * scale), fixedIds: c.fixedIds, chosenK: 0, runnerUpK: null, objectiveGap: null, status: 'too-large' })
-      for (let i = 0; i < st.labels.length; i++) if (st.labels[i] === c.label) labels[i] = nextId - 1
+      for (let y = minY; y <= maxY; y++)
+        for (let x = minX; x <= maxX; x++) if (st.labels[y * st.width + x] === c.label) labels[y * st.width + x] = nextId - 1
       continue
     }
     const sol = c.sol
-    let decisions = sol.groups.map((g) => decideGroup(g, wts, prior.logR, s, prior.rMed))
-    // a best K on the open edge of a group's table: extend THAT group by one K (repeat, bounded)
-    for (let round = 0; round < 3; round++) {
-      const todo = decisions.map((d, gi) => (d.incomplete ? gi : -1)).filter((gi) => gi >= 0)
-      if (!todo.length) break
-      for (const gi of todo) {
-        const g = sol.groups[gi]
-        const k = decisions[gi].best.k
-        sol.extend(gi, k === g.kRange[1] ? k + 1 : k - 1)
-        decisions[gi] = decideGroup(g, wts, prior.logR, s, prior.rMed)
-        counts.refitted++
+    const groupIds = sol.groups.map(() => nextId++)
+    sol.groups.forEach((g, gi) => {
+      let d = decideGroup(g, wts, prior.logR, s, prior.rMed)
+      // stability: the K chosen under slightly different slider positions
+      const kAt = (w: ScoreWeights, sp: number) => decideGroup(g, w, prior.logR, sp, prior.rMed).best.k
+      const flips = new Set<number>()
+      for (const [w, sp] of perturbed) {
+        const k = kAt(w, sp)
+        if (k !== d.best.k) flips.add(k)
       }
-    }
-    const groupIds = c.sol.groups.map(() => nextId++)
-    c.sol.groups.forEach((g, gi) => {
-      const d = decisions[gi]
+      // recall bias: "nothing" vs "colonies" unstable → suggest the colonies (rejecting is a tap)
+      if (d.best.k === 0 && g.fixedIds.length === 0 && d.runnerUp && d.runnerUp.k > 0 && d.gap !== null && d.gap < EXISTENCE_MARGIN) flips.add(d.runnerUp.k)
+      if (d.best.k === 0 && g.fixedIds.length === 0 && flips.size) {
+        const kMore = Math.min(...[...flips].filter((k) => k > 0))
+        if (Number.isFinite(kMore)) {
+          const score = (q: GroupConfig) => configScore(q, wts, prior.logR, s)
+          const pick = g.configs.filter((q) => q.k === kMore).reduce((a, b) => (score(b) < score(a) ? b : a))
+          // gap stays "J(runner-up) − J(chosen)", here slightly negative: the colonies were chosen for recall
+          const gap = score(d.best) - score(pick)
+          d = { best: pick, runnerUp: d.best, gap, relativeGap: gap / Math.max(0.25, contestedArea(pick.disks, [], prior.rMed)) }
+          flips.clear()
+        }
+      }
       const id = clusterId(groupIds[gi])
       // "is it a colony at all?" (runner-up K = 0) is answered by tap-to-reject, not by a "k or k+1?" region
-      const existenceOnly = d.runnerUp !== null && d.runnerUp.k === 0 && g.fixedIds.length === 0
-      const review = !existenceOnly && d.relativeGap !== null && d.relativeGap < settings.reviewGap
+      const existenceOnly = d.runnerUp !== null && (d.runnerUp.k === 0 || d.best.k === 0) && g.fixedIds.length === 0
+      const unstable = flips.size > 0 || (d.relativeGap !== null && d.relativeGap < settings.reviewGap)
+      const review = !existenceOnly && d.runnerUp !== null && unstable
       if (review) counts.review++
       else counts.ok++
       const toOrig = (q: Circle3) => ({ x: (q.x + c.x0) / scale, y: (q.y + c.y0) / scale, r: q.r / scale })
@@ -1224,12 +1483,12 @@ export async function runFitter(ctx: MethodContext, seedPts: { x: number; y: num
       if (review && d.runnerUp) result.alternative = { k: d.runnerUp.k, colonies: d.runnerUp.disks.map(toOrig), ...diffSets(d.best.disks, d.runnerUp.disks, toOrig) }
       clustersOut.push(result)
     })
-    // group label raster (analysis px)
+    // unit label raster (analysis px)
     for (let y = minY; y <= maxY; y++)
       for (let x = minX; x <= maxX; x++) {
         const i = y * st.width + x
         if (st.labels[i] !== c.label) continue
-        const g = c.sol.groupOf[(y - c.y0) * c.pw + (x - c.x0)]
+        const g = sol.groupOf[(y - c.y0) * c.pw + (x - c.x0)]
         labels[i] = g >= 0 ? groupIds[g] : 0
       }
   }
@@ -1239,9 +1498,8 @@ export async function runFitter(ctx: MethodContext, seedPts: { x: number; y: num
     diagnostics: {
       weights: wts,
       priorS: round3(s),
-      logCandidateThreshold: st.logCandidateThreshold,
       reusedFit: reused,
-      groupsExtended: counts.refitted,
+      sweep: st.sweep,
       groupsOk: counts.ok,
       groupsReview: counts.review,
       clustersTooLarge: counts.tooLarge,

@@ -5,7 +5,7 @@
  * detect() with four isolated seeds.
  */
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_SETTINGS, detect } from './index.ts'
+import { detect, DetectorCache } from './index.ts'
 import type { DetectInput, DetectMethod, RgbaImage } from './types.ts'
 
 interface Disk {
@@ -118,12 +118,16 @@ describe.each(['tuned', 'brief'] as const)('fitter (%s objective) splits touchin
 })
 
 describe('a clear triple is decided with margin', () => {
-  it.each([0, 0.15])('triangle at %s overlap: K=3, relative gap well above the review threshold', async (ov) => {
-    const r = await detect(input(layout('triangle', 2 * R * (1 - ov)), 'fitter'))
-    const ids = new Set(r.suggestions.map((s) => s.clusterId))
-    const cls = r.clusters.filter((c) => ids.has(c.clusterId))
-    expect(cls.reduce((a, c) => a + c.chosenK, 0)).toBe(3)
-    for (const c of cls) expect(c.relativeGap ?? Infinity).toBeGreaterThan(5 * DEFAULT_SETTINGS.reviewGap)
+  it.each([0, 0.15])('triangle at %s overlap: K=3, not in review, for every sensitivity from 0.2 to 0.8', async (ov) => {
+    for (const sensitivity of [0.2, 0.35, 0.5, 0.65, 0.8]) {
+      const inp = input(layout('triangle', 2 * R * (1 - ov)), 'fitter')
+      inp.settings = { ...inp.settings, sensitivity }
+      const r = await detect(inp)
+      const ids = new Set(r.suggestions.map((s) => s.clusterId))
+      const cls = r.clusters.filter((c) => ids.has(c.clusterId))
+      expect(cls.reduce((a, c) => a + c.chosenK, 0)).toBe(3)
+      expect(cls.every((c) => c.status === 'ok')).toBe(true)
+    }
   })
 })
 
@@ -155,5 +159,23 @@ describe('review alternatives as a diff', () => {
     // kept primary circles + added = the full alternative set
     expect(primary.length - alt.removed!.length + alt.added!.length).toBe(alt.colonies.length)
     expect(alt.k).toBe(alt.colonies.length)
+  })
+})
+
+describe('slider re-runs are deterministic', () => {
+  it('returning to an earlier sensitivity gives exactly the fresh result (tables never grow)', async () => {
+    // several clusters, one ambiguous, so different sensitivities choose different K
+    const cluster = [...layout('triangle', 2 * R * 0.6), { x: 100, y: 190, r: R }, { x: 116, y: 190, r: R }]
+    const cache = new DetectorCache()
+    const at = async (sensitivity: number, c?: DetectorCache) => {
+      const inp = input(cluster, 'fitter')
+      inp.settings = { ...inp.settings, sensitivity }
+      const r = await detect(inp, undefined, undefined, c)
+      return JSON.stringify([r.suggestions, r.clusters])
+    }
+    const fresh = await at(0.5)
+    expect(await at(0.5, cache)).toBe(fresh)
+    for (const s of [1, 0, 0.9, 0.1]) await at(s, cache)
+    expect(await at(0.5, cache)).toBe(fresh)
   })
 })

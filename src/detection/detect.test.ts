@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { detect, DetectionCancelled, chooseAnalysisScale, suggestionsToAnnotations } from './index.ts'
 import { computeRoi } from './roi.ts'
 import { measureSeed, radiusPrior, seedQuality } from './calibrate.ts'
-import { ClusterFit, fitCluster as fitClusterRaw, summarizeSolution, DEFAULT_WEIGHTS, type ClusterFitParams } from './methods/fitter.ts'
+import { ClusterFit, decideGroup, fitClusterSweep, partitionCluster, summarizeSolution, DEFAULT_WEIGHTS, type ClusterFitParams } from './methods/fitter.ts'
 import type { FixedColony } from './methods/common.ts'
 import type { Mask, Plane } from './image/plane.ts'
 import { makeMask, makePlane, type RgbaImage } from './image/plane.ts'
@@ -133,7 +133,7 @@ describe('seed calibration', () => {
 describe('union-of-circles fit', () => {
   const prior = { logR: Math.log(R), s: 0.2, rMed: R, rLo: R * Math.exp(-0.4), rHi: R * Math.exp(0.4) }
   const params = { prior, weights: { ...DEFAULT_WEIGHTS, lambda: 0.175 }, contrastRef: 50, contrastLo: 0.5, tau: 2, rMaxFit: 14, coreLevel: 37 }
-  const fitCluster = (m: Mask, F: Plane, ox: number, oy: number, p: ClusterFitParams, fixed: FixedColony[], blobs: Disk[]) => summarizeSolution(fitClusterRaw(m, F, ox, oy, p, fixed, blobs), p)
+  const fitCluster = (m: Mask, F: Plane, ox: number, oy: number, p: ClusterFitParams, fixed: FixedColony[], _blobs: Disk[]) => summarizeSolution(fitClusterSweep(m, F, ox, oy, p, fixed), p)
   function patch(ds: Disk[], w = 70, h = 50) {
     const m = makeMask(w, h)
     const F = makePlane(w, h)
@@ -156,6 +156,20 @@ describe('union-of-circles fit', () => {
     fit.remove(b)
     expect(fit.J()).toBeCloseTo(j0, 9)
   })
+  it('deltaAdd (read-only) equals the change of J on insert, with fixed and free neighbours', () => {
+    const { m, F } = patch([{ x: 25, y: 25, r: R }, { x: 40, y: 25, r: R }])
+    const fit = new ClusterFit(m, F, 0, 0, params)
+    fit.add(25, 25, R, true, 'f')
+    fit.add(38, 24, R - 1)
+    for (const [x, y, r] of [[31, 25, R], [40.5, 26, R + 1.5], [5, 5, 4], [26, 25, R]]) {
+      const pred = fit.deltaAdd(x, y, r)
+      const j0 = fit.J()
+      const d = fit.add(x, y, r)
+      expect(fit.J() - j0).toBeCloseTo(pred, 6)
+      fit.remove(d)
+      expect(fit.J()).toBeCloseTo(j0, 9)
+    }
+  })
   it('explains a touching pair with two disks and a single colony with one', () => {
     const two = patch([{ x: 27, y: 25, r: R }, { x: 42, y: 25, r: R }])
     const sol2 = fitCluster(two.m, two.F, 0, 0, params, [], [])
@@ -165,6 +179,42 @@ describe('union-of-circles fit', () => {
     expect(sol1.chosenK).toBe(1)
     expect(Math.hypot(sol1.colonies[0].x - 30, sol1.colonies[0].y - 25)).toBeLessThan(1.5)
     expect(sol1.gap).toBeGreaterThan(0)
+  })
+  /** Like patch(), but colonies dim towards the rim, so touching colonies show a darker seam. */
+  function seamPatch(ds: Disk[], w = 80, h = 50) {
+    const m = makeMask(w, h)
+    const F = makePlane(w, h)
+    for (let y = 0; y < h; y++)
+      for (let x = 0; x < w; x++) {
+        let a = 0
+        for (const d of ds) {
+          const t = Math.hypot(x + 0.5 - d.x, y + 0.5 - d.y) / d.r
+          a = Math.max(a, t <= 1 ? 1 - 0.6 * t * t : 0)
+        }
+        F.data[y * w + x] = a * 50
+        m.data[y * w + x] = a > 0.1 ? 1 : 0
+      }
+    return { m, F }
+  }
+  it('partitions at seams between touching colonies, not inside a merged pair', () => {
+    const touching = seamPatch([{ x: 25, y: 25, r: R }, { x: 45, y: 25, r: R }])
+    expect(partitionCluster(touching.m, touching.F, prior).n).toBe(2)
+    const merged = patch([{ x: 30, y: 25, r: R }, { x: 37, y: 25, r: R }])
+    expect(partitionCluster(merged.m, merged.F, prior).n).toBe(1)
+  })
+  it('sweeps every K from 0 to K_max per unit, deterministically, with a runner-up of another K', () => {
+    const tri = patch([{ x: 30, y: 20, r: R }, { x: 42, y: 20, r: R }, { x: 36, y: 30, r: R }], 70, 50)
+    const a = fitClusterSweep(tri.m, tri.F, 0, 0, params, [], 7)
+    const b = fitClusterSweep(tri.m, tri.F, 0, 0, params, [], 7)
+    expect(JSON.stringify(a.groups)).toBe(JSON.stringify(b.groups))
+    expect(a.groups).toHaveLength(1)
+    const g = a.groups[0]
+    const ks = new Set(g.configs.map((c) => c.k))
+    for (let k = g.kRange[0]; k <= g.kRange[1]; k++) expect(ks.has(k)).toBe(true)
+    expect(g.kRange[1]).toBeGreaterThanOrEqual(Math.ceil(2 * g.kEst) + 2)
+    const d = decideGroup(g, params.weights, prior.logR, prior.s)
+    expect(d.best.k).toBe(3)
+    expect(d.runnerUp!.k).not.toBe(3)
   })
   it('counts an existing annotation as a fixed colony instead of re-suggesting it', () => {
     const two = patch([{ x: 27, y: 25, r: R }, { x: 42, y: 25, r: R }])

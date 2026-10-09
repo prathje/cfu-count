@@ -71,10 +71,15 @@ export interface DetectSettings {
   /** Clusters whose area exceeds kMax typical colonies are returned as 'too-large' without a fit (default 400). */
   kMax: number
   /**
-   * Fitter: a group is flagged for review when its RELATIVE objective gap (evidence
-   * per contested colony, see ClusterResult.relativeGap) is below this (default 0.03).
-   * A runner-up of "no colony" (K = 0) never makes a review region.
+   * Fitter: a unit (sub-cluster) is flagged for review when its chosen K is not
+   * stable: it changes if the sensitivity moves by ±reviewStability (default 0.05)
+   * or the size tolerance by ±2·reviewStability (relative). The alternative shown is
+   * the runner-up, the best explanation of any other K. A choice between "no
+   * colony" and "colonies" never makes a review region (tap-to-reject handles it);
+   * when that choice is unstable the colonies are suggested (recall bias).
    */
+  reviewStability: number
+  /** Fitter, optional extra criterion: also flag units whose relative gap (ClusterResult.relativeGap) is below this (default 0 = off). */
   reviewGap: number
   /** Floor for the log-radius spread s (default 0.25, i.e. ±25 %). */
   sMin: number

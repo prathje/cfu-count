@@ -47,7 +47,8 @@ export const DEFAULT_SETTINGS: DetectSettings = {
   priorWidth: 1,
   edgeMarginFrac: 0.025,
   kMax: 400,
-  reviewGap: 0.03,
+  reviewStability: 0.05,
+  reviewGap: 0,
   sMin: 0.25,
   minUsableSeeds: 3,
 }
@@ -195,7 +196,7 @@ async function detectLocal(input: DetectInput, onProgress?: ProgressFn, signal?:
   else if (settings.method === 'log') out = await runLog(ctx, localSeedPts)
   else {
     const fitKey = JSON.stringify([pKey, seedKey(input), existingKey(input), settings.kMax, settings.sMin, settings.objective ?? 'tuned', settings.fitWeights ?? null])
-    out = await runFitter(ctx, localSeedPts, cache?.fitterSlot(fitKey))
+    out = await runFitter(ctx, cache?.fitterSlot(fitKey))
   }
   timings.method = now() - t2
 
