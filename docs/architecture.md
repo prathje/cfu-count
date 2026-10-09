@@ -72,7 +72,11 @@ their marker to avoid collisions (`viewport/label-layout.ts`).
 only the image layer: `viewport/adjusted-layer.ts` caches display-adjusted copies of
 the pyramid, computed lazily by `adjust.worker.ts` (OffscreenCanvas; chunked
 main-thread fallback in `adjust-processor.ts`) with the pure LUT/matrix maths in
-`viewport/image-adjust.ts`. Markers are never filtered. The settings live on
+`viewport/image-adjust.ts` (the centre-contrast colour LUT and its eyedropper
+helpers in `viewport/centre-contrast.ts`; DOM sampling of original pixels in
+`viewport/eyedropper.ts`). The viewport's `pickMode`/`onPick` turns the next tap,
+click or Enter into an image point for the eyedropper instead of an annotation
+intent. Markers are never filtered. The settings live on
 `ImageRecord.display` and are set with `images.setDisplay` (project.json only, not
 undoable, allowed while a group is locked).
 

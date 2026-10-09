@@ -100,12 +100,31 @@ numbers are clamped, and an all-default value is dropped (never a load error).
 | `gamma` | number | 1 | 0.2…5; output `v^(1/gamma)` (> 1 lightens midtones) |
 | `saturation` | number | 1 | 0…3; colour view only (0 = grey) |
 | `invert` | boolean | false | swap light and dark |
-| `channel` | `"rgb" \| "red" \| "green" \| "blue" \| "luma"` | `"rgb"` | single channels and `luma` (Rec. 709) are shown as grey |
+| `channel` | `"rgb" \| "red" \| "green" \| "blue" \| "luma" \| "centre"` | `"rgb"` | single channels and `luma` (Rec. 709) are shown as grey; `centre` = centre contrast (below), grey |
 | `autoContrast` | boolean | false | stretch the 0.5 %–99.5 % percentiles of the displayed values (histogram of the smallest pyramid level) to full range |
+| `centre` | CentreSample \| null | null | colours sampled with the eyedropper for the `centre` view: `{centre, rim, pickedRim}`, each an sRGB `[r, g, b]` (0–255, one decimal); `pickedRim` is null unless the user picked the rim |
+| `separation` | number | 6 | 2…16; steepness of the centre/rim split in the `centre` view |
 
-Order: channel matrix (channel view, saturation) → auto-contrast stretch →
-brightness → contrast → clamp → gamma → invert. Changing it saves `project.json`
-only.
+Order: colour stage (channel matrix for channel view and saturation, or the centre
+colour LUT) → auto-contrast stretch → brightness → contrast → clamp → gamma →
+invert. Changing it saves `project.json` only.
+
+**Centre contrast** (`channel: "centre"`, `src/viewport/centre-contrast.ts`). The
+user picks a colony centre in the viewport; the app averages a 7×7 patch of the
+ORIGINAL pixels (`centre`) and estimates the rest-of-the-disc colour (`rim`): along
+32 rays from the pick, the colony edge is the first strong rise of colour distance,
+and `rim` is the mean colour at 65–85 % of the median edge radius (moved 6 ΔE
+toward the background just outside the edge when the colony is uniform). The user
+may pick the rim instead (`pickedRim`, which wins). Each pixel's CIE Lab colour is
+projected onto the axis from the rim (t = 0) to the centre (t = 1); axes shorter
+than 6 ΔE are stretched to 6 ΔE about their midpoint. Grey =
+`0.3·σ(k(t + 0.5)) + 0.7·σ(k(t − 0.5))` with σ the logistic function and k =
+`separation`: background dark, rim about 30 %, centres bright. The mapping is
+tabulated on a 33³ RGB grid and read with trilinear interpolation; a 3×3 box blur
+follows to hide JPEG noise. Without a `centre` sample the view is plain grey
+(`luma`). Samples and separation only affect the `centre` view; a value whose
+rendering is the default is still stored while it holds samples, so switching views
+keeps them. "Apply to group/all" copies them with the rest of the settings.
 
 Drive link (`storage.kind = "drive"`):
 
