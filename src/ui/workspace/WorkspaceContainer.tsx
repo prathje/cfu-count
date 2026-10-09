@@ -10,7 +10,7 @@ import { Viewport } from '../../viewport/Viewport'
 import { useApp } from '../context'
 import { bitmapError, bitmapSizeMismatch, createCurrentBitmap, readyImage, type BlobSource } from '../images'
 import { createElementHeight, createElementWidth, createMediaQuery, MOD } from '../media'
-import { CANVAS_GUARD_ATTR, Popover } from '../primitives'
+import { Button, CANVAS_GUARD_ATTR, Popover } from '../primitives'
 import { COMPARE_KEY, FIND_SIMILAR_KEY, compareKeyAction, isTypingTarget } from '../shortcuts'
 import { AdjustPanel } from './AdjustPanel'
 import { FloatingToolbar, toolbarModeFor } from '../toolbar/FloatingToolbar'
@@ -18,7 +18,8 @@ import { groupTallies, interactionHint, nearDuplicateMessage, sizeMismatchMessag
 import { ImageHeader } from './ImageHeader'
 import { ViewportFooter } from './ViewportFooter'
 import { NoImages } from './EmptyStates'
-import { AlertTriangle, Loader } from '../icons'
+import { AlertTriangle, Loader, Pipette } from '../icons'
+import { sampleCentre, sampleColour } from '../../viewport/eyedropper'
 import './workspace.css'
 
 /** Container: wires the editor to the image header, viewport, floating toolbar and footer. */
@@ -105,6 +106,49 @@ export function WorkspaceContainer(props: WorkspaceContainerProps) {
     window.removeEventListener('keyup', onCompareKey)
     window.removeEventListener('blur', endCompare)
   })
+
+  // ------------------------------------------------ eyedropper (centre contrast colours)
+  // While picking, the adjust popover is closed (it would cover the plate) and the
+  // viewport reports the next tap as an image point; the popover reopens afterwards.
+  const [picking, setPicking] = createSignal<'centre' | 'rim' | null>(null)
+  function startPick(target: 'centre' | 'rim') {
+    setComparing(false)
+    setPicking(target)
+    props.onAdjustOpen(false)
+  }
+  function endPick() {
+    if (!picking()) return
+    setPicking(null)
+    props.onAdjustOpen(true)
+  }
+  function onPick(x: number, y: number) {
+    const target = picking()
+    const img = images.current()
+    const src = readyImage(bitmap())?.source
+    if (!target || !img || !src) return
+    const cur = display()
+    if (target === 'centre') {
+      const p = sampleCentre(src, img.width, x, y)
+      if (!p) return toaster.push({ tone: 'error', key: 'display-pick', message: 'Couldn’t read the colour there. Try another spot.' })
+      images.setDisplay([img.id], { ...cur, channel: 'centre', centre: { centre: [...p.centre], rim: [...p.rim], pickedRim: cur.centre?.pickedRim ?? null } })
+    } else {
+      const c = sampleColour(src, img.width, x, y)
+      if (!c || !cur.centre) return toaster.push({ tone: 'error', key: 'display-pick', message: 'Couldn’t read the colour there. Try another spot.' })
+      images.setDisplay([img.id], { ...cur, channel: 'centre', centre: { ...cur.centre, pickedRim: [...c] } })
+    }
+    endPick()
+  }
+  // Esc cancels (before the review panel's Escape); a new image or reopening the panel ends it.
+  const onPickKey = (e: KeyboardEvent) => {
+    if (e.key !== 'Escape' || !picking() || document.querySelector('dialog[open]')) return
+    e.preventDefault()
+    e.stopPropagation()
+    endPick()
+  }
+  window.addEventListener('keydown', onPickKey, true)
+  onCleanup(() => window.removeEventListener('keydown', onPickKey, true))
+  createEffect(on(() => state.currentImageId, () => setPicking(null), { defer: true }))
+  createEffect(on(() => props.adjustOpen, (open) => open && setPicking(null), { defer: true }))
 
   // ------------------------------------------------ assisted counting (review overlay + panel)
   createEffect(() => assist.setSizeMismatch(!!bitmapSizeMismatch(bitmap())))
@@ -303,6 +347,8 @@ export function WorkspaceContainer(props: WorkspaceContainerProps) {
                 touchAnnotates={state.touchAnnotates}
                 adjust={image().display}
                 compareOriginal={comparing()}
+                pickMode={picking() !== null}
+                onPick={onPick}
                 suggestions={suggestionMarks()}
                 suggestionColor={assist.targetGroup()?.color}
                 reviewClusters={clusterMarks()}
@@ -320,6 +366,26 @@ export function WorkspaceContainer(props: WorkspaceContainerProps) {
                 }}
                 label={`${image().name}: ${annotations.total()} confirmed colonies. ${hint()}`}
               />
+              <Show when={picking()}>
+                {(target) => (
+                  <>
+                    <div class="pick-banner" role="status">
+                      <Pipette size={18} aria-hidden="true" />
+                      <div class="pick-banner__text">
+                        <strong>
+                          {coarse() ? 'Tap' : 'Click'} {target() === 'centre' ? 'the centre of a typical colony' : 'the rim of that colony, between centre and edge'}
+                        </strong>
+                        <span>{coarse() ? 'One finger pans, two fingers zoom' : 'Pan and zoom as usual · Esc cancels'}</span>
+                        <span class="sr-only">Keyboard: focus the image, move it with the arrow keys and press Enter to pick at its centre.</span>
+                      </div>
+                      <Button size="sm" onClick={endPick}>
+                        Cancel
+                      </Button>
+                    </div>
+                    <div class="pick-reticle" aria-hidden="true" />
+                  </>
+                )}
+              </Show>
               <Show when={bitmap().status === 'loading'}>
                 <div class="stage__overlay" role="status">
                   <Loader class="spin" size={20} aria-hidden="true" /> Loading image…
@@ -387,6 +453,7 @@ export function WorkspaceContainer(props: WorkspaceContainerProps) {
                   onApplyAll={() => applyDisplayTo(images.order().map((i) => i.id), `all ${images.order().length} images`)}
                   onApplyGroup={() => applyDisplayTo(groupImages().map((i) => i.id), `“${imageGroupName()}”`)}
                   onCompare={setComparing}
+                  onPick={startPick}
                 />
               </Popover>
               <Show when={assist.open()}>

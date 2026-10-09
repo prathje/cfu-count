@@ -1,11 +1,11 @@
 import { For, Show } from 'solid-js'
-import type { DisplayChannel, ImageDisplayAdjust } from '../../model/types'
-import { DISPLAY_PRESETS, isDefaultDisplay, matchingPreset } from '../../model/display'
-import { Eye, RefreshCw } from '../icons'
+import type { DisplayChannel, ImageDisplayAdjust, RgbColour } from '../../model/types'
+import { DISPLAY_LIMITS, DISPLAY_PRESETS, applyPreset, isDefaultDisplay, matchingPreset } from '../../model/display'
+import { Eye, Pipette, RefreshCw } from '../icons'
 import { Button, SegmentedControl, Slider, Switch } from '../primitives'
 import './adjust-panel.css'
 
-/** Display-only image adjustments (brightness, contrast, midtones, colour, channel) with presets. */
+/** Display-only image adjustments (brightness, contrast, midtones, colour, channel, centre contrast) with presets. */
 export interface AdjustPanelProps {
   value: ImageDisplayAdjust
   /** Name of the current image's image group, or null when ungrouped. */
@@ -22,6 +22,8 @@ export interface AdjustPanelProps {
   onApplyAll(): void
   onApplyGroup(): void
   onCompare(active: boolean): void
+  /** Start the eyedropper for the centre view's centre or rim colour. */
+  onPick(target: 'centre' | 'rim'): void
 }
 
 const CHANNELS: { value: DisplayChannel; label: string }[] = [
@@ -30,7 +32,10 @@ const CHANNELS: { value: DisplayChannel; label: string }[] = [
   { value: 'green', label: 'Green' },
   { value: 'blue', label: 'Blue' },
   { value: 'luma', label: 'Grey' },
+  { value: 'centre', label: 'Centre' },
 ]
+
+const css = (c: RgbColour) => `rgb(${c.map((v) => Math.round(v)).join(' ')})`
 
 const signedPercent = (v: number) => (v === 0 ? '0 %' : `${v > 0 ? '+' : '−'}${Math.abs(v)} %`)
 /** Midtones slider works on log2(gamma) so 0.5× and 2× sit symmetrically around 1. */
@@ -77,7 +82,10 @@ export function AdjustPanel(props: AdjustPanelProps) {
               class="adjust-chip"
               aria-pressed={preset() === p.id}
               title={p.description}
-              onClick={() => props.onChange({ ...p.value })}
+              onClick={() => {
+                props.onChange(applyPreset(p, props.value))
+                if (p.value.channel === 'centre' && !props.value.centre) props.onPick('centre')
+              }}
             >
               {p.label}
             </button>
@@ -89,6 +97,67 @@ export function AdjustPanel(props: AdjustPanelProps) {
         <span class="field__label">Channel</span>
         <SegmentedControl label="Channel" value={props.value.channel} options={CHANNELS} onChange={(channel) => set({ channel })} />
       </div>
+
+      <Show when={props.value.channel === 'centre'}>
+        <div class="adjust-centre" role="group" aria-label="Centre contrast">
+          <Show
+            when={props.value.centre}
+            fallback={
+              <>
+                <p class="adjust-centre__intro">
+                  Pick the centre of a typical colony. Centres then show bright, the rest of each colony dim and the background dark.
+                </p>
+                <Button variant="primary" icon={Pipette} onClick={() => props.onPick('centre')}>
+                  Pick a colony centre
+                </Button>
+              </>
+            }
+          >
+            {(c) => (
+              <>
+                <div class="adjust-centre__row">
+                  <span class="adjust-swatch" style={{ background: css(c().centre) }} aria-hidden="true" />
+                  <span class="adjust-centre__text">
+                    <span>Centre colour</span>
+                    <span class="adjust-centre__note">Picked</span>
+                  </span>
+                  <Button size="sm" icon={Pipette} onClick={() => props.onPick('centre')} aria-label="Pick the centre colour again">
+                    Pick
+                  </Button>
+                </div>
+                <div class="adjust-centre__row">
+                  <span class="adjust-swatch" style={{ background: css(c().pickedRim ?? c().rim) }} aria-hidden="true" />
+                  <span class="adjust-centre__text">
+                    <span>Rim colour</span>
+                    <span class="adjust-centre__note">{c().pickedRim ? 'Picked' : 'Automatic'}</span>
+                  </span>
+                  <Show
+                    when={c().pickedRim}
+                    fallback={
+                      <Button size="sm" icon={Pipette} onClick={() => props.onPick('rim')} aria-label="Pick the rim colour">
+                        Pick
+                      </Button>
+                    }
+                  >
+                    <Button size="sm" onClick={() => set({ centre: { ...c(), pickedRim: null } })} aria-label="Use the automatic rim colour">
+                      Auto
+                    </Button>
+                  </Show>
+                </div>
+              </>
+            )}
+          </Show>
+          <Slider
+            label="Separation"
+            value={props.value.separation}
+            min={DISPLAY_LIMITS.separation.min}
+            max={DISPLAY_LIMITS.separation.max}
+            disabled={!props.value.centre}
+            format={(v) => `${v}${v <= 4 ? ' · soft' : v >= 11 ? ' · hard' : ''}`}
+            onInput={(separation) => set({ separation })}
+          />
+        </div>
+      </Show>
 
       <Switch
         label="Auto contrast"

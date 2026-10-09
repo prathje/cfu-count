@@ -417,3 +417,67 @@
   top: 7px;
   right: 7px;
 }
+
+/* Eyedropper (centre contrast): instruction banner under the toolbar, and a
+   centre reticle for keyboard picking (Enter picks the view centre). */
+.pick-banner {
+  position: absolute;
+  left: 50%;
+  top: calc(var(--s-3) + var(--ctl) + 10px + var(--s-2));
+  transform: translateX(-50%);
+  z-index: 11;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: max-content;
+  max-width: calc(100% - 24px);
+  padding: 8px 8px 8px 12px;
+  border: 1px solid var(--c-accent);
+  border-radius: var(--r-lg);
+  background: var(--glass);
+  backdrop-filter: var(--blur);
+  -webkit-backdrop-filter: var(--blur);
+  box-shadow: var(--shadow-float);
+  color: var(--c-accent-text);
+  line-height: 1.35;
+}
+
+.pick-banner__text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  font-size: var(--fs-sm);
+}
+
+.pick-banner__text strong {
+  color: var(--c-text);
+  font-size: var(--fs-md);
+  font-weight: 600;
+}
+
+.pick-banner__text span {
+  color: var(--c-text-2);
+}
+
+.pick-banner .btn {
+  flex: none;
+}
+
+.pick-reticle {
+  display: none;
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  z-index: 5;
+  width: 28px;
+  height: 28px;
+  margin: -14px 0 0 -14px;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 0.6), inset 0 0 0 1px rgb(0 0 0 / 0.6);
+  pointer-events: none;
+}
+
+.stage:has(.cfu-viewport:focus-visible) .pick-reticle {
+  display: block;
+}
