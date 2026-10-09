@@ -296,7 +296,7 @@ export async function pullFolder(client: DriveClient, folderId: string, now: () 
 
   let remote: Project
   try {
-    remote = validateProject(parseJson(await (await client.download(pj.id)).text(), PROJECT_JSON))
+    remote = validateProject(parseJson(await (await client.download(pj.id)).text(), PROJECT_JSON), PROJECT_JSON, warnings)
   } catch (e) {
     if (e instanceof SchemaError) throw new DriveError('invalid', `project.json in "${folder.name}" cannot be read: ${e.message}`)
     throw e
@@ -429,6 +429,7 @@ export function emptyDriveProject(folder: DriveFile, now: string, defaults: Pick
     images: [],
     annotationGroups: defaults.annotationGroups,
     storage: newDriveLink(folder.id, folder.name),
+    excludedDriveFileIds: [],
     revision: 0,
   }
 }

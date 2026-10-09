@@ -3,7 +3,7 @@ import { zipSync, strToU8 } from 'fflate'
 import { buildSummaryCsv, CSV_COLUMNS, encodeCell, parseCsv } from '../csv'
 import { decodeArchive, encodeArchive } from '../archive'
 import { inspectImage, sha256Hex, sniffFormat, UnsupportedImageError } from '../images'
-import { validateProject } from '../validate'
+import { validateImageAnnotations, validateProject } from '../validate'
 import { SchemaError } from '../errors'
 import { annotation, doc, fakeDecoder, PNG_1x1, project } from './fakes'
 
@@ -157,13 +157,25 @@ describe('validateProject', () => {
     expect(validateProject(p).annotationGroups[0].labelSize).toBe(12)
   })
 
-  it('rejects unknown image groups and duplicate IDs', () => {
+  it('ungroups images with an unknown image group (warning) and rejects duplicate IDs', () => {
     const p = project()
     p.images[0].imageGroupId = 'nope'
-    expect(() => validateProject(JSON.parse(JSON.stringify(p)))).toThrow(/unknown image group/)
+    const warnings: string[] = []
+    const v = validateProject(JSON.parse(JSON.stringify(p)), 'project.json', warnings)
+    expect(v.images[0].imageGroupId).toBeNull()
+    expect(warnings.join(' ')).toMatch(/Ungrouped/)
     const q = project()
     q.images[1].id = 'i1'
     expect(() => validateProject(JSON.parse(JSON.stringify(q)))).toThrow(/duplicate/)
+  })
+})
+
+describe('validateImageAnnotations', () => {
+  it('normalises manual marks to accepted so CSV and UI agree', () => {
+    const p = project()
+    const d = doc(p, 'i1', [annotation('a1', 'g1', { reviewStatus: 'unreviewed' })])
+    const v = validateImageAnnotations(JSON.parse(JSON.stringify(d)))
+    expect(v.annotations[0].reviewStatus).toBe('accepted')
   })
 })
 

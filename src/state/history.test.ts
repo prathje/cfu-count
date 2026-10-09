@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { AnnotationGroup } from '../model/types'
-import { applyOps, makeGroup, makeManualAnnotation, type AnnotationOp } from './core'
+import { applyOps, makeManualAnnotation, type AnnotationOp } from '../model/annotations'
+import { makeGroup } from '../model/groups'
 import { dropEntriesForGroup, emptyHistory, planRedo, planUndo, record, type HistoryEntry } from './history'
 
 const at = '2026-01-01T00:00:00.000Z'

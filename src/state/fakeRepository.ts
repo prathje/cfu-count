@@ -11,7 +11,8 @@ import type { ID, ImageAnnotations, ImageRecord, Project } from '../model/types'
 import { SCHEMA_VERSION } from '../model/types'
 import { newId, now } from '../model/ids'
 import type { DriveState, ImportResult, OpenedProject, ProjectRepository, ProjectSummary, SaveStatus } from '../storage/api'
-import { confirmedCountsByGroup, makeGroup, makeManualAnnotation } from './core'
+import { confirmedCountsByGroup, makeManualAnnotation } from '../model/annotations'
+import { makeGroup } from '../model/groups'
 import { drawSamplePlate } from './sampleImages'
 
 interface Stored {
@@ -40,6 +41,7 @@ function blankProject(name: string): Project {
     images: [],
     annotationGroups: [],
     storage: { kind: 'local' },
+    excludedDriveFileIds: [],
     revision: 0,
   }
 }

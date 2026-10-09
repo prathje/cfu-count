@@ -11,7 +11,8 @@ import { createEffect, createMemo, createSignal, on, onCleanup, onMount } from '
 import type { AnnotationGroup } from '../model/types'
 import type { ViewportHandle, ViewportProps, ViewState } from './api'
 import { GestureMachine, type GestureEffect, type PointerKind, type PointerSample } from './gesture'
-import { editBlockReason, resolveHover, resolveTap, type InteractionScene } from './interaction'
+import { editBlock } from '../model/policy'
+import { resolveHover, resolveTap, type InteractionScene } from './interaction'
 import { createPointIndex, type PointIndex } from './spatial-index'
 import {
   buildPyramid,
@@ -105,7 +106,7 @@ export function Viewport(props: ViewportProps) {
   const cursor = createMemo(() => {
     if (navigating()) return 'grabbing'
     if (props.tool === 'pan' || spaceHeld()) return 'grab'
-    if (editBlockReason(activeGroup())) return 'not-allowed'
+    if (editBlock(activeGroup())) return 'not-allowed'
     return props.tool === 'erase' ? ERASER_CURSOR : 'crosshair'
   })
 

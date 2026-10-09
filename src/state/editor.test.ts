@@ -29,6 +29,7 @@ function project(): Project {
     images: [img('i1', 'ig1'), img('i2', null)],
     annotationGroups: [],
     storage: { kind: 'local' },
+    excludedDriveFileIds: [],
     revision: 0,
   }
 }

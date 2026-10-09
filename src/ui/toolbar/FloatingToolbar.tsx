@@ -1,7 +1,7 @@
 import { For, Show } from 'solid-js'
 import type { AnnotationGroup, ID } from '../../model/types'
-import type { GroupStylePatch } from '../../state/core'
-import type { Tool } from '../../viewport/api'
+import type { GroupStylePatch } from '../../model/groups'
+import { toolHintKey, type Tool } from '../../model/tool'
 import {
   ChevronDown,
   Eraser,
@@ -36,9 +36,9 @@ export function toolbarModeFor(width: number): ToolbarMode {
 }
 
 export const TOOLS: readonly { tool: Tool; label: string; icon: IconComponent; key: string }[] = [
-  { tool: 'add', label: 'Add', icon: Plus, key: 'A' },
-  { tool: 'erase', label: 'Erase', icon: Eraser, key: 'E' },
-  { tool: 'pan', label: 'Pan', icon: Hand, key: 'H' },
+  { tool: 'add', label: 'Add', icon: Plus, key: toolHintKey('add') },
+  { tool: 'erase', label: 'Erase', icon: Eraser, key: toolHintKey('erase') },
+  { tool: 'pan', label: 'Pan', icon: Hand, key: toolHintKey('pan') },
 ]
 
 /** The single-row annotation toolbar floating over the image. Order is fixed by the approved layout. */

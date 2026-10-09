@@ -4,7 +4,7 @@
  * one batch of ops = one undo step.
  */
 import type { AnnotationGroup, DetectionRun, ID } from '../model/types'
-import { checkOps, invertOps, type AnnotationOp, type EditBlock } from './core'
+import { checkOps, invertOps, type AnnotationOp, type OpBlock } from '../model/annotations'
 
 export interface HistoryEntry {
   id: string
@@ -36,7 +36,7 @@ export function record(h: ImageHistory, entry: HistoryEntry, limit = HISTORY_LIM
 export type HistoryPlan =
   | { ok: true; ops: AnnotationOp[]; entry: HistoryEntry; next: ImageHistory }
   | { ok: false; reason: 'empty' }
-  | { ok: false; reason: 'blocked'; block: EditBlock; entry: HistoryEntry }
+  | { ok: false; reason: 'blocked'; block: OpBlock; entry: HistoryEntry }
 
 /** Plan an undo; refuses (without changing history) if it would touch a locked/hidden/missing group. */
 export function planUndo(h: ImageHistory, groups: readonly AnnotationGroup[]): HistoryPlan {

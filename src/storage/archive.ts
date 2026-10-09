@@ -66,8 +66,8 @@ export async function decodeArchive(bytes: Uint8Array): Promise<DecodedArchive> 
   if (total > MAX_ARCHIVE_UNCOMPRESSED) throw new SchemaError('The archive is too large to import.')
   const pj = entries['project.json']
   if (!pj) throw new SchemaError('The archive does not contain project.json — is it a colony counter project export?')
-  const project = validateProject(parseJson(utf8.decode(pj), 'project.json'))
   const warnings: string[] = []
+  const project = validateProject(parseJson(utf8.decode(pj), 'project.json'), 'project.json', warnings)
   const annotations = new Map<ID, ImageAnnotations>()
   const images = new Map<ID, Blob>()
   const imageFiles = new Map<string, string>() // imageId -> entry name

@@ -14,23 +14,16 @@ import { createAutosaver } from './autosave'
 import {
   applyOps,
   checkOps,
-  clampStyle,
   confirmedCount,
   confirmedCountsByGroup,
-  DEFAULT_LABEL_SIZE,
-  displayOrder,
-  docForSave,
-  emptyDoc,
-  groupEditBlock,
-  makeGroup,
   makeManualAnnotation,
-  moveItem,
-  uniqueName,
   visibilitySplit,
   type AnnotationOp,
-  type EditBlock,
-  type GroupStylePatch,
-} from './core'
+  type OpBlock as EditBlock,
+} from '../model/annotations'
+import { clampStyle, DEFAULT_LABEL_SIZE, makeGroup, moveItem, uniqueName, type GroupStylePatch } from '../model/groups'
+import { displayOrder, docForSave, emptyDoc } from '../model/project'
+import { editBlock as groupEditBlock } from '../model/policy'
 import { dropEntriesForGroup, emptyHistory, planRedo, planUndo, record, type ImageHistory } from './history'
 import { hiddenMessage, historyBlockMessage, lockedMessage, type Notify } from './messages'
 import { prefs } from './prefs'

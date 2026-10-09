@@ -3,19 +3,18 @@ import type { Annotation, AnnotationGroup, Project } from '../model/types'
 import {
   applyOps,
   checkOps,
-  clampStyle,
   confirmedCount,
   confirmedCountsByGroup,
-  displayOrder,
-  groupEditBlock,
+  countBreakdownByGroup,
   invertOps,
-  makeGroup,
   makeManualAnnotation,
-  moveItem,
-  uniqueName,
+  normaliseAnnotation,
   visibilitySplit,
   type AnnotationOp,
-} from './core'
+} from './annotations'
+import { clampStyle, makeGroup, moveItem, uniqueName } from './groups'
+import { applyStorageOwned, displayOrder } from './project'
+import { editBlock as groupEditBlock } from './policy'
 import { GROUP_PALETTE, nextGroupColor } from './palette'
 
 const at = '2026-01-01T00:00:00.000Z'
@@ -167,5 +166,53 @@ describe('displayOrder', () => {
       images: [img('1', 'A'), img('2', null), img('3', 'B'), img('4', 'gone')],
     } as unknown as Project
     expect(displayOrder(project).map((i) => i.id)).toEqual(['3', '1', '2', '4'])
+  })
+})
+
+describe('confirmed definition (shared by UI and summary.csv)', () => {
+  it('normalises manual marks to accepted', () => {
+    const odd = ann('m', 'g1', { reviewStatus: 'unreviewed' })
+    expect(normaliseAnnotation(odd).reviewStatus).toBe('accepted')
+    const fine = ann('f')
+    expect(normaliseAnnotation(fine)).toBe(fine)
+  })
+  it('breakdown agrees with confirmedCountsByGroup', () => {
+    const list = [
+      ann('a'),
+      ann('m', 'g1', { reviewStatus: 'unreviewed' }), // manual: always confirmed
+      ann('s', 'g1', { origin: 'automated', reviewStatus: 'unreviewed' }),
+      ann('t', 'g1', { origin: 'automated', reviewStatus: 'accepted' }),
+      ann('r', 'g1', { origin: 'automated', reviewStatus: 'rejected' }),
+    ]
+    const b = countBreakdownByGroup(list).get('g1')!
+    expect(b).toEqual({ confirmed: 3, manual: 2, automatedAccepted: 1, automatedUnreviewed: 1 })
+    expect(confirmedCountsByGroup(list.map(normaliseAnnotation)).get('g1')).toBe(b.confirmed)
+  })
+})
+
+describe('checkOps immutability', () => {
+  const groups = [group('g1')]
+  it('rejects updates that change origin or id', () => {
+    const before = ann('a', 'g1')
+    expect(checkOps([{ kind: 'update', before, after: { ...before, origin: 'automated' } }], groups)).toMatchObject({ reason: 'invalid' })
+    expect(checkOps([{ kind: 'update', before, after: { ...before, id: 'b' } }], groups)).toMatchObject({ reason: 'invalid' })
+    expect(checkOps([{ kind: 'update', before, after: { ...before, x: 5 } }], groups)).toBeNull()
+  })
+})
+
+describe('applyStorageOwned', () => {
+  it('takes storage, revision, exclusions and image sources from storage; keeps editor fields', () => {
+    const img = { id: 'i1', name: 'edited', imageGroupId: null, source: { kind: 'local' } } as unknown as Project['images'][number]
+    const editor = { name: 'Mine', revision: 1, storage: { kind: 'local' }, excludedDriveFileIds: [], images: [img] } as unknown as Project
+    const stored = {
+      name: 'Old',
+      revision: 7,
+      storage: { kind: 'drive', folderId: 'F', folderName: 'F' },
+      excludedDriveFileIds: ['x'],
+      images: [{ ...img, name: 'old', source: { kind: 'drive', fileId: 'd1' }, sourceMismatch: { detectedAt: '', message: 'm' } }],
+    } as unknown as Project
+    const merged = applyStorageOwned(editor, stored)
+    expect(merged).toMatchObject({ name: 'Mine', revision: 7, storage: { kind: 'drive' }, excludedDriveFileIds: ['x'] })
+    expect(merged.images[0]).toMatchObject({ name: 'edited', source: { kind: 'drive', fileId: 'd1' }, sourceMismatch: { message: 'm' } })
   })
 })

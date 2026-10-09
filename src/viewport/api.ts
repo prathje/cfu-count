@@ -3,8 +3,13 @@
  * input component: it never mutates annotations itself; it reports intents.
  */
 import type { Annotation, AnnotationGroup, ID } from '../model/types'
+import type { EditBlockReason } from '../model/policy'
+import type { Tool } from '../model/tool'
 
-export type Tool = 'add' | 'erase' | 'pan'
+export type { Tool } from '../model/tool'
+
+/** Why a tap did nothing: the shared edit policy (model/policy.ts) or an erase that hit no marker. */
+export type BlockedReason = EditBlockReason | 'nothing-to-erase'
 
 export interface ViewState {
   /** Screen CSS px per image px. */
@@ -42,7 +47,7 @@ export interface ViewportProps {
   /** Completed tap/click in Erase mode that hit an eligible marker. */
   onErase(annotationId: ID): void
   /** Tap in add/erase on a hidden or locked active group, or erase that hit nothing. */
-  onBlocked?(reason: 'hidden' | 'locked' | 'no-group' | 'nothing-to-erase'): void
+  onBlocked?(reason: BlockedReason): void
   onViewChange?(view: ViewState): void
   ref?: (handle: ViewportHandle) => void
   /** Optional aria label / description for the canvas. */

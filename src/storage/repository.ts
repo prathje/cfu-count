@@ -401,6 +401,7 @@ export function createProjectRepository(deps: RepositoryDeps): ProjectRepository
         images: [],
         annotationGroups: [],
         storage: { kind: 'local' },
+        excludedDriveFileIds: [],
         revision: 1,
       }
       await localWrite(null, () => local.saveProject(project))

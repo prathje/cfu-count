@@ -234,6 +234,12 @@ export interface Project {
   /** Project-wide annotation groups (same set offered on every image). Order = display order. */
   annotationGroups: AnnotationGroup[]
   storage: ProjectStorageLink
-  /** Incremented on each successful local save. */
+  /**
+   * Drive file IDs of images the user removed from the project. The Drive folder is
+   * the project, so images found in it are added automatically; these are skipped.
+   * Storage-owned (see model/project.ts applyStorageOwned).
+   */
+  excludedDriveFileIds: string[]
+  /** Incremented on each successful local save. Storage-owned. */
   revision: number
 }

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { AnnotationGroup } from '../model/types'
+import { editBlock as editBlockReason } from '../model/policy'
 import {
-  editBlockReason,
   eraseHitRadiusPx,
   resolveHover,
   resolveTap,
@@ -26,9 +26,10 @@ const g1 = group('g1', { size: 6 })
 const g2 = group('g2', { size: 6 })
 
 describe('edit blocking', () => {
-  it('orders reasons: no group, hidden, locked', () => {
+  it('orders reasons: no group, locked, hidden (model/policy)', () => {
     expect(editBlockReason(undefined)).toBe('no-group')
-    expect(editBlockReason(group('x', { hidden: true, locked: true }))).toBe('hidden')
+    expect(editBlockReason(group('x', { hidden: true, locked: true }))).toBe('locked')
+    expect(editBlockReason(group('x', { hidden: true }))).toBe('hidden')
     expect(editBlockReason(group('x', { locked: true }))).toBe('locked')
     expect(editBlockReason(g1)).toBeNull()
   })

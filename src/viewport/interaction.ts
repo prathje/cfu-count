@@ -4,7 +4,8 @@
  * No DOM, no rendering, no gesture recognition.
  */
 import type { Annotation, AnnotationGroup, ID } from '../model/types'
-import type { Tool, ViewState } from './api'
+import { editBlock } from '../model/policy'
+import type { BlockedReason, Tool, ViewState } from './api'
 import type { PointerKind } from './gesture'
 import type { PointIndex } from './spatial-index'
 import { screenToImage } from './transform'
@@ -17,17 +18,6 @@ export const MIN_DUPLICATE_RADIUS = 6
 /** Screen-space erase hit radius (CSS px): never smaller than the drawn marker. */
 export function eraseHitRadiusPx(markerSize: number, pointer: PointerKind): number {
   return Math.max(markerSize, MIN_HIT_RADIUS[pointer])
-}
-
-/** Why the active group cannot be edited. */
-export type EditBlock = 'hidden' | 'locked' | 'no-group'
-
-/** Can the active group be edited? Reasons are checked in order: no group, hidden, locked. */
-export function editBlockReason(group: AnnotationGroup | undefined | null): EditBlock | null {
-  if (!group) return 'no-group'
-  if (group.hidden) return 'hidden'
-  if (group.locked) return 'locked'
-  return null
 }
 
 /** Data a tap or hover is resolved against. */
@@ -47,7 +37,7 @@ export type TapIntent =
   /** Add at image (x, y). `nearby` is an existing visible marker that overlaps (cue only). */
   | { kind: 'add'; x: number; y: number; nearby: Annotation | null }
   | { kind: 'erase'; id: ID; annotation: Annotation }
-  | { kind: 'blocked'; reason: EditBlock | 'nothing-to-erase' }
+  | { kind: 'blocked'; reason: BlockedReason }
 
 /**
  * Resolve a completed tap at screen (sx, sy).
@@ -66,7 +56,7 @@ export function resolveTap(
 ): TapIntent {
   if (tool === 'pan') return { kind: 'none' }
   const g = scene.activeGroup
-  const block = editBlockReason(g)
+  const block = editBlock(g)
   if (block || !g) return { kind: 'blocked', reason: block ?? 'no-group' }
   const p = screenToImage(scene.view, sx, sy)
   if (tool === 'add') {
@@ -122,7 +112,7 @@ export function resolveHover(
   pointer: PointerKind,
 ): HoverPreview {
   const g = scene.activeGroup
-  if (tool === 'pan' || editBlockReason(g) || !g) return { kind: 'none' }
+  if (tool === 'pan' || editBlock(g) || !g) return { kind: 'none' }
   if (tool === 'add') return { kind: 'add', x: sx, y: sy, r: Math.max(3, g.size), color: g.color }
   const p = screenToImage(scene.view, sx, sy)
   const hit = eraseTarget(scene, g, p.x, p.y, pointer)

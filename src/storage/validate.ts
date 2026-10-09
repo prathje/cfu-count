@@ -16,11 +16,10 @@ import type {
   ProjectStorageLink,
 } from '../model/types'
 import { SchemaError } from './errors'
+import { normaliseAnnotation } from '../model/annotations'
+import { DEFAULT_LABEL_SIZE } from '../model/groups'
 
 type Obj = Record<string, unknown>
-
-/** Default label font size (CSS px) for groups saved before `labelSize` existed. */
-export const DEFAULT_LABEL_SIZE = 12
 
 function fail(path: string, what: string): never {
   throw new SchemaError(`Invalid ${path}: ${what}`)
@@ -136,7 +135,12 @@ function validateStorage(v: unknown, path: string): ProjectStorageLink {
   return o as unknown as ProjectStorageLink
 }
 
-export function validateProject(v: unknown, path = 'project.json'): Project {
+/**
+ * Validate project.json. Repairable problems are fixed in place and reported in
+ * `warnings` (if given) instead of rejecting the whole project:
+ *   - an image referring to an unknown image group becomes ungrouped.
+ */
+export function validateProject(v: unknown, path = 'project.json', warnings?: string[]): Project {
   const o = obj(v, path)
   checkSchemaVersion(o, path)
   str(o, 'id', path)
@@ -150,10 +154,15 @@ export function validateProject(v: unknown, path = 'project.json'): Project {
   uniqueIds(images, `${path}.images`)
   uniqueIds(groups, `${path}.annotationGroups`)
   const groupIds = new Set(imageGroups.map((g) => g.id))
-  images.forEach((im, i) => {
+  for (const im of images) {
     if (im.imageGroupId !== null && !groupIds.has(im.imageGroupId)) {
-      fail(`${path}.images[${i}].imageGroupId`, `unknown image group ${im.imageGroupId}`)
+      warnings?.push(`"${im.name}" referred to an image group that no longer exists; it was moved to Ungrouped.`)
+      im.imageGroupId = null
     }
+  }
+  if (o.excludedDriveFileIds === undefined) o.excludedDriveFileIds = []
+  arr(o, 'excludedDriveFileIds', path).forEach((id, i) => {
+    if (typeof id !== 'string') fail(`${path}.excludedDriveFileIds[${i}]`, 'expected a string')
   })
   o.storage = validateStorage(o.storage ?? { kind: 'local' }, `${path}.storage`)
   if (o.revision === undefined) o.revision = 0
@@ -244,7 +253,8 @@ export function validateImageAnnotations(v: unknown, path = 'annotations'): Imag
   num(o, 'height', path)
   str(o, 'updatedAt', path)
   const groups = arr(o, 'groups', path).map((g, i) => validateAnnotationGroup(g, `${path}.groups[${i}]`))
-  const anns = arr(o, 'annotations', path).map((a, i) => validateAnnotation(a, `${path}.annotations[${i}]`))
+  const anns = arr(o, 'annotations', path).map((a, i) => normaliseAnnotation(validateAnnotation(a, `${path}.annotations[${i}]`)))
+  o.annotations = anns
   uniqueIds(groups, `${path}.groups`)
   uniqueIds(anns, `${path}.annotations`)
   if (o.detectionRuns === undefined) o.detectionRuns = []

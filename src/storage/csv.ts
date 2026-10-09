@@ -2,7 +2,8 @@
  * summary.csv codec (pure). One row per image × annotation group, including
  * zero-count groups. JSON annotation documents remain the source of truth.
  *
- * Count rules (documented in docs/schema.md):
+ * Count rules (documented in docs/schema.md; computed by model/annotations.ts, the same
+ * `isConfirmed` the UI uses):
  *   manual_count               annotations with origin "manual" (always confirmed)
  *   automated_accepted_count   origin "automated" with reviewStatus "accepted"
  *   automated_unreviewed_count origin "automated" with reviewStatus "unreviewed" (suggestions)
@@ -11,6 +12,7 @@
  * Hidden/locked are reported as metadata and never change counts.
  */
 import type { AnnotationGroup, ID, ImageAnnotations, Project } from '../model/types'
+import { countBreakdownByGroup, emptyBreakdown } from '../model/annotations'
 
 export const CSV_COLUMNS = [
   'project_id',
@@ -56,26 +58,13 @@ export function encodeRow(cells: Cell[]): string {
   return cells.map(encodeCell).join(',')
 }
 
-interface Counts {
-  manual: number
-  accepted: number
-  unreviewed: number
-}
-
 /** Build summary rows (without header). Exposed for tests and UI previews. */
 export function summaryRows(project: Project, annotations: Map<ID, ImageAnnotations>): Cell[][] {
   const groupNames = new Map(project.imageGroups.map((g) => [g.id, g.name]))
   const rows: Cell[][] = []
   for (const image of project.images) {
     const doc = annotations.get(image.id)
-    const counts = new Map<ID, Counts>()
-    for (const a of doc?.annotations ?? []) {
-      let c = counts.get(a.groupId)
-      if (!c) counts.set(a.groupId, (c = { manual: 0, accepted: 0, unreviewed: 0 }))
-      if (a.origin === 'manual') c.manual++
-      else if (a.reviewStatus === 'accepted') c.accepted++
-      else if (a.reviewStatus === 'unreviewed') c.unreviewed++
-    }
+    const counts = countBreakdownByGroup(doc?.annotations)
     // Project groups first (display order), then groups only known to this document
     // so no annotation silently disappears from the summary.
     const groups: AnnotationGroup[] = [...project.annotationGroups]
@@ -87,7 +76,7 @@ export function summaryRows(project: Project, annotations: Map<ID, ImageAnnotati
       known.add(id)
     }
     for (const g of groups) {
-      const c = counts.get(g.id) ?? { manual: 0, accepted: 0, unreviewed: 0 }
+      const c = counts.get(g.id) ?? emptyBreakdown()
       rows.push([
         project.id,
         project.name,
@@ -98,10 +87,10 @@ export function summaryRows(project: Project, annotations: Map<ID, ImageAnnotati
         image.source.kind === 'drive' ? image.source.fileId : '',
         g.id,
         g.name,
-        c.manual + c.accepted,
+        c.confirmed,
         c.manual,
-        c.accepted,
-        c.unreviewed,
+        c.automatedAccepted,
+        c.automatedUnreviewed,
         g.hidden,
         g.locked,
         image.width,

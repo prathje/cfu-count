@@ -1,6 +1,6 @@
 /** User-facing wording for blocked edits, shared by editor commands and the UI. */
 import type { AnnotationGroup } from '../model/types'
-import type { EditBlock } from './core'
+import type { OpBlock } from '../model/annotations'
 
 export interface NoticeAction {
   label: string
@@ -27,7 +27,7 @@ export function lockedMessage(group: AnnotationGroup): string {
   return `“${group.name}” is locked — unlock to edit`
 }
 
-export function historyBlockMessage(block: EditBlock, direction: 'undo' | 'redo', label: string): { message: string; detail: string } {
+export function historyBlockMessage(block: OpBlock, direction: 'undo' | 'redo', label: string): { message: string; detail: string } {
   const verb = direction === 'undo' ? 'Undo' : 'Redo'
   switch (block.reason) {
     case 'locked':
@@ -45,5 +45,7 @@ export function historyBlockMessage(block: EditBlock, direction: 'undo' | 'redo'
         message: `${verb} unavailable`,
         detail: 'The annotation group this change belongs to no longer exists.',
       }
+    case 'invalid':
+      return { message: `${verb} unavailable`, detail: block.detail }
   }
 }

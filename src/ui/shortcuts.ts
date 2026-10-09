@@ -1,8 +1,9 @@
 /** Global keyboard shortcuts: a pure key → command map plus a listener installer. */
 import { onCleanup } from 'solid-js'
+import { TOOL_KEYS, type Tool } from '../model/tool'
 
 export type ShortcutCommand =
-  | { type: 'tool'; tool: 'add' | 'erase' | 'pan' }
+  | { type: 'tool'; tool: Tool }
   | { type: 'toggle-visibility' }
   | { type: 'toggle-lock' }
   | { type: 'select-group'; index: number }
@@ -27,14 +28,10 @@ export function resolveShortcut(e: KeyLike, apple: boolean): ShortcutCommand | n
     return null
   }
   if (e.metaKey || e.ctrlKey || e.altKey) return null
+  for (const tool of Object.keys(TOOL_KEYS) as Tool[]) {
+    if (TOOL_KEYS[tool].includes(key)) return { type: 'tool', tool }
+  }
   switch (key) {
-    case 'a':
-      return { type: 'tool', tool: 'add' }
-    case 'e':
-      return { type: 'tool', tool: 'erase' }
-    case 'h':
-    case 'p':
-      return { type: 'tool', tool: 'pan' }
     case 'v':
       return { type: 'toggle-visibility' }
     case 'l':

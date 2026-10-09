@@ -1,6 +1,6 @@
 import { createSignal, For, Show } from 'solid-js'
 import type { ID, Project } from '../../model/types'
-import { imagesInGroup } from '../../state/core'
+import { imagesInGroup } from '../../model/project'
 import { Cloud, FolderPlus, Loader, Upload } from '../icons'
 import { Button, IconButton, InlineEdit } from '../primitives'
 import { plural } from '../format'
