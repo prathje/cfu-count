@@ -54,8 +54,26 @@
   box-shadow: 0 1px 2px rgba(31, 85, 181, 0.35);
 }
 
-.toolbar .btn--tool.is-pressed:hover:not(:disabled) {
+@media (hover: hover) {
+  .toolbar .btn--tool.is-pressed:hover:not(:disabled) {
+    background: var(--c-accent-hover);
+  }
+}
+
+/* Phone tool switcher: always the accent fill (never the generic ghost hover/open grey,
+   which would leave a white icon on light grey). */
+.toolbar .btn--tool-switch.btn--tool-switch[aria-expanded='true'],
+.toolbar .btn--tool-switch.btn--tool-switch.is-open,
+.toolbar .btn--tool-switch.btn--tool-switch:active {
   background: var(--c-accent-hover);
+  color: #fff;
+}
+
+@media (hover: hover) {
+  .toolbar .btn--tool-switch.btn--tool-switch:hover {
+    background: var(--c-accent-hover);
+    color: #fff;
+  }
 }
 
 .toolbar .btn--tool-switch {
@@ -85,9 +103,14 @@
   transition: background-color var(--t-fast) var(--ease);
 }
 
-.group-trigger:hover,
 .group-trigger.is-open {
   background: var(--c-surface-2);
+}
+
+@media (hover: hover) {
+  .group-trigger:hover {
+    background: var(--c-surface-2);
+  }
 }
 
 .group-trigger__name {
@@ -152,10 +175,16 @@
   cursor: pointer;
 }
 
-.group-option:hover,
 .group-option:focus-visible {
   background: var(--c-hover);
   outline-offset: -2px;
+}
+
+@media (hover: hover) {
+  .group-option:hover {
+    background: var(--c-hover);
+    outline-offset: -2px;
+  }
 }
 
 .group-option[aria-selected='true'] {
@@ -321,8 +350,10 @@
   }
 }
 
-.color-chip:hover:not(:disabled) {
-  transform: scale(1.08);
+@media (hover: hover) {
+  .color-chip:hover:not(:disabled) {
+    transform: scale(1.08);
+  }
 }
 
 .color-chip[aria-checked='true'] {

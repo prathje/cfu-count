@@ -20,11 +20,10 @@ export function interactionHint(h: HintInput): string {
     if (reason === 'locked' || reason === 'hidden') return editBlockMessage(reason, h.activeGroup)
   }
   if (h.coarse) {
+    // Kept short: the footer shares a row with zoom and the touch toggle on tablets.
     if (h.tool === 'pan') return 'Drag to pan · pinch to zoom'
     const verb = h.tool === 'add' ? 'add' : 'erase'
-    return h.touchAnnotates
-      ? `Tap to ${verb} · two fingers to pan & zoom`
-      : `Pencil taps ${verb} · drag to pan · pinch to zoom · turn on touch annotates to use fingers`
+    return h.touchAnnotates ? `Tap to ${verb} · two fingers pan & zoom` : `Pencil taps ${verb} · fingers pan & zoom`
   }
   if (h.tool === 'add') return 'Click to add · drag to pan · scroll to zoom'
   if (h.tool === 'erase') return 'Click a marker to erase · drag to pan'

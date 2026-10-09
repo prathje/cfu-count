@@ -46,9 +46,11 @@
     transform var(--t-fast) var(--ease);
 }
 
-.dropzone:hover {
-  border-color: var(--c-accent);
-  background: rgba(255, 255, 255, 0.9);
+@media (hover: hover) {
+  .dropzone:hover {
+    border-color: var(--c-accent);
+    background: rgba(255, 255, 255, 0.9);
+  }
 }
 
 .dropzone.is-dragging {
@@ -169,8 +171,10 @@
   text-align: left;
 }
 
-.recent-item:hover {
-  background: var(--c-hover);
+@media (hover: hover) {
+  .recent-item:hover {
+    background: var(--c-hover);
+  }
 }
 
 .recent-item__name {

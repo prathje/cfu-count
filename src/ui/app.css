@@ -10,6 +10,31 @@
   height: 100dvh;
 }
 
+/* App chrome is not text: Cmd/Ctrl+A or a long press must not select labels,
+   pills and buttons. Fields and messages people may copy stay selectable. */
+.app {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.app input,
+.app textarea,
+.app [contenteditable='true'],
+.app .toast__detail,
+.app .dialog__body,
+.app .stage__banner,
+.app .image-header__warning,
+.app .start-card__text {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+/* Centre toasts over the workspace when the sidebar is docked beside it. */
+.app.sidebar-open:not(.is-narrow) .toasts {
+  left: calc(50% + var(--sidebar-w) / 2);
+  width: min(460px, calc(100vw - var(--sidebar-w) - 24px));
+}
+
 .app__body {
   position: relative;
   flex: 1;

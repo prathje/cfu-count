@@ -393,7 +393,12 @@ export function Viewport(props: ViewportProps) {
   function onPointerDown(e: PointerEvent) {
     // Suppress compatibility mouse events, text selection and native drag.
     e.preventDefault()
-    if (document.activeElement !== root) root.focus({ preventScroll: true })
+    if (document.activeElement !== root) {
+      // Focus for keyboard panning, but mark it as pointer focus: no focus ring until
+      // the keyboard is used to move focus (some browsers turn :focus-visible on after a key press).
+      root.dataset.pointerFocus = ''
+      root.focus({ preventScroll: true })
+    }
     try {
       surface.setPointerCapture(e.pointerId)
     } catch {
@@ -459,6 +464,7 @@ export function Viewport(props: ViewportProps) {
 
   function onKeyDown(e: KeyboardEvent) {
     if (e.target !== root || e.metaKey || e.ctrlKey || e.altKey) return
+    if (e.key.startsWith('Arrow')) delete root.dataset.pointerFocus // keyboard panning: show where focus is
     const step = e.shiftKey ? KEY_PAN_PX * 4 : KEY_PAN_PX
     let handled = true
     switch (e.key) {
@@ -494,6 +500,9 @@ export function Viewport(props: ViewportProps) {
   function onWindowKeyUp(e: KeyboardEvent) {
     if (e.code === 'Space') setSpaceHeld(false)
   }
+  function onBlur() {
+    delete root.dataset.pointerFocus
+  }
   function onVisibility() {
     if (document.visibilityState === 'hidden') clearTransient()
   }
@@ -519,6 +528,7 @@ export function Viewport(props: ViewportProps) {
     root.addEventListener('selectstart', prevent, opts)
     root.addEventListener('dragstart', prevent, opts)
     root.addEventListener('keydown', onKeyDown)
+    root.addEventListener('blur', onBlur)
     window.addEventListener('keydown', onWindowKeyDown)
     window.addEventListener('keyup', onWindowKeyUp)
     window.addEventListener('blur', clearTransient)

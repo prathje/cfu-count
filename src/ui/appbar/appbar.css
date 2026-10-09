@@ -80,9 +80,14 @@
   font-size: var(--fs-md);
 }
 
-.project-trigger:hover,
 .project-trigger.is-open {
   background: var(--c-hover);
+}
+
+@media (hover: hover) {
+  .project-trigger:hover {
+    background: var(--c-hover);
+  }
 }
 
 .project-trigger__label {
@@ -141,8 +146,10 @@
   }
 }
 
-.status-pill:hover {
-  background: var(--c-surface-2);
+@media (hover: hover) {
+  .status-pill:hover {
+    background: var(--c-surface-2);
+  }
 }
 
 .status-pill.is-compact .status-pill__label {
@@ -203,8 +210,10 @@
   white-space: nowrap;
 }
 
-.drive-btn:hover {
-  background: var(--c-surface-2);
+@media (hover: hover) {
+  .drive-btn:hover {
+    background: var(--c-surface-2);
+  }
 }
 
 .drive-btn__label {

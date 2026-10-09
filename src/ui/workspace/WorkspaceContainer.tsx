@@ -41,8 +41,8 @@ export function WorkspaceContainer(props: WorkspaceContainerProps) {
   const position = () => images.order().findIndex((i) => i.id === state.currentImageId) + 1
   // Immutable snapshot (identity changes only on edits); filtering keeps that property.
   const confirmed = createMemo(() => annotations.current().filter(isConfirmed))
-  // Keep Fit clear of the floating toolbar (top) and the zoom footer (bottom).
-  const fitInsets = { top: 64, right: 16, bottom: 56, left: 16 }
+  // Keep Fit clear of the floating toolbar (top) and the zoom footer (bottom); both grow on touch screens.
+  const fitInsets = () => (coarse() ? { top: 72, right: 16, bottom: 74, left: 16 } : { top: 64, right: 16, bottom: 62, left: 16 })
   const tallies = createMemo(() => groupTallies(groups.list(), annotations.counts()))
   const imageGroupName = () => {
     const img = images.current()
@@ -118,7 +118,7 @@ export function WorkspaceContainer(props: WorkspaceContainerProps) {
                 imageWidth={image().width}
                 imageHeight={image().height}
                 annotations={confirmed()}
-                fitInsets={fitInsets}
+                fitInsets={fitInsets()}
                 groups={groups.list()}
                 activeGroupId={state.activeGroupId}
                 tool={state.tool}

@@ -155,13 +155,15 @@
     min-height: 44px;
   }
   .img-group__toggle {
-    width: 36px;
+    width: 44px;
     height: 44px;
   }
 }
 
-.img-group__toggle:hover {
-  background: var(--c-hover);
+@media (hover: hover) {
+  .img-group__toggle:hover {
+    background: var(--c-hover);
+  }
 }
 
 .img-group__chevron {
@@ -228,23 +230,30 @@
   transition: opacity var(--t-fast) var(--ease);
 }
 
-.row-menu-btn:hover {
-  background: var(--c-active);
-  color: var(--c-text);
+@media (hover: hover) {
+  .row-menu-btn:hover {
+    background: var(--c-active);
+    color: var(--c-text);
+  }
 }
 
-.img-group__head:hover .row-menu-btn,
-.image-row:hover .row-menu-btn,
 .row-menu-btn:focus-visible,
 .row-menu-btn[aria-expanded='true'],
 .image-row.is-selected .row-menu-btn {
   opacity: 1;
 }
 
+@media (hover: hover) {
+  .img-group__head:hover .row-menu-btn,
+  .image-row:hover .row-menu-btn {
+    opacity: 1;
+  }
+}
+
 @media (pointer: coarse) {
   .row-menu-btn {
     opacity: 1;
-    width: 40px;
+    width: 44px;
     height: 44px;
   }
 }
@@ -273,8 +282,10 @@
   transition: background-color var(--t-fast) var(--ease);
 }
 
-.image-row:hover {
-  background: var(--c-hover);
+@media (hover: hover) {
+  .image-row:hover {
+    background: var(--c-hover);
+  }
 }
 
 .image-row.is-selected {

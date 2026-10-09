@@ -47,6 +47,13 @@ export function Popover(props: PopoverProps) {
     x = Math.max(MARGIN, Math.min(vw - w - MARGIN, x))
     const y = top ? a.top - GAP - Math.min(h, maxH) : a.bottom + GAP
     setPos({ x, y, maxH, origin: top ? 'bottom' : 'top' })
+    queueMicrotask(updateScrollHint)
+  }
+
+  /** Fade the bottom edge while more content is hidden below. */
+  function updateScrollHint() {
+    if (!panel) return
+    panel.classList.toggle('is-scroll-more', panel.scrollTop + panel.clientHeight < panel.scrollHeight - 4)
   }
 
   createEffect(() => {
@@ -123,6 +130,7 @@ export function Popover(props: PopoverProps) {
             'transform-origin': pos()?.origin,
           }}
           onPointerDown={(e) => e.stopPropagation()}
+          onScroll={updateScrollHint}
           onKeyDown={(e) => {
             if (props.role === 'menu' || panel?.dataset.roving !== undefined) rovingFocus(e, panel!)
           }}

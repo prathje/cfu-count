@@ -21,8 +21,8 @@ describe('interactionHint', () => {
   it('describes mouse and touch interaction per tool', () => {
     expect(interactionHint(base)).toMatch(/^Click to add/)
     expect(interactionHint({ ...base, tool: 'erase' })).toMatch(/^Click a marker to erase/)
-    expect(interactionHint({ ...base, coarse: true })).toMatch(/^Pencil taps add/)
-    expect(interactionHint({ ...base, coarse: true, touchAnnotates: true })).toBe('Tap to add · two fingers to pan & zoom')
+    expect(interactionHint({ ...base, coarse: true })).toBe('Pencil taps add · fingers pan & zoom')
+    expect(interactionHint({ ...base, coarse: true, touchAnnotates: true })).toBe('Tap to add · two fingers pan & zoom')
     expect(interactionHint({ ...base, coarse: true, tool: 'pan' })).toBe('Drag to pan · pinch to zoom')
   })
 })

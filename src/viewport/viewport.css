@@ -12,8 +12,11 @@
   -webkit-tap-highlight-color: transparent;
 }
 
-.cfu-viewport:focus-visible {
-  box-shadow: inset 0 0 0 2px #2f6fde;
+/* Keyboard focus only (a click focuses the viewport too, for arrow-key panning). */
+.cfu-viewport:focus-visible:not([data-pointer-focus]) {
+  outline: 2px solid #2f6fde;
+  outline-offset: -3px;
+  border-radius: 0;
 }
 
 .cfu-viewport__layer {

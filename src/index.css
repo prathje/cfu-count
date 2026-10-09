@@ -74,6 +74,8 @@
   --ctl-sm: 28px;
   --appbar-h: 52px;
   --sidebar-w: 288px;
+  /* Height of every pill along the viewport's lower edge (zoom, touch toggle, status). */
+  --footer-h: calc(var(--ctl) + 6px);
 
   /* Motion */
   --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
@@ -90,6 +92,7 @@
 /* Comfortable touch targets on coarse pointers (iPad, phones): ≥ 44 px. */
 @media (pointer: coarse) {
   :root {
+    --footer-h: 50px;
     --ctl: 44px;
     --ctl-sm: 44px;
     --fs-md: 14.5px;
