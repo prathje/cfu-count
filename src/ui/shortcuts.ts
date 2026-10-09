@@ -18,9 +18,10 @@ export type ShortcutCommand =
   | { type: 'fit' }
   | { type: 'image-adjust' }
   | { type: 'image'; delta: -1 | 1 }
+  | { type: 'find-similar' }
   | { type: 'help' }
 
-export type ShortcutSection = 'Tools' | 'Annotation groups' | 'Edit' | 'View' | 'Images' | 'Help'
+export type ShortcutSection = 'Tools' | 'Annotation groups' | 'Edit' | 'Assisted counting' | 'View' | 'Images' | 'Help'
 
 /** One row of the shortcut table. */
 export interface ShortcutBinding {
@@ -44,6 +45,8 @@ export interface ShortcutBinding {
 const TOOL_LABEL: Record<Tool, string> = { add: 'Add colonies', erase: 'Erase colonies', pan: 'Pan' }
 /** Hold to show the unadjusted image (KeyboardEvent.key). */
 export const COMPARE_KEY = '\\'
+/** Opens/closes assisted counting (shown in the toolbar tooltip too). */
+export const FIND_SIMILAR_KEY = 'f'
 const DIGITS = ['1', '2', '3', '4', '5', '6', '7', '8', '9']
 
 export const SHORTCUTS: readonly ShortcutBinding[] = [
@@ -63,6 +66,7 @@ export const SHORTCUTS: readonly ShortcutBinding[] = [
   { section: 'Edit', label: 'Undo', keys: ['z'], mod: true, display: ['mod', 'Z'], command: () => ({ type: 'undo' }) },
   { section: 'Edit', label: 'Redo', keys: ['z'], mod: true, shift: true, display: ['mod', '⇧', 'Z'], command: () => ({ type: 'redo' }) },
   { section: 'Edit', label: 'Redo', keys: ['y'], mod: true, display: [], command: () => ({ type: 'redo' }) },
+  { section: 'Assisted counting', label: 'Find similar colonies (beta): open / close', keys: [FIND_SIMILAR_KEY], display: [FIND_SIMILAR_KEY.toUpperCase()], command: () => ({ type: 'find-similar' }) },
   { section: 'View', label: 'Zoom in', keys: ['+', '='], display: ['+'], command: () => ({ type: 'zoom-in' }) },
   { section: 'View', label: 'Zoom out', keys: ['-', '_'], display: ['−'], command: () => ({ type: 'zoom-out' }) },
   { section: 'View', label: 'Fit image', keys: ['0'], display: ['0'], command: () => ({ type: 'fit' }) },

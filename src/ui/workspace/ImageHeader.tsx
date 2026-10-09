@@ -30,6 +30,9 @@ export interface ImageHeaderProps {
   of: number
   onPrevious(): void
   onNext(): void
+  /** Pending assisted-counting suggestions (never part of the total); 0/absent hides the chip. */
+  suggested?: number
+  onShowSuggestions?(): void
 }
 
 export function ImageHeader(props: ImageHeaderProps) {
@@ -93,6 +96,19 @@ export function ImageHeader(props: ImageHeaderProps) {
             )}
           </For>
         </ul>
+      </Show>
+      <Show when={props.suggested}>
+        {(n) => (
+          <button
+            type="button"
+            class="suggested-chip"
+            title="Pending suggestions from assisted counting. They are not counted until you accept them."
+            aria-label={`${plural(n(), 'suggestion', 'suggestions')} pending review, not counted. Open assisted counting`}
+            onClick={() => props.onShowSuggestions?.()}
+          >
+            +{n().toLocaleString()} suggested
+          </button>
+        )}
       </Show>
       <div class="image-total" aria-label={`${plural(props.total, 'confirmed colony', 'confirmed colonies')} on this image`}>
         <span class="image-total__value">{props.total.toLocaleString()}</span>

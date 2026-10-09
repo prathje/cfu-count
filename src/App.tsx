@@ -1,5 +1,7 @@
 import { createResource, onCleanup, onMount, Show } from 'solid-js'
 import { createEditor } from './state/editor'
+import { createAssist } from './state/assist'
+import { createDetectorClient } from './detection/client'
 import { chooseRepository, type RepositoryChoice } from './state/repository'
 import { AppContext, type AppServices } from './ui/context'
 import { createThumbnailCache } from './ui/images'
@@ -19,9 +21,12 @@ function AppRoot(props: { choice: RepositoryChoice }) {
   const dialogs = createDialogs()
   const editor = createEditor(repo, { notify: toaster.push, confirm: dialogs.confirm })
   onCleanup(editor.dispose)
+  // One detector client (Worker) per app session, created on the first run.
+  const assist = createAssist({ editor, notify: toaster.push, createClient: () => createDetectorClient() })
+  onCleanup(assist.dispose)
   const thumbnails = createThumbnailCache(() => (editor.state.project ? editor.images.blob : null))
   const actions = createProjectActions(editor, dialogs, thumbnails, toaster.push)
-  const services: AppServices = { editor, toaster, dialogs, thumbnails, actions, isDemo }
+  const services: AppServices = { editor, assist, toaster, dialogs, thumbnails, actions, isDemo }
 
   onMount(() => void editor.projects.init())
 

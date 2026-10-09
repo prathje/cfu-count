@@ -1,0 +1,336 @@
+/* Assisted counting: floating review card (bottom sheet on phones), toolbar entry, header chip. */
+
+.review-panel {
+  position: absolute;
+  z-index: 12;
+  right: calc(var(--s-3) + var(--safe-r));
+  bottom: calc(var(--s-3) + var(--safe-b) + var(--footer-h) + var(--s-2));
+  width: min(348px, calc(100% - 2 * var(--s-3)));
+  max-height: calc(100% - var(--ctl) - 10px - var(--s-3) * 2 - var(--footer-h) - var(--s-2) * 2);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px 14px;
+  border-radius: var(--r-lg);
+  background: var(--c-surface);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--shadow-pop);
+  font-size: var(--fs-md);
+  touch-action: pan-y;
+}
+
+/* Phone: bottom sheet over the footer, full width. */
+.review-panel--sheet {
+  left: 0;
+  right: 0;
+  bottom: 0;
+  width: auto;
+  max-height: 58%;
+  padding-bottom: calc(14px + var(--safe-b));
+  border-radius: var(--r-xl) var(--r-xl) 0 0;
+  border-bottom: 0;
+}
+
+.review-panel__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: -2px -6px -2px 0;
+}
+
+.review-panel__icon {
+  color: var(--c-accent);
+  flex: none;
+}
+
+.review-panel__title {
+  flex: 1;
+  margin: 0;
+  font-size: var(--fs-lg);
+  font-weight: 650;
+}
+
+.beta {
+  display: inline-block;
+  margin-left: 4px;
+  padding: 1px 6px;
+  border-radius: var(--r-pill);
+  background: var(--c-warn-soft);
+  border: 1px solid var(--c-warn-border);
+  color: var(--c-warn);
+  font-size: var(--fs-xs);
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  vertical-align: 2px;
+}
+
+.review-panel__intro {
+  margin: 0;
+  color: var(--c-text-2);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+}
+
+.review-panel__intro .swatch {
+  vertical-align: -1px;
+}
+
+.review-panel__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.review-panel__label {
+  flex: none;
+  font-weight: 600;
+  font-size: var(--fs-sm);
+}
+
+.review-panel__value {
+  color: var(--c-text-2);
+  font-size: var(--fs-sm);
+}
+
+.review-panel__select {
+  flex: 1;
+  min-width: 0;
+  height: var(--ctl-sm);
+  padding: 0 8px;
+  border: 1px solid var(--c-border-strong);
+  border-radius: var(--r-sm);
+  background: var(--c-surface);
+  font: inherit;
+  font-size: var(--fs-sm);
+}
+
+.review-panel__hint {
+  margin: -4px 0 0;
+  color: var(--c-text-3);
+  font-size: var(--fs-sm);
+  line-height: 1.4;
+}
+
+.review-panel__hint--small {
+  font-size: var(--fs-xs);
+}
+
+.review-panel__notice {
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 9px 11px;
+  border-radius: var(--r-md);
+  font-size: var(--fs-sm);
+  line-height: 1.4;
+}
+
+.review-panel__notice > div {
+  flex: 1 1 180px;
+}
+
+.review-panel__notice--warn {
+  background: var(--c-warn-soft);
+  border: 1px solid var(--c-warn-border);
+}
+
+.review-panel__notice--warn > svg {
+  color: var(--c-warn);
+  margin-top: 1px;
+}
+
+.review-panel__notice--error {
+  background: var(--c-danger-soft);
+  color: var(--c-danger);
+}
+
+.review-panel__run {
+  align-self: stretch;
+}
+
+.review-panel__progress {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 6px 10px;
+}
+
+.review-panel__progress-label {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--c-text-2);
+  font-size: var(--fs-sm);
+}
+
+.progress {
+  height: 6px;
+  border-radius: var(--r-pill);
+  background: var(--c-surface-3);
+  overflow: hidden;
+}
+
+.progress__bar {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--c-accent);
+  transition: width var(--t-med) var(--ease);
+}
+
+/* Counts: pending suggestions, deliberately unlike the confirmed total. */
+.review-counts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+  padding: 8px 10px;
+  border: 1.5px dashed var(--c-border-strong);
+  border-radius: var(--r-md);
+  font-size: var(--fs-sm);
+  color: var(--c-text-2);
+}
+
+.review-counts__main strong {
+  font-size: var(--fs-xl);
+  color: var(--c-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.review-counts__item.is-warn,
+.review-panel__calibration .is-warn {
+  color: var(--c-warn);
+  font-weight: 600;
+}
+
+.review-counts__note {
+  margin-left: auto;
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--c-text-3);
+}
+
+.review-panel details > summary {
+  cursor: pointer;
+  font-size: var(--fs-sm);
+  color: var(--c-text-2);
+  list-style-position: outside;
+  margin-left: 14px;
+}
+
+.review-panel details > summary::marker {
+  color: var(--c-text-3);
+}
+
+.review-panel__calibration ul {
+  margin: 6px 0 0;
+  padding-left: 30px;
+  color: var(--c-text-2);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+}
+
+.review-panel__settings > summary {
+  font-weight: 600;
+  color: var(--c-text);
+}
+
+.review-panel__fields {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.review-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border-radius: var(--r-md);
+  background: #fff8ea;
+  border: 1px solid var(--c-warn-border);
+}
+
+.review-nav__head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.review-nav__label {
+  flex: 1;
+  text-align: center;
+  font-size: var(--fs-sm);
+}
+
+.review-nav__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.review-panel__actions {
+  display: flex;
+  gap: 8px;
+}
+
+.review-panel__actions .btn--primary {
+  flex: 1;
+}
+
+/* Toolbar entry: trailing item after Redo, separated. */
+.toolbar .btn--assist.is-blocked {
+  color: var(--c-text-3);
+}
+
+.toolbar .btn--assist.is-pressed {
+  background: var(--c-accent-soft);
+  color: var(--c-accent-text);
+}
+
+.more-assist {
+  padding: var(--s-2) var(--s-2) var(--s-3);
+  border-bottom: 1px solid var(--c-border);
+  margin-bottom: var(--s-1);
+}
+
+.more-assist .btn {
+  width: 100%;
+  justify-content: flex-start;
+}
+
+.more-assist__reason {
+  margin: 4px 2px 0;
+  color: var(--c-text-3);
+  font-size: var(--fs-xs);
+}
+
+/* Header: pending suggestions next to the confirmed total, visibly not a count. */
+.suggested-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 26px;
+  padding: 0 10px;
+  border: 1.5px dashed var(--c-border-strong);
+  border-radius: var(--r-pill);
+  background: transparent;
+  color: var(--c-text-2);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+@media (hover: hover) {
+  .suggested-chip:hover {
+    background: var(--c-hover);
+  }
+}

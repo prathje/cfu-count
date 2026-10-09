@@ -33,6 +33,29 @@ export function createElementWidth(el: Accessor<HTMLElement | undefined>): Acces
   }
 }
 
+/** Reactive border-box height of an element (0 until measured or when absent). */
+export function createElementHeight(el: Accessor<HTMLElement | undefined>): Accessor<number> {
+  const [height, setHeight] = createSignal(0)
+  const ro = new ResizeObserver((entries) => {
+    for (const entry of entries) setHeight(Math.round(entry.borderBoxSize?.[0]?.blockSize ?? entry.contentRect.height))
+  })
+  let observed: HTMLElement | undefined
+  const sync = () => {
+    const target = el()
+    if (target === observed) return
+    if (observed) ro.unobserve(observed)
+    observed = target
+    if (target) ro.observe(target)
+    else setHeight(0)
+  }
+  queueMicrotask(sync)
+  onCleanup(() => ro.disconnect())
+  return () => {
+    sync()
+    return height()
+  }
+}
+
 /** The platform's primary modifier label for shortcuts. */
 export const isApple = /Mac|iPhone|iPad|iPod/.test(navigator.platform) || navigator.userAgent.includes('Mac')
 export const MOD = isApple ? '⌘' : 'Ctrl+'

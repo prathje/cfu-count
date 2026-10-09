@@ -14,6 +14,7 @@ import {
   Plus,
   Redo,
   SlidersHorizontal,
+  Sparkles,
   Undo,
   type IconComponent,
 } from '../icons'
@@ -23,6 +24,7 @@ import { StylePanel } from './StylePanel'
 import type { ToolbarMode } from './layout'
 import '../shared/float-bar.css'
 import './toolbar.css'
+import '../assist/review-panel.css'
 
 export { toolbarModeFor, type ToolbarMode } from './layout'
 
@@ -54,6 +56,12 @@ export interface FloatingToolbarProps {
   onTool(tool: Tool): void
   onUndo(): void
   onRedo(): void
+  /**
+   * Assisted counting entry ("Find similar"), a trailing item after Redo so the
+   * approved order 1–9 is untouched. `blockedReason` dims it (it still opens the
+   * panel, which explains the reason and offers the fix).
+   */
+  assist?: { open: boolean; blockedReason: string | null; shortcut: string; onClick(): void }
 }
 
 export function FloatingToolbar(props: FloatingToolbarProps) {
@@ -200,6 +208,24 @@ export function FloatingToolbar(props: FloatingToolbarProps) {
               onClick={more.toggle}
             />
             <Popover open={more.open()} anchor={more.anchor()} onClose={more.close} label="More tools" width={328} placement="bottom-end">
+              <Show when={props.assist}>
+                {(a) => (
+                  <div class="more-assist">
+                    <Button
+                      icon={Sparkles}
+                      variant={a().open ? 'subtle' : 'ghost'}
+                      aria-pressed={a().open}
+                      onClick={() => {
+                        more.close()
+                        a().onClick()
+                      }}
+                    >
+                      Find similar (beta)
+                    </Button>
+                    <Show when={a().blockedReason}>{(r) => <p class="more-assist__reason">{r()}</p>}</Show>
+                  </div>
+                )}
+              </Show>
               <div class="more-history">
                 <Button icon={Undo} disabled={!props.canUndo} onClick={() => props.onUndo()}>
                   Undo
@@ -216,6 +242,26 @@ export function FloatingToolbar(props: FloatingToolbarProps) {
         <span class="toolbar__sep" aria-hidden="true" />
         <IconButton icon={Undo} label="Undo" shortcut={`${props.mod}Z`} disabled={!props.canUndo} onClick={() => props.onUndo()} />
         <IconButton icon={Redo} label="Redo" shortcut={`⇧${props.mod}Z`} disabled={!props.canRedo} onClick={() => props.onRedo()} />
+        {/* Trailing, separated: assisted counting (not part of the approved order 1–9). */}
+        <Show when={props.assist}>
+          {(a) => (
+            <>
+              <span class="toolbar__sep" aria-hidden="true" />
+              <IconButton
+                icon={Sparkles}
+                label={labelled() ? 'Find similar' : 'Find similar colonies (beta)'}
+                showLabel={labelled()}
+                shortcut={a().shortcut}
+                hint={a().blockedReason ?? 'Assisted counting (beta): suggests colonies like your examples for review'}
+                aria-pressed={a().open}
+                aria-disabled={a().blockedReason ? true : undefined}
+                aria-description={a().blockedReason ?? undefined}
+                class={`btn--assist ${a().open ? 'is-pressed' : ''} ${a().blockedReason ? 'is-blocked' : ''}`}
+                onClick={() => a().onClick()}
+              />
+            </>
+          )}
+        </Show>
       </Show>
     </div>
   )

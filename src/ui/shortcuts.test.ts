@@ -20,6 +20,12 @@ describe('resolveShortcut', () => {
     expect(resolveShortcut(k('l'), true)).toEqual({ type: 'toggle-lock' })
     expect(resolveShortcut(k('3'), true)).toEqual({ type: 'select-group', index: 2 })
   })
+  it('maps F to assisted counting and lists it in the sheet', () => {
+    expect(resolveShortcut(k('f'), true)).toEqual({ type: 'find-similar' })
+    expect(resolveShortcut(k('f', { metaKey: true }), true)).toBeNull() // Cmd+F stays the browser's find
+    const row = shortcutSheet('⌘').find((s) => s.section === 'Assisted counting')!.rows[0]
+    expect(row.keys).toEqual(['F'])
+  })
   it('uses Cmd on Apple and Ctrl elsewhere for undo/redo', () => {
     expect(resolveShortcut(k('z', { metaKey: true }), true)).toEqual({ type: 'undo' })
     expect(resolveShortcut(k('Z', { metaKey: true, shiftKey: true }), true)).toEqual({ type: 'redo' })
@@ -54,6 +60,6 @@ describe('shortcutSheet', () => {
     // Every executable binding with a display row appears exactly once in the sheet.
     const documented = SHORTCUTS.filter((s) => s.display.length > 0).length
     expect(rows.length).toBe(documented)
-    expect(sheet.map((s) => s.section)).toEqual(['Tools', 'Annotation groups', 'Edit', 'View', 'Images', 'Help'])
+    expect(sheet.map((s) => s.section)).toEqual(['Tools', 'Annotation groups', 'Edit', 'Assisted counting', 'View', 'Images', 'Help'])
   })
 })

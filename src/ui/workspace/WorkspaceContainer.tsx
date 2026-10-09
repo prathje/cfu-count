@@ -1,15 +1,17 @@
-import { createMemo, createSignal, onCleanup, Show } from 'solid-js'
+import { createEffect, createMemo, createSignal, on, onCleanup, Show } from 'solid-js'
 import { normaliseDisplay, isDefaultDisplay } from '../../model/display'
 import { imagesInGroup } from '../../model/project'
 import type { ImageDisplayAdjust } from '../../model/types'
 import { isConfirmed, labelNumber } from '../../model/annotations'
-import type { AddInfo, BlockedReason, ViewportHandle } from '../../viewport/api'
+import type { AddInfo, BlockedReason, ReviewClusterMark, SuggestionMark, ViewportHandle } from '../../viewport/api'
+import { MIN_SEEDS, stageLabel, type AcceptScope } from '../../state/assist'
+import { ReviewPanel, type ReviewSummary } from '../assist/ReviewPanel'
 import { Viewport } from '../../viewport/Viewport'
 import { useApp } from '../context'
 import { bitmapError, bitmapSizeMismatch, createCurrentBitmap, readyImage, type BlobSource } from '../images'
-import { createElementWidth, createMediaQuery, MOD } from '../media'
+import { createElementHeight, createElementWidth, createMediaQuery, MOD } from '../media'
 import { CANVAS_GUARD_ATTR, Popover } from '../primitives'
-import { COMPARE_KEY, isTypingTarget } from '../shortcuts'
+import { COMPARE_KEY, FIND_SIMILAR_KEY, isTypingTarget } from '../shortcuts'
 import { AdjustPanel } from './AdjustPanel'
 import { FloatingToolbar, toolbarModeFor } from '../toolbar/FloatingToolbar'
 import { groupTallies, interactionHint, nearDuplicateMessage, sizeMismatchMessage, TOUCH_NAVIGATES_DETAIL, TOUCH_NAVIGATES_MESSAGE } from './hints'
@@ -33,7 +35,7 @@ export interface WorkspaceContainerProps {
 let touchNavigatesExplained = false
 
 export function WorkspaceContainer(props: WorkspaceContainerProps) {
-  const { editor, actions, toaster } = useApp()
+  const { editor, actions, toaster, assist } = useApp()
   const { state, annotations, groups, images, view } = editor
   const [stage, setStage] = createSignal<HTMLElement>()
   const stageWidth = createElementWidth(stage)
@@ -50,13 +52,24 @@ export function WorkspaceContainer(props: WorkspaceContainerProps) {
   // Immutable snapshot (identity changes only on edits); filtering keeps that property.
   const confirmed = createMemo(() => annotations.current().filter(isConfirmed))
   // Keep Fit clear of the floating toolbar (top) and the zoom footer (bottom); both grow on touch screens.
-  const fitInsets = () => (coarse() ? { top: 72, right: 16, bottom: 74, left: 16 } : { top: 64, right: 16, bottom: 62, left: 16 })
+  const baseInsets = () => (coarse() ? { top: 72, right: 16, bottom: 74, left: 16 } : { top: 64, right: 16, bottom: 62, left: 16 })
+  // The review panel covers a corner (wide stages) or the bottom (sheet): keep Fit and region focus clear of it.
+  const [panelEl, setPanelEl] = createSignal<HTMLElement>()
+  const panelHeight = createElementHeight(() => (assist.open() ? panelEl() : undefined))
+  const sheet = () => stageWidth() > 0 && stageWidth() < 600
+  const fitInsets = () => {
+    const b = baseInsets()
+    if (!assist.open()) return b
+    if (sheet()) return { ...b, bottom: Math.max(b.bottom, panelHeight() + 8) }
+    return stageWidth() >= 900 ? { ...b, right: 348 + 24 } : b
+  }
   const tallies = createMemo(() => groupTallies(groups.list(), annotations.counts()))
   const imageGroupName = () => {
     const img = images.current()
     return state.project?.imageGroups.find((g) => g.id === img?.imageGroupId)?.name ?? null
   }
-  const hint = () => interactionHint({ tool: state.tool, activeGroup: groups.active(), coarse: coarse(), touchAnnotates: state.touchAnnotates })
+  const baseHint = () => interactionHint({ tool: state.tool, activeGroup: groups.active(), coarse: coarse(), touchAnnotates: state.touchAnnotates })
+  const hint = () => (suggestionMarks().length ? `${coarse() ? 'Tap' : 'Click'} a dashed ring to reject or restore it · ${baseHint()}` : baseHint())
   const driveConnected = () => editor.drive.state().state === 'connected'
 
   // ------------------------------------------------ display adjustments (view setting)
@@ -88,6 +101,85 @@ export function WorkspaceContainer(props: WorkspaceContainerProps) {
     window.removeEventListener('keyup', onCompareKey)
     window.removeEventListener('blur', endCompare)
   })
+
+  // ------------------------------------------------ assisted counting (review overlay + panel)
+  createEffect(() => assist.setSizeMismatch(!!bitmapSizeMismatch(bitmap())))
+  const pending = assist.view
+  const suggestionMarks = createMemo<readonly SuggestionMark[]>(() => (assist.open() ? pending()?.marks ?? [] : []))
+  const [reviewIdx, setReviewIdx] = createSignal(0)
+  createEffect(on(() => assist.layer()?.result, () => setReviewIdx(0)))
+  const reviewList = () => pending()?.reviewClusters ?? []
+  const currentReview = () => {
+    const list = reviewList()
+    if (!list.length) return null
+    const i = Math.min(reviewIdx(), list.length - 1)
+    return { position: i + 1, total: list.length, cluster: list[i] }
+  }
+  const clusterMarks = createMemo<readonly ReviewClusterMark[]>(() => {
+    const v = pending()
+    if (!assist.open() || !v) return []
+    const active = currentReview()?.cluster.clusterId
+    return [
+      ...v.reviewClusters.map((c) => ({ bbox: c.bbox, label: c.question, active: c.clusterId === active, kind: 'review' as const })),
+      ...v.tooLarge.map((c) => ({ bbox: c.bbox, label: 'Count by hand', active: false, kind: 'too-large' as const })),
+    ]
+  })
+  function focusReview(i: number) {
+    const list = reviewList()
+    if (!list.length) return
+    const k = ((i % list.length) + list.length) % list.length
+    setReviewIdx(k)
+    const [x, y, w, h] = list[k].bbox
+    handle?.showRect(x, y, w, h)
+  }
+  function accept(scope: AcceptScope) {
+    if (!assist.accept(scope)) return
+    // The resolved region drops out of the list: show the one that took its place.
+    if (scope.kind === 'cluster' && reviewList().length) focusReview(Math.min(reviewIdx(), reviewList().length - 1))
+  }
+  const assistGroup = () => {
+    const g = assist.targetGroup()
+    return g ? { name: g.name, color: g.color, render: g.render } : null
+  }
+  const assistBlock = () => {
+    const b = assist.block()
+    if (!b) return null
+    const g = groups.active()
+    const fix =
+      g && b.reason === 'locked'
+        ? { label: 'Unlock', run: () => groups.setLocked(g.id, false) }
+        : g && b.reason === 'hidden'
+          ? { label: 'Show group', run: () => groups.setHidden(g.id, false) }
+          : b.reason === 'no-seeds' && state.tool !== 'add'
+            ? { label: 'Use Add tool', run: () => view.setTool('add') }
+            : undefined
+    return { message: b.message, detail: b.detail, fix }
+  }
+  const assistSummary = createMemo<ReviewSummary | null>(() => {
+    const l = assist.layer()
+    const v = pending()
+    if (!l || !v) return null
+    const ref = l.reference ? state.project?.images.find((i) => i.id === l.reference!.imageId) : undefined
+    return {
+      suggested: v.suggested,
+      needReview: v.needReview,
+      rejected: v.rejected,
+      okCount: v.okIndices.length,
+      tooLarge: v.tooLarge.length,
+      calibration: l.result.calibration,
+      rimPx: l.result.roi.marginPx,
+      elapsedMs: l.elapsedMs,
+      referenceName: l.reference ? ref?.name ?? 'another image' : null,
+    }
+  })
+  const toggleAssist = () => (assist.open() ? assist.setOpen(false) : assist.start())
+  // Escape closes the review panel (popovers and dialogs handle their own Escape first).
+  const onAssistKey = (e: KeyboardEvent) => {
+    if (e.key !== 'Escape' || e.defaultPrevented || !assist.open() || isTypingTarget(e.target) || document.querySelector('dialog[open]')) return
+    assist.setOpen(false)
+  }
+  window.addEventListener('keydown', onAssistKey)
+  onCleanup(() => window.removeEventListener('keydown', onAssistKey))
 
   function onAdd(x: number, y: number, info: AddInfo) {
     const list = confirmed() // snapshot before the add: the near marker is in it
@@ -149,6 +241,8 @@ export function WorkspaceContainer(props: WorkspaceContainerProps) {
               of={images.order().length}
               onPrevious={() => images.selectAdjacent(-1)}
               onNext={() => images.selectAdjacent(1)}
+              suggested={pending()?.suggested ?? 0}
+              onShowSuggestions={() => assist.start()}
             />
             <div class="stage" ref={setStage} {...{ [CANVAS_GUARD_ATTR]: '' }}>
               {/* DOM order = visual/tab order: toolbar, image, footer. */}
@@ -173,6 +267,12 @@ export function WorkspaceContainer(props: WorkspaceContainerProps) {
                   onTool={view.setTool}
                   onUndo={annotations.undo}
                   onRedo={annotations.redo}
+                  assist={{
+                    open: assist.open(),
+                    blockedReason: assist.block()?.message ?? null,
+                    shortcut: FIND_SIMILAR_KEY.toUpperCase(),
+                    onClick: toggleAssist,
+                  }}
                 />
               </div>
               <Viewport
@@ -187,6 +287,13 @@ export function WorkspaceContainer(props: WorkspaceContainerProps) {
                 touchAnnotates={state.touchAnnotates}
                 adjust={image().display}
                 compareOriginal={comparing()}
+                suggestions={suggestionMarks()}
+                suggestionColor={assist.targetGroup()?.color}
+                reviewClusters={clusterMarks()}
+                onSuggestionTap={assist.open() ? (i) => {
+                  const m = suggestionMarks()[i] as (SuggestionMark & { index: number }) | undefined
+                  if (m) assist.toggleReject(m.index)
+                } : undefined}
                 onAdd={onAdd}
                 onErase={annotations.erase}
                 onBlocked={onBlocked}
@@ -266,6 +373,41 @@ export function WorkspaceContainer(props: WorkspaceContainerProps) {
                   onCompare={setComparing}
                 />
               </Popover>
+              <Show when={assist.open()}>
+                <ReviewPanel
+                  ref={setPanelEl}
+                  sheet={sheet()}
+                  group={assistGroup()}
+                  block={assistBlock()}
+                  phase={assist.phase()}
+                  progress={assist.progress() ? { label: stageLabel(assist.progress()), fraction: assist.progress()!.fraction } : null}
+                  error={assist.error()}
+                  localSeeds={assist.localSeeds()}
+                  minSeeds={MIN_SEEDS}
+                  candidates={assist.candidates()}
+                  seedSource={assist.seedSource()}
+                  onSeedSource={assist.setSeedSource}
+                  summary={assistSummary()}
+                  settings={assist.settings()}
+                  onSettings={assist.setSettings}
+                  review={currentReview()}
+                  onPrevReview={() => focusReview(reviewIdx() - 1)}
+                  onNextReview={() => focusReview(reviewIdx() + 1)}
+                  onAcceptPrimary={() => {
+                    const c = currentReview()
+                    if (c) accept({ kind: 'cluster', clusterId: c.cluster.clusterId, choice: 'primary' })
+                  }}
+                  onAcceptAlternative={() => {
+                    const c = currentReview()
+                    if (c) accept({ kind: 'cluster', clusterId: c.cluster.clusterId, choice: 'alternative' })
+                  }}
+                  onAcceptOk={() => accept({ kind: 'ok' })}
+                  onRejectAll={assist.discard}
+                  onRun={assist.run}
+                  onCancel={assist.cancel}
+                  onClose={() => assist.setOpen(false)}
+                />
+              </Show>
             </div>
           </>
         )}

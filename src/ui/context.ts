@@ -6,12 +6,15 @@
  */
 import { createContext, useContext } from 'solid-js'
 import type { Editor } from '../state/editor'
+import type { Assist } from '../state/assist'
 import type { ThumbnailCache } from './images'
 import type { DialogController, Toaster } from './primitives'
 import type { ProjectActions } from './projectActions'
 
 export interface AppServices {
   editor: Editor
+  /** Assisted counting ("Find similar"): one detector worker and the in-memory suggestions. */
+  assist: Assist
   toaster: Toaster
   dialogs: DialogController
   thumbnails: ThumbnailCache

@@ -17,7 +17,7 @@ import './app.css'
 
 /** Top-level container: layout, drawer, global drop/shortcuts/persistence hooks, app bar wiring. */
 export function AppShell() {
-  const { editor, toaster, dialogs, thumbnails, actions, isDemo } = useApp()
+  const { editor, toaster, dialogs, thumbnails, actions, isDemo, assist } = useApp()
   const { state, projects, drive } = editor
   const narrow = createMediaQuery('(max-width: 900px)')
   const phone = createMediaQuery('(max-width: 560px)')
@@ -83,6 +83,8 @@ export function AppShell() {
           return editor.images.selectAdjacent(cmd.delta)
         case 'image-adjust':
           return setAdjustOpen((o) => !o)
+        case 'find-similar':
+          return assist.open() ? assist.setOpen(false) : assist.start()
         case 'help':
           return setHelpOpen(true)
       }
