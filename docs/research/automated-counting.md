@@ -365,3 +365,9 @@ Browser platform
 - WebKit, Safari 26.0 features (WebGPU): https://webkit.org/blog/17333/webkit-features-in-safari-26-0/
 - MDN browser-compat-data (createImageBitmap resize options Safari 15; OffscreenCanvas 2D Safari 16.4; ImageDecoder not on iOS): https://github.com/mdn/browser-compat-data
 - Safari canvas limits: https://pqina.nl/blog/canvas-area-exceeds-the-maximum-limit/ · https://lionpuro.com/posts/canvas-is-finally-usable-on-safari/
+
+## Product decisions (2026-10-09)
+
+- **Schema adopted (no backward compatibility needed; still schema v1):** one JSON document per image holds both the annotations and a collection of automated runs. `ImageAnnotations.detectionRuns: DetectionRun[]` and `Annotation.geometry?` are now in `src/model/types.ts`. `Annotation.detector.runId` is the foreign key into `detectionRuns`.
+- **Reference plates allowed:** seeds may come from another image (plate) in the project. Each `DetectionSeed` records its `imageId`, and the run records `seedImageFingerprints`, so cross-plate calibration is explicit and reproducible.
+- **Test plates:** fully annotated test plates (including crowded ones) will be provided later for the evaluation harness.
