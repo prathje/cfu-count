@@ -270,9 +270,10 @@ export function createProjectRepository(deps: RepositoryDeps): ProjectRepository
     async function save(project: Project, changedDocs: Parameters<ProjectSession['save']>[1]): Promise<void> {
       await localWrite(projectId, () =>
         withLock(async () => {
-          const stored = await local.getProject(projectId)
-          const merged: Project = stored ? applyStorageOwned({ ...project, id: projectId }, stored) : { ...project, id: projectId }
-          merged.revision = (stored?.revision ?? project.revision ?? 0) + 1
+          // A missing record means the project was deleted meanwhile: never resurrect it.
+          const stored = await local.requireProject(projectId)
+          const merged: Project = applyStorageOwned({ ...project, id: projectId }, stored)
+          merged.revision = (stored.revision ?? 0) + 1
           const docs = changedDocs.map((d) => (d.projectId === projectId ? d : { ...d, projectId }))
           let syncState: SyncState | undefined
           if (merged.storage.kind === 'drive') {
@@ -458,8 +459,10 @@ export function createProjectRepository(deps: RepositoryDeps): ProjectRepository
     },
 
     async delete(id) {
-      await local.deleteProject(id)
+      // Close first so the session refuses new saves, then delete behind the lock so a save
+      // or Drive checkpoint already in flight finishes first instead of re-creating the record.
       if (isOpen(id)) closeOpen()
+      await withLock(() => local.deleteProject(id))
     },
 
     async importArchive(file) {

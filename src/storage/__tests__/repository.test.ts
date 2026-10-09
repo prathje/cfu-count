@@ -149,6 +149,16 @@ describe('repository: local working copy', () => {
     expect(fresh.projectId).toBe(p.id)
   })
 
+  it('deleting a project while a save is in flight does not resurrect it', async () => {
+    const s = await d.repo.create('Doomed')
+    const p = s.opened.project
+    const save = s.save({ ...p, name: 'Renamed' }, []).catch((e: unknown) => e)
+    await d.repo.delete(p.id)
+    await save
+    expect(await d.local.getProject(p.id)).toBeUndefined()
+    expect(await d.repo.list()).toEqual([])
+  })
+
   it('keeps storage-owned fields when the editor saves a stale copy', async () => {
     const s = await d.repo.create('P')
     const project = s.opened.project
