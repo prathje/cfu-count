@@ -10,7 +10,8 @@
  *         + α Σ_i E_i                          edge: exposed disk boundary away from the observed boundary
  *         + β Σ_i huber((log r_i − μ)/s)       seed-derived size prior
  *         + γ Σ_i A_i                          appearance: disk interior dimmer than the seeds, or ring-like
- *         + λ K_new                            count penalty
+ *         + λ Σ_i (r_i/r_med)²                 count penalty, proportional to disk area
+ *         + ω Σ_pairs overlap                  deep overlaps (centres closer than 0.7 (r_i + r_j))
  *     Existing annotations (any group) are fixed disks: they cover pixels and
  *     hide boundaries but pay no prior/appearance/count terms and never move.
  *  3. Search: lazy greedy forward selection from the candidates, local
@@ -42,9 +43,11 @@ export interface FitWeights {
   wFP: number
   /** Huber threshold for the size prior (in units of s). */
   huber: number
+  /** Weight of the pairwise overlap penalty (deep overlaps are rare for real colonies). */
+  omega: number
 }
 
-export const DEFAULT_WEIGHTS: Omit<FitWeights, 'lambda'> = { alpha: 0.5, beta: 1, gamma: 0.5, wFP: 1, huber: 2 }
+export const DEFAULT_WEIGHTS: Omit<FitWeights, 'lambda'> = { alpha: 0.5, beta: 0.6, gamma: 0.5, wFP: 1, huber: 2, omega: 1 }
 
 export interface Circle3 {
   x: number
@@ -96,6 +99,10 @@ export class ClusterFit {
   sumEdge = 0
   sumPrior = 0
   sumApp = 0
+  /** Σ (r_i / r_med)² over free disks: the count penalty scales with disk area so small colonies are not priced out. */
+  sumCount = 0
+  /** Σ over free-disk pairs of max(0, 0.7 (r_i + r_j) − d_ij)² / r_med². */
+  sumOverlap = 0
   kNew = 0
   disks: Disk[] = []
   readonly p: ClusterFitParams
@@ -133,7 +140,14 @@ export class ClusterFit {
   /** Total objective. */
   J(): number {
     const wt = this.p.weights
-    return (this.FN + wt.wFP * this.FP) / this.a0 + wt.alpha * this.sumEdge + wt.beta * this.sumPrior + wt.gamma * this.sumApp + wt.lambda * this.kNew
+    return (
+      (this.FN + wt.wFP * this.FP) / this.a0 +
+      wt.alpha * this.sumEdge +
+      wt.beta * this.sumPrior +
+      wt.gamma * this.sumApp +
+      wt.lambda * this.sumCount +
+      wt.omega * this.sumOverlap
+    )
   }
 
   private key(cx: number, cy: number): number {
@@ -150,6 +164,11 @@ export class ClusterFit {
       for (let cx = c0x; cx <= c1x; cx++)
         for (const d of this.grid.get(this.key(cx, cy)) ?? []) if (d.alive && Math.hypot(d.x - x, d.y - y) < d.r + r + this.hideTol) out.push(d)
     return out
+  }
+
+  private overlap(a: Circle3, b: Circle3): number {
+    const v = 0.7 * (a.r + b.r) - Math.hypot(a.x - b.x, a.y - b.y)
+    return v > 0 ? (v * v) / (this.p.prior.rMed * this.p.prior.rMed) : 0
   }
 
   private priorCost(r: number): number {
@@ -174,7 +193,7 @@ export class ClusterFit {
     ring /= 8
     const rel = (0.4 * c + 0.6 * ring) / this.p.contrastRef
     let cost = 0
-    if (rel < this.p.contrastLo) cost += Math.min(4, ((this.p.contrastLo - rel) / Math.max(0.15, this.p.contrastLo * 0.5)) ** 2)
+    if (rel < this.p.contrastLo) cost += Math.min(1.5, ((this.p.contrastLo - rel) / Math.max(0.15, this.p.contrastLo * 0.5)) ** 2)
     if (ring > 0 && c < 0.5 * ring) cost += 1 // ring-like: bubble or specular rim
     return cost
   }
@@ -255,9 +274,11 @@ export class ClusterFit {
     }
     d.edge = e
     this.sumEdge += e
+    for (const o of nb) this.sumOverlap += this.overlap(d, o)
     if (!d.fixed) {
       this.sumPrior += d.prior
       this.sumApp += d.app
+      this.sumCount += (d.r / this.p.prior.rMed) ** 2
       this.kNew++
     }
     d.alive = true
@@ -305,9 +326,11 @@ export class ClusterFit {
       }
     }
     this.sumEdge -= d.edge
+    for (const o of nb) this.sumOverlap -= this.overlap(d, o)
     if (!d.fixed) {
       this.sumPrior -= d.prior
       this.sumApp -= d.app
+      this.sumCount -= (d.r / this.p.prior.rMed) ** 2
       this.kNew--
     }
   }
@@ -643,8 +666,10 @@ export function fitCluster(mask: Mask, F: Plane, ox: number, oy: number, params:
   })
   let gapPlus = Infinity
   let bestAdd: Circle3 | null = null
+  // the K+1 alternative must be a separate colony, not a disk nested in an existing one
+  const separate = (x: number, y: number, r: number) => fit.disks.every((d) => Math.hypot(d.x - x, d.y - y) >= 0.7 * Math.max(d.r, r))
   for (let c = 0; c < cands.length; c++) {
-    // any candidate not overlapping an existing disk centre too closely
+    if (!separate(cands[c].x, cands[c].y, cands[c].r)) continue
     const d = fit.deltaAdd(cands[c].x, cands[c].y, cands[c].r)
     if (d < gapPlus) {
       gapPlus = d
@@ -655,9 +680,14 @@ export function fitCluster(mask: Mask, F: Plane, ox: number, oy: number, params:
     // a quick refinement of the best addition gives a fairer runner-up
     const d = fit.add(bestAdd.x, bestAdd.y, bestAdd.r)
     const nd = fit.refine(d, bounds, rMin)
-    gapPlus = fit.J() - J
-    bestAdd = { x: nd.x, y: nd.y, r: nd.r }
+    const refinedGap = fit.J() - J
+    const refined = { x: nd.x, y: nd.y, r: nd.r }
     fit.remove(nd)
+    // keep the refined version only if it is still a separate colony
+    if (separate(refined.x, refined.y, refined.r)) {
+      gapPlus = Math.min(gapPlus, refinedGap)
+      bestAdd = refined
+    }
   }
   const K = free.length
   let runnerUpK: number | null = null

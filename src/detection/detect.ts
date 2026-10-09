@@ -46,7 +46,7 @@ export const DEFAULT_SETTINGS: DetectSettings = {
   edgeMarginFrac: 0.025,
   kMax: 400,
   reviewGap: 0.25,
-  sMin: 0.2,
+  sMin: 0.25,
   minUsableSeeds: 3,
 }
 
@@ -300,14 +300,15 @@ export function calibrate(prep: PreparedImage, input: Pick<DetectInput, 'seeds' 
   {
     const contrasts = measured.filter((q) => q.m && q.m.snr >= 4).map((q) => q.m!.contrast)
     const ref = contrasts.length ? median(contrasts) : 8 * noise
-    const thr = Math.max(4 * noise, 0.35 * ref)
+    const thr = Math.max(3 * noise, 0.25 * ref)
     const fg = makeMask(prep.width, prep.height)
     for (let i = 0; i < fg.data.length; i++) fg.data[i] = F.data[i] > thr ? 1 : 0
     // dilate by ~half a colony so faint rims stay out of the background
     const inv = makeMask(prep.width, prep.height)
     for (let i = 0; i < inv.data.length; i++) inv.data[i] = fg.data[i] ? 0 : 1
     const dOut = distanceTransform(inv, false)
-    const grow = Math.max(1, 0.5 * priorA.rMed)
+    // generous: halos and the gaps inside dense streaks must not lift the background
+    const grow = Math.max(1, 1.5 * priorA.rMed)
     for (let i = 0; i < fg.data.length; i++) fg.data[i] = dOut.data[i] <= grow ? 1 : 0
     const sigma2 = Math.max(4, 4 * priorA.rHi, 0.04 * prep.plateDiameter)
     const bg2 = labBackground(prep.lab, weightMask(prep.roi.plate, fg), sigma2)
@@ -341,7 +342,8 @@ export function calibrate(prep: PreparedImage, input: Pick<DetectInput, 'seeds' 
   const anyContrast = measured.filter((q) => q.m && q.m.snr >= 3).map((q) => q.m!.contrast)
   const contrastRef = contrasts.length ? median(contrasts) : anyContrast.length ? median(anyContrast) : 8 * noise
   const cr = robustRange(contrasts.length ? contrasts : [contrastRef], 0.15 * contrastRef)
-  const contrastLo = Math.min(0.8, Math.max(0.25, (cr.median - 2 * cr.scale) / contrastRef))
+  // soft lower bound: colonies may be dimmer than the (often large, bright) seeds
+  const contrastLo = Math.min(0.5, Math.max(0.25, (cr.median - 3 * cr.scale) / contrastRef))
   const appearance: CalibrationReport['appearance'] = {}
   if (usable.length) {
     appearance.contrast = rr(cr)

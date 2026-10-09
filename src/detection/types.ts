@@ -70,12 +70,12 @@ export interface DetectSettings {
   kMax: number
   /** Objective gap (in units of one typical colony) below which a cluster/suggestion is flagged for review (default 0.25). */
   reviewGap: number
-  /** Floor for the log-radius spread s (default 0.2, i.e. ±20 %). */
+  /** Floor for the log-radius spread s (default 0.25, i.e. ±25 %). */
   sMin: number
   /** Below this many usable seeds the calibration is reported as tentative (default 3). */
   minUsableSeeds: number
   /** Advanced (evaluation/tuning): override fitter objective weights. */
-  fitWeights?: Partial<{ alpha: number; beta: number; gamma: number; lambda: number; wFP: number; huber: number }>
+  fitWeights?: Partial<{ alpha: number; beta: number; gamma: number; lambda: number; wFP: number; huber: number; omega: number }>
 }
 
 export interface DetectInput {
