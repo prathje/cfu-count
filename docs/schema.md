@@ -301,7 +301,7 @@ so no annotation is silently dropped. There is no per-image total column; sum
 | `confirmed_count` | `manual_count + automated_accepted_count`; the same count the app shows (`isConfirmed` in src/model/annotations.ts) |
 | `manual_count` | annotations with `origin = manual` (manual marks are always `accepted`, so always confirmed) |
 | `automated_accepted_count` | `origin = automated` and `reviewStatus = accepted` |
-| `automated_unreviewed_count` | automated suggestions not yet reviewed; **not** in `confirmed_count` |
+| `automated_unreviewed_count` | stored annotations with `origin = automated` and `reviewStatus = unreviewed`; **not** in `confirmed_count`. Pending Find-similar suggestions are never stored, so projects made with this app have 0 here unless another tool wrote such marks |
 | `group_hidden`, `group_locked` | `true`/`false`; metadata only, never changes counts |
 | `image_width`, `image_height` | oriented pixel size |
 | `image_fingerprint_sha256` | |

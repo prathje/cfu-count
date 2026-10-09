@@ -6,7 +6,9 @@
  * `isConfirmed` the UI uses):
  *   manual_count               annotations with origin "manual" (always confirmed)
  *   automated_accepted_count   origin "automated" with reviewStatus "accepted"
- *   automated_unreviewed_count origin "automated" with reviewStatus "unreviewed" (suggestions)
+ *   automated_unreviewed_count origin "automated" with reviewStatus "unreviewed": stored automated
+ *                              marks nobody has reviewed. Pending Find-similar suggestions are never
+ *                              stored, so this app writes none (0 unless another tool wrote them).
  *   confirmed_count            manual_count + automated_accepted_count
  * Automated annotations with reviewStatus "rejected" are not counted anywhere.
  * Hidden/locked are reported as metadata and never change counts.
