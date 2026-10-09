@@ -404,12 +404,18 @@ export function createAssist(deps: AssistDeps): Assist {
       ),
     )
     // Drop layers whose image vanished, changed bytes or lost its target group.
+    // Storage merges image records with reconcile (same array, fields updated in
+    // place), so track the fields themselves, not just the array identity.
     createEffect(
       on(
-        () => [state.project?.images, groups.list()] as const,
+        () => [(state.project?.images ?? []).map((i) => ({ id: i.id, fingerprint: i.fingerprint, sourceMismatch: i.sourceMismatch })), groups.list()] as const,
         ([imgs, list]) => {
-          const pruned = pruneStore(untrack(store), imgs ?? [], list.map((g) => g.id))
-          if (pruned !== untrack(store)) setStore(pruned)
+          const pruned = pruneStore(untrack(store), imgs, list.map((g) => g.id))
+          if (pruned === untrack(store)) return
+          batch(() => {
+            setStore(pruned)
+            if (!untrack(layer) && untrack(phase) === 'ready') setPhase('idle')
+          })
         },
         { defer: true },
       ),

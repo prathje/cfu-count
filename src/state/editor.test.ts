@@ -629,6 +629,30 @@ describe('assisted counting', () => {
     expect(editor.state.docs['i2'].detectionRuns[0].seedImageFingerprints).toEqual({ i1: 'fp-i1' })
   })
 
+  it('drops a layer when storage reports the image bytes changed (reconciled in place)', async () => {
+    const { editor, assist, session, settle } = await setupAssist()
+    assist.start()
+    await settle()
+    expect(assist.layer()).not.toBeNull()
+    const updated = project()
+    updated.images[0].sourceMismatch = { detectedAt: '', message: 'Replaced' }
+    session().emitUpdated(updated)
+    expect(editor.state.project!.images[0].sourceMismatch).toBeDefined()
+    expect(assist.layer()).toBeNull()
+    expect(assist.phase()).toBe('idle')
+  })
+
+  it('drops a layer when its target group is deleted', async () => {
+    const { editor, assist, settle } = await setupAssist()
+    assist.start()
+    await settle()
+    const target = editor.groups.active()!.id
+    editor.groups.create('Other')
+    expect(editor.groups.remove(target)).toBe(true)
+    expect(assist.layer()).toBeNull()
+    expect(assist.phase()).toBe('idle')
+  })
+
   it('carries rejections over a settings re-run and blocks with no examples anywhere', async () => {
     const { editor, assist, detector, settle } = await setupAssist()
     assist.start()
