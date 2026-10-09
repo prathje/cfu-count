@@ -194,6 +194,36 @@ describe('touch', () => {
     expect(m.modeKind).toBe('idle')
   })
 
+  it('a ghost finger (missed pointerup) is released when the platform reports fewer touches', () => {
+    m.down(s(1, 'touch', 0, 0, { time: 0 }), add)
+    // finger 1 lifts but its pointerup never arrives; later two real fingers land
+    m.down(s(2, 'touch', 100, 0, { time: 5000 }), add)
+    expect(m.modeKind).toBe('pinch') // paired with the ghost
+    m.syncTouches(1) // touchstart: only one finger is physically down
+    expect(m.modeKind).toBe('drag')
+    m.down(s(3, 'touch', 200, 0, { time: 5010 }), add)
+    m.syncTouches(2)
+    expect(m.modeKind).toBe('pinch')
+    const fx = m.move(s(3, 'touch', 300, 0, { time: 5020 }))
+    expect(fx[0]).toMatchObject({ type: 'pinch' })
+    expect((fx[0] as { factor: number }).factor).toBeCloseTo(2)
+  })
+
+  it('syncTouches never releases contacts that are really down', () => {
+    m.down(s(1, 'touch', 0, 0), add)
+    m.down(s(2, 'touch', 100, 0), add)
+    m.syncTouches(2)
+    m.syncTouches(3) // includes a Pencil touch
+    expect(m.modeKind).toBe('pinch')
+  })
+
+  it('syncTouches(0) clears all finger state', () => {
+    m.down(s(1, 'touch', 0, 0), add)
+    m.syncTouches(0)
+    expect(m.modeKind).toBe('idle')
+    expect(m.activePointerCount).toBe(0)
+  })
+
   it('large finger contacts always navigate, even right after Pencil use (iPad reports big thumb sizes)', () => {
     m.down(s(9, 'pen', 0, 0), add)
     m.up(s(9, 'pen', 0, 0))
