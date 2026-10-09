@@ -15,6 +15,11 @@
  *
  * Accepting returns the ops and the DetectionRun for ONE editor.applyBatch, so
  * a batch accept is one undo step and undo also removes the run record.
+ *
+ * Rejections that no stored accept run records as negatives are kept in ONE
+ * reject-only DetectionRun per layer (`planRejectRun`, zero accepted annotations),
+ * updated as the user rejects and restores. Negatives are audit/training data,
+ * never a filter: a later run may suggest the same spots again.
  */
 import type { Annotation, DetectionRun, ID } from '../../model/types'
 import type { AnnotationOp } from '../../model/annotations'
@@ -60,14 +65,18 @@ export interface SuggestionLayer {
   rejected: ReadonlySet<number>
   /** Run ids issued for accepts from this layer (one per accept batch). */
   acceptRunIds: readonly ID[]
+  /** Rejected suggestion indices each accept run recorded as its negatives. */
+  negativesByRun: ReadonlyMap<ID, readonly number[]>
+  /** Run id of this layer's reject-only DetectionRun (rejections no accept recorded). */
+  rejectRunId: ID
   /** Wall-clock time of the run as seen by the UI, in ms (includes decoding). */
   elapsedMs: number
 }
 
 export function makeLayer(
-  args: Omit<SuggestionLayer, 'rejected' | 'acceptRunIds'> & { rejected?: ReadonlySet<number> },
+  args: Omit<SuggestionLayer, 'rejected' | 'acceptRunIds' | 'negativesByRun'> & { rejected?: ReadonlySet<number> },
 ): SuggestionLayer {
-  return { ...args, result: stripResult(args.result), rejected: args.rejected ?? new Set(), acceptRunIds: [] }
+  return { ...args, result: stripResult(args.result), rejected: args.rejected ?? new Set(), acceptRunIds: [], negativesByRun: new Map() }
 }
 
 function stripResult(r: LayerResult): LayerResult {
@@ -121,6 +130,18 @@ export function toggleRejected(layer: SuggestionLayer, index: number): Suggestio
   if (rejected.has(index)) rejected.delete(index)
   else rejected.add(index)
   return { ...layer, rejected }
+}
+
+/** Reject every suggestion still pending in the view ("Reject all"); restorable until accepted. */
+export function rejectAllPending(layer: SuggestionLayer, view: PendingView): SuggestionLayer {
+  const rejected = new Set(layer.rejected)
+  for (const m of view.marks) rejected.add(m.index)
+  return rejected.size === layer.rejected.size ? layer : { ...layer, rejected }
+}
+
+/** Restore every rejected suggestion of the layer. */
+export function restoreAllRejected(layer: SuggestionLayer): SuggestionLayer {
+  return layer.rejected.size === 0 ? layer : { ...layer, rejected: new Set() }
 }
 
 /**
@@ -326,6 +347,8 @@ export interface AcceptPlan {
   duplicates: number
   /** Cluster ids covered by this accept (for navigation). */
   clusterIds: string[]
+  /** Rejected suggestion indices recorded as this run's negatives. */
+  negativeIndices: number[]
 }
 
 export interface AcceptContext {
@@ -348,17 +371,20 @@ export function planAccept(layer: SuggestionLayer, view: PendingView, scope: Acc
   const all = layer.result.suggestions
   let picked: Suggestion[]
   let negatives: { x: number; y: number }[]
+  let negativeIndices: number[]
   let clusterIds: string[]
   if (scope.kind === 'ok') {
     picked = view.okIndices.map((i) => all[i])
     clusterIds = [...new Set(picked.map((s) => s.clusterId))]
     // Rejections outside review clusters are decisions on the same "OK" set.
     const inReview = new Set(view.reviewClusters.flatMap((c) => c.rejected))
-    negatives = view.marks.filter((m) => m.state === 'rejected' && !inReview.has(m.index)).map((m) => ({ x: m.x, y: m.y }))
+    negativeIndices = view.marks.filter((m) => m.state === 'rejected' && !inReview.has(m.index)).map((m) => m.index)
+    negatives = negativeIndices.map((i) => ({ x: all[i].x, y: all[i].y }))
   } else {
     const c = view.reviewClusters.find((rc) => rc.clusterId === scope.clusterId)
     if (!c) return null
     clusterIds = [c.clusterId]
+    negativeIndices = [...c.rejected]
     negatives = c.rejected.map((i) => ({ x: all[i].x, y: all[i].y }))
     if (scope.choice === 'primary') picked = c.primary.map((i) => all[i])
     else {
@@ -403,10 +429,38 @@ export function planAccept(layer: SuggestionLayer, view: PendingView, scope: Acc
     run,
     duplicates: picked.length - kept.length,
     clusterIds,
+    negativeIndices,
   }
 }
 
-/** Record that an accept batch was applied (its run id resolves clusters). */
-export function noteAccepted(layer: SuggestionLayer, runId: ID): SuggestionLayer {
-  return { ...layer, acceptRunIds: [...layer.acceptRunIds, runId] }
+/** Record that an accept batch was applied (its run id resolves clusters; its negatives are recorded). */
+export function noteAccepted(layer: SuggestionLayer, runId: ID, negativeIndices: readonly number[] = []): SuggestionLayer {
+  return { ...layer, acceptRunIds: [...layer.acceptRunIds, runId], negativesByRun: new Map(layer.negativesByRun).set(runId, [...negativeIndices]) }
+}
+
+/**
+ * The reject-only DetectionRun this layer should have stored, or null when there is
+ * nothing to record. Its negatives are the rejected suggestions still shown as
+ * rejected, minus those an accept run that is still stored (`storedRunIds`; undo
+ * removes an accept's run) already records. It has zero accepted annotations.
+ */
+export function planRejectRun(layer: SuggestionLayer, view: PendingView, storedRunIds: ReadonlySet<ID>, at: string): DetectionRun | null {
+  const recorded = new Set<number>()
+  for (const [runId, indices] of layer.negativesByRun) if (storedRunIds.has(runId)) for (const i of indices) recorded.add(i)
+  const indices = view.marks.filter((m) => m.state === 'rejected' && !recorded.has(m.index)).map((m) => m.index)
+  if (indices.length === 0) return null
+  const all = layer.result.suggestions
+  const base = layer.result.run
+  const run: DetectionRun = {
+    ...structuredClone(base),
+    runId: layer.rejectRunId,
+    createdAt: at,
+    imageFingerprint: layer.imageFingerprint,
+    targetGroupId: layer.groupId,
+    negatives: indices.map((i) => ({ x: all[i].x, y: all[i].y })),
+    diagnostics: { ...(base.diagnostics ?? {}), detectRunId: base.runId, accepted: 0, acceptScope: 'reject', rejected: indices.length },
+  }
+  if (layer.reference) run.seedImageFingerprints = { [layer.reference.imageId]: layer.reference.fingerprint }
+  else delete run.seedImageFingerprints
+  return run
 }

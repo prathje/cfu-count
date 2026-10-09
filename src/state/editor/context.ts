@@ -37,6 +37,11 @@ export interface EditorState {
    * project (open, take Drive version, ...): edits are refused while they run.
    */
   busy: { label: string; blocking: boolean } | null
+  /**
+   * Incremented whenever a project snapshot is loaded (open, import, take the Drive
+   * version). Lets in-memory caches drop state even when the project id is unchanged.
+   */
+  loadCount: number
 }
 
 export interface RunOptions {

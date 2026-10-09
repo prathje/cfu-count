@@ -607,11 +607,75 @@ describe('assisted counting', () => {
     expect(assist.view()!.okIndices).toEqual([])
     notices.at(-1)!.action!.run() // toast Undo
     expect(editor.annotations.total()).toBe(3)
-    expect(editor.state.docs['i1'].detectionRuns).toEqual([])
+    // The accept run is gone; the still-standing rejection falls back to the reject-only run.
+    expect(editor.state.docs['i1'].detectionRuns).toEqual([expect.objectContaining({ negatives: [{ x: 70, y: 50 }], diagnostics: expect.objectContaining({ accepted: 0 }) })])
     expect(assist.view()!.okIndices).toEqual([0])
     editor.annotations.redo()
     expect(editor.annotations.total()).toBe(4)
-    expect(editor.state.docs['i1'].detectionRuns).toHaveLength(1)
+    expect(editor.state.docs['i1'].detectionRuns.map((r) => r.runId)).toEqual([added.detector!.runId])
+  })
+
+  it('records rejections without an accept as a reject-only run (not an undo step); restore removes it', async () => {
+    const { editor, assist, detector, settle, session } = await setupAssist()
+    assist.start()
+    await settle()
+    assist.rejectAll()
+    expect(assist.view()).toMatchObject({ suggested: 0, rejected: 4 })
+    const runs = editor.state.docs['i1'].detectionRuns
+    expect(runs).toHaveLength(1)
+    expect(runs[0]).toMatchObject({ imageFingerprint: 'fp-i1', targetGroupId: editor.groups.active()!.id, diagnostics: { accepted: 0, acceptScope: 'reject', rejected: 4 } })
+    expect(runs[0].negatives).toHaveLength(4)
+    expect(editor.annotations.total()).toBe(3)
+    expect(editor.state.history['i1'].undo).toHaveLength(3) // only the three manual adds
+    expect(await editor.projects.flush()).toBe(true)
+    const saved = session().save.mock.calls.at(-1)! as [Project, { detectionRuns: unknown[] }[]]
+    expect(saved[1][0].detectionRuns).toHaveLength(1)
+    // Restore before closing: the record follows the rejections.
+    assist.toggleReject(0)
+    expect(editor.state.docs['i1'].detectionRuns[0].negatives).toHaveLength(3)
+    assist.restoreAll()
+    expect(editor.state.docs['i1'].detectionRuns).toEqual([])
+    expect(assist.view()!.suggested).toBe(4)
+    // Negatives are not filters: a fresh run (no layer to carry from) suggests the same spots.
+    assist.rejectAll()
+    await editor.projects.open('p1')
+    await settle()
+    for (const [x, y] of [[10, 10], [20, 10], [30, 10]]) editor.annotations.add(x, y)
+    assist.start()
+    await settle()
+    expect(detector.calls.at(-1)).not.toHaveProperty('negatives')
+    expect(assist.view()).toMatchObject({ suggested: 4, rejected: 0 })
+  })
+
+  it('a re-run that finishes after an accept does not bring the resolved region back; it runs again', async () => {
+    const { assist, detector, settle } = await setupAssist()
+    assist.start()
+    await settle()
+    const release = detector.hold()
+    assist.setSettings({ sensitivity: 0.7 })
+    await new Promise((r) => setTimeout(r, 5))
+    expect(detector.calls).toHaveLength(2)
+    expect(assist.accept({ kind: 'cluster', clusterId: 'c3', choice: 'alternative' })).toBe(true)
+    const releaseNext = detector.hold()
+    release()
+    await new Promise((r) => setTimeout(r, 5))
+    expect(assist.view()!.reviewClusters).toHaveLength(0) // the stale result was not applied
+    expect(detector.calls).toHaveLength(3) // ...and the search runs again with the accepted marks
+    expect(detector.calls[2].existing).toHaveLength(4)
+    releaseNext()
+    await settle()
+  })
+
+  it('taking the Drive version clears suggestion layers even for the same project id', async () => {
+    const { editor, assist, settle } = await setupAssist()
+    assist.start()
+    await settle()
+    expect(assist.layer()).not.toBeNull()
+    await editor.drive.takeRemote()
+    await settle()
+    expect(editor.state.project!.name).toBe('Drive version')
+    expect(assist.layer()).toBeNull()
+    expect(assist.open()).toBe(false)
   })
 
   it('resolves a review cluster with the alternative count as its own undo step', async () => {

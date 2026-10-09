@@ -409,7 +409,8 @@ export function WorkspaceContainer(props: WorkspaceContainerProps) {
                     if (c) accept({ kind: 'cluster', clusterId: c.cluster.clusterId, choice: 'alternative' })
                   }}
                   onAcceptOk={() => accept({ kind: 'ok' })}
-                  onRejectAll={assist.discard}
+                  onRejectAll={assist.rejectAll}
+                  onRestoreAll={assist.restoreAll}
                   onRun={assist.run}
                   onCancel={assist.cancel}
                   onClose={() => assist.setOpen(false)}

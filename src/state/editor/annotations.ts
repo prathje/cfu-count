@@ -57,6 +57,14 @@ export interface AnnotationCommands {
   erase(annotationId: ID): boolean
   /** Apply ops to one image as ONE undo step. Returns the block if refused (nothing changes). */
   applyBatch(imageId: ID, ops: AnnotationOp[], opts: BatchOptions): OpBlock | null
+  /**
+   * Store (or with `run = null` remove) a detection-run record that no annotation
+   * refers to: the reject-only run of a review (rejections, zero accepted marks).
+   * Not an undo step: it changes no annotation or count, and the review panel
+   * restores rejections. Refuses (returns false, silently) while edits are frozen,
+   * for a run computed on other image bytes, or to remove a run annotations use.
+   */
+  setRunRecord(imageId: ID, runId: ID, run: DetectionRun | null): boolean
   /** Undo/redo on the current image; refused (with explanation) if it would touch a locked/hidden group. */
   undo(): boolean
   redo(): boolean
@@ -168,6 +176,24 @@ export function createAnnotations(ctx: EditorContext, groups: GroupCommands): An
     return null
   }
 
+  function setRunRecord(imageId: ID, runId: ID, run: DetectionRun | null): boolean {
+    const project = state.project
+    const image = project?.images.find((i) => i.id === imageId)
+    if (!image || state.busy?.blocking) return false
+    if (run && (run.runId !== runId || checkRunImage(run, image))) return false
+    const doc = state.docs[imageId]
+    if (!run) {
+      if (!doc?.detectionRuns.some((r) => r.runId === runId)) return true
+      if (doc.annotations.some((a) => a.detector?.runId === runId)) return false
+    }
+    batch(() => {
+      if (run) setRun(imageId, run, true)
+      else setRun(imageId, { runId } as DetectionRun, false)
+      ctx.touchDoc(imageId)
+    })
+    return true
+  }
+
   function add(x: number, y: number): boolean {
     const imageId = state.currentImageId
     if (!imageId || ctx.editsFrozen()) return false
@@ -238,6 +264,7 @@ export function createAnnotations(ctx: EditorContext, groups: GroupCommands): An
     add,
     erase,
     applyBatch,
+    setRunRecord,
     undo: () => stepHistory('undo'),
     redo: () => stepHistory('redo'),
     explainBlocked,

@@ -10,7 +10,10 @@ import {
   noteAccepted,
   pendingView,
   planAccept,
+  planRejectRun,
   pruneStore,
+  rejectAllPending,
+  restoreAllRejected,
   putLayer,
   toggleRejected,
   updateLayer,
@@ -61,7 +64,7 @@ const cluster = (clusterId: string, status: ClusterResult['status'], over: Parti
 
 function layer(suggestions: Suggestion[], clusters: ClusterResult[] = [], over: Partial<SuggestionLayer> = {}): SuggestionLayer {
   return {
-    ...makeLayer({ imageId: 'i1', imageFingerprint: 'fp-i1', groupId: 'g1', result: result(suggestions, clusters), settings: DEFAULT_REVIEW_SETTINGS, reference: null, elapsedMs: 0 }),
+    ...makeLayer({ imageId: 'i1', imageFingerprint: 'fp-i1', groupId: 'g1', result: result(suggestions, clusters), settings: DEFAULT_REVIEW_SETTINGS, reference: null, elapsedMs: 0, rejectRunId: 'rej-1' }),
     ...over,
   }
 }
@@ -239,5 +242,28 @@ describe('negatives', () => {
     const plan = planAccept(l, pendingView(l, []), { kind: 'cluster', clusterId: 'c3', choice: 'primary' }, ctx([]))!
     expect(plan.annotations).toHaveLength(1)
     expect(plan.run.negatives).toEqual([{ x: 230, y: 200 }])
+  })
+})
+
+describe('reject-only run', () => {
+  const twoOk = () => layer([sug(10, 10, 'c1'), sug(50, 10, 'c2'), sug(90, 10, 'c3')])
+
+  it('records rejections no stored accept run covers, with zero accepted', () => {
+    const l = rejectAllPending(twoOk(), pendingView(twoOk(), []))
+    expect(l.rejected.size).toBe(3)
+    const r = planRejectRun(l, pendingView(l, []), new Set(), '2026-03-03T00:00:00.000Z')!
+    expect(r).toMatchObject({ runId: 'rej-1', imageFingerprint: 'fp-i1', targetGroupId: 'g1', createdAt: '2026-03-03T00:00:00.000Z', diagnostics: { accepted: 0, acceptScope: 'reject', detectRunId: 'det-1' } })
+    expect(r.negatives).toEqual([{ x: 10, y: 10 }, { x: 50, y: 10 }, { x: 90, y: 10 }])
+    expect(planRejectRun(restoreAllRejected(l), pendingView(restoreAllRejected(l), []), new Set(), '')).toBeNull()
+  })
+
+  it('leaves out negatives an accept run records while that run is stored (undo puts them back)', () => {
+    let l = toggleRejected(twoOk(), 1)
+    const plan = planAccept(l, pendingView(l, []), { kind: 'ok' }, ctx([], 'acc-1'))!
+    expect(plan.negativeIndices).toEqual([1])
+    l = noteAccepted(l, 'acc-1', plan.negativeIndices)
+    const v = pendingView(l, plan.annotations)
+    expect(planRejectRun(l, v, new Set(['acc-1']), '')).toBeNull()
+    expect(planRejectRun(l, pendingView(l, []), new Set(), '')!.negatives).toEqual([{ x: 50, y: 10 }])
   })
 })

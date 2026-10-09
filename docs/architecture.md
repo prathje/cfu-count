@@ -86,7 +86,12 @@ annotations carrying one of the layer's accept run ids exist, so undo brings the
 suggestions back. Every accept is ONE `annotations.applyBatch(imageId, ops,
 { label, detectionRun })` with a fresh run id (so undo removes exactly that run).
 The run carries `imageFingerprint`, `seedImageFingerprints` (reference plate) and
-`negatives` (rejected suggestions in scope). The worker client is created on the
+`negatives` (rejected suggestions in scope). Rejections no stored accept run records
+(e.g. "Reject all") go into one reject-only run per layer, written with
+`annotations.setRunRecord` outside undo history and kept in step with the layer as
+the user rejects and restores. Negatives never filter later runs. A result that
+arrives after an accept made during its run is discarded and the search runs again.
+Taking the Drive version (or any reload, `state.loadCount`) drops all layers. The worker client is created on the
 first run, cancelled on image switch, new run and panel close, and its cache is
 cleared on image switch. The viewport gets read-only `suggestions`,
 `reviewClusters` and `onSuggestionTap` (taps on a ring toggle rejection only while

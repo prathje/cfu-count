@@ -5,8 +5,10 @@
  *    counted, never in undo history; cleared on project switch);
  *  - the review panel's state (open, phase, progress, settings, seed source).
  *
- * It reads the editor and writes ONLY through editor.annotations.applyBatch, so
- * an accept is one undo step that also stores (and on undo removes) the run.
+ * It reads the editor and writes ONLY through editor.annotations: applyBatch, so
+ * an accept is one undo step that also stores (and on undo removes) the run, and
+ * setRunRecord for the layer's reject-only run (rejections without an accept; not
+ * an undo step, kept in sync with the layer's rejections).
  * Pure rules live in review.ts (layer, pending view, accept plan) and seeds.ts.
  */
 import { batch, createEffect, createMemo, createRoot, createSignal, on, untrack, type Accessor } from 'solid-js'
@@ -20,14 +22,16 @@ import type { Notify } from '../messages'
 import {
   DEFAULT_REVIEW_SETTINGS,
   carryRejections,
-  dropLayer,
   emptyStore,
   makeLayer,
   noteAccepted,
   pendingView,
   planAccept,
+  planRejectRun,
   pruneStore,
   putLayer,
+  rejectAllPending,
+  restoreAllRejected,
   toggleRejected,
   updateLayer,
   type AcceptScope,
@@ -95,8 +99,13 @@ export interface Assist {
   toggleReject(index: number): void
   /** Accept a scope as ONE undo step. Refuses (with an explanation) on locked/hidden groups. */
   accept(scope: AcceptScope): boolean
-  /** Reject every pending suggestion on this image (drops the layer; nothing is recorded). */
-  discard(): void
+  /**
+   * Reject every pending suggestion on this image. Rejections stay restorable
+   * (toggleReject, restoreAll) and are recorded as a reject-only DetectionRun.
+   */
+  rejectAll(): void
+  /** Restore every rejected suggestion on this image. */
+  restoreAll(): void
   /** Tell the controller whether the decoded picture's size matches the record. */
   setSizeMismatch(mismatch: boolean): void
   dispose(): void
@@ -220,6 +229,7 @@ export function createAssist(deps: AssistDeps): Assist {
         setProgress({ stage: 'prepare', fraction: 0 })
       })
       const t0 = performance.now()
+      const acceptsAtStart = untrack(store).get(image.id)?.acceptRunIds
       try {
         const blob = await images.blob(image.id)
         const remote = ref ? { [ref.id]: await images.blob(ref.id) } : undefined
@@ -231,6 +241,13 @@ export function createAssist(deps: AssistDeps): Assist {
         )
         if (mine !== token || state.project?.id !== projectId) return
         const prev = untrack(store).get(image.id)
+        if (prev && prev.acceptRunIds !== acceptsAtStart) {
+          // Suggestions were accepted while this run computed: its result does not know
+          // those marks and would bring resolved regions back as pending. Run again.
+          if (state.currentImageId === image.id && untrack(open)) scheduleRun(0)
+          else setPhase('ready')
+          return
+        }
         const next = makeLayer({
           imageId: image.id,
           imageFingerprint: image.fingerprint,
@@ -240,6 +257,7 @@ export function createAssist(deps: AssistDeps): Assist {
           reference: ref ? { imageId: ref.id, fingerprint: ref.fingerprint } : null,
           elapsedMs: Math.round(performance.now() - t0),
           rejected: prev && prev.groupId === group.id ? carryRejections(prev, result.suggestions) : undefined,
+          rejectRunId: newId(),
         })
         batch(() => {
           setStore((st) => putLayer(st, next))
@@ -294,12 +312,25 @@ export function createAssist(deps: AssistDeps): Assist {
       if (id) setStore((st) => updateLayer(st, id, (l) => toggleRejected(l, index)))
     }
 
-    function discard() {
+    function rejectAll() {
       const id = state.currentImageId
-      if (!id) return
-      cancel()
-      setStore((st) => dropLayer(st, id))
-      setPhase('idle')
+      const v = view()
+      if (id && v) setStore((st) => updateLayer(st, id, (l) => rejectAllPending(l, v)))
+    }
+
+    function restoreAll() {
+      const id = state.currentImageId
+      if (id) setStore((st) => updateLayer(st, id, restoreAllRejected))
+    }
+
+    /** Keep the layer's reject-only run record in step with its rejections. */
+    function syncRejectRun(l: SuggestionLayer, v: PendingView) {
+      const runs = state.docs[l.imageId]?.detectionRuns ?? []
+      const existing = runs.find((r) => r.runId === l.rejectRunId)
+      const wanted = planRejectRun(l, v, new Set(runs.map((r) => r.runId)), existing?.createdAt ?? now())
+      if (!wanted && !existing) return
+      if (wanted && existing && JSON.stringify(wanted.negatives) === JSON.stringify(existing.negatives)) return
+      annotations.setRunRecord(l.imageId, l.rejectRunId, wanted)
     }
 
     function accept(scope: AcceptScope): boolean {
@@ -336,12 +367,16 @@ export function createAssist(deps: AssistDeps): Assist {
         return false
       }
       const n = plan.annotations.length
-      const blocked = annotations.applyBatch(image.id, plan.ops, { label: `Accept ${n} suggestion${n === 1 ? '' : 's'}`, detectionRun: plan.run })
+      // One batch: the reject-run sync sees the accept run and its recorded negatives together.
+      const blocked = batch(() => {
+        const b = annotations.applyBatch(image.id, plan.ops, { label: `Accept ${n} suggestion${n === 1 ? '' : 's'}`, detectionRun: plan.run })
+        if (!b) setStore((st) => updateLayer(st, image.id, (x) => noteAccepted(x, runId, plan.negativeIndices)))
+        return b
+      })
       if (blocked) {
         notify({ tone: 'warning', key: 'assist', message: 'Couldn’t add the suggestions', detail: blocked.reason === 'invalid' ? blocked.detail : 'The target group can’t be edited right now.' })
         return false
       }
-      setStore((st) => updateLayer(st, image.id, (x) => noteAccepted(x, runId)))
       const imageId = image.id
       notify({
         tone: 'success',
@@ -385,10 +420,18 @@ export function createAssist(deps: AssistDeps): Assist {
         { defer: true },
       ),
     )
-    // Another project: discard every layer and close the panel.
+    // Rejections without an accept are recorded as the layer's reject-only run.
+    createEffect(() => {
+      const l = layer()
+      const v = view()
+      if (!l || !v) return
+      void state.docs[l.imageId]?.detectionRuns // re-check when runs change (undo/redo of an accept)
+      untrack(() => syncRejectRun(l, v))
+    })
+    // Another project (or the same one reloaded, e.g. the Drive version taken): discard every layer and close the panel.
     createEffect(
       on(
-        () => state.project?.id,
+        () => [state.project?.id, state.loadCount],
         () => {
           cancel()
           client?.clearCache()
@@ -446,7 +489,8 @@ export function createAssist(deps: AssistDeps): Assist {
       cancel,
       toggleReject,
       accept,
-      discard,
+      rejectAll,
+      restoreAll,
       setSizeMismatch,
       dispose() {
         cancel()

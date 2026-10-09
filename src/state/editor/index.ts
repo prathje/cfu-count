@@ -84,6 +84,7 @@ export function createEditor(repo: ProjectRepository, deps: EditorDeps): Editor 
       touchAnnotates: prefs.get('touchAnnotates', false),
       importing: 0,
       busy: null,
+      loadCount: 0,
     })
 
     // ---------------------------------------------------------------- storage status → signals
@@ -180,6 +181,7 @@ export function createEditor(repo: ProjectRepository, deps: EditorDeps): Editor 
           history: {},
           currentImageId: current?.id ?? null,
           activeGroupId: project.annotationGroups[0]?.id ?? null,
+          loadCount: state.loadCount + 1,
         })
         prefs.set('lastProject', project.id)
         if (needsSave) ctx.touchProject()

@@ -188,9 +188,15 @@ export interface DetectionSeed {
 }
 
 /**
- * Record of one automated detection run on this image. Stored in the image's
- * annotation document; only runs referenced by at least one kept annotation
- * need to be retained. Pending (unaccepted) suggestions are never stored here.
+ * Record of one reviewed automated detection run on this image, stored in the
+ * image's annotation document. Two kinds:
+ *  - an accept run: referenced by the annotations it added (`detector.runId`);
+ *    `negatives` = suggestions rejected in the accepted scope;
+ *  - a reject-only run: no annotation refers to it (zero accepted); `negatives` =
+ *    suggestions the user rejected without accepting them (diagnostics.accepted = 0).
+ * Runs are an audit trail: deleting the target group keeps them (targetGroupId may
+ * dangle). Negatives are never used to suppress later suggestions. Pending
+ * (undecided) suggestions are never stored here.
  */
 export interface DetectionRun {
   runId: ID
@@ -211,7 +217,7 @@ export interface DetectionRun {
   prior: Record<string, unknown>
   /** User-adjustable and fixed settings for the run; method-specific. */
   settings: Record<string, unknown>
-  /** Human-rejected suggestions recorded as negatives (image coordinates). */
+  /** Human-rejected suggestions recorded as negatives (image coordinates). Audit/training data, not a filter. */
   negatives?: { x: number; y: number }[]
   /** Summary diagnostics (cluster counts, review flags, timings). */
   diagnostics?: Record<string, unknown>
@@ -229,7 +235,7 @@ export interface ImageAnnotations {
   /** Snapshot of project annotation groups at save time (self-contained document). */
   groups: AnnotationGroup[]
   annotations: Annotation[]
-  /** Automated detection runs whose results were (at least partly) accepted. */
+  /** Reviewed detection runs: accepted (at least partly) or with recorded rejections. */
   detectionRuns: DetectionRun[]
   updatedAt: Timestamp
 }

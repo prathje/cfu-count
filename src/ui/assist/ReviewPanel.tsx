@@ -1,7 +1,7 @@
 import { For, Show } from 'solid-js'
 import type { DetectMethod } from '../../detection/types'
 import type { ReviewSettings, ReferenceCandidate, SeedSource, ReviewCluster } from '../../state/assist'
-import { AlertTriangle, Check, ChevronLeft, ChevronRight, Loader, Sparkles, X } from '../icons'
+import { AlertTriangle, Check, ChevronLeft, ChevronRight, Loader, Sparkles, Undo, X } from '../icons'
 import { Button, IconButton, SegmentedControl, Slider } from '../primitives'
 import { GroupSwatch } from '../shared/GroupSwatch'
 import { plural } from '../format'
@@ -49,6 +49,7 @@ export interface ReviewPanelProps {
   onAcceptAlternative(): void
   onAcceptOk(): void
   onRejectAll(): void
+  onRestoreAll(): void
   onRun(): void
   onCancel(): void
   onClose(): void
@@ -273,10 +274,24 @@ export function ReviewPanel(props: ReviewPanelProps) {
                 <Button variant="primary" icon={Check} disabled={sum().okCount === 0} onClick={() => props.onAcceptOk()}>
                   {`Accept ${sum().okCount.toLocaleString()} OK`}
                 </Button>
-                <Button variant="ghost" onClick={() => props.onRejectAll()}>
-                  Reject all
-                </Button>
+                <Show
+                  when={sum().suggested === 0 && sum().rejected > 0}
+                  fallback={
+                    <Button variant="ghost" disabled={sum().suggested === 0} onClick={() => props.onRejectAll()}>
+                      Reject all
+                    </Button>
+                  }
+                >
+                  <Button variant="ghost" icon={Undo} onClick={() => props.onRestoreAll()}>
+                    {`Restore ${sum().rejected.toLocaleString()}`}
+                  </Button>
+                </Show>
               </div>
+              <Show when={sum().rejected > 0}>
+                <p class="review-panel__hint review-panel__hint--small">
+                  Rejections are saved as examples of what not to count. They don’t hide these spots from a later search.
+                </p>
+              </Show>
               <Show when={sum().needReview > 0 && sum().okCount > 0}>
                 <p class="review-panel__hint review-panel__hint--small">“Accept OK” leaves the {plural(sum().needReview, 'suggestion', 'suggestions')} that need review pending.</p>
               </Show>

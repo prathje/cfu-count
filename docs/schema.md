@@ -173,7 +173,7 @@ Example:
 | `imageFingerprint`, `width`, `height` | | the image these coordinates were made against |
 | `groups` | AnnotationGroup[] | snapshot of the project's groups, so the file stands alone (see below) |
 | `annotations` | Annotation[] | |
-| `detectionRuns` | DetectionRun[] | required; `[]` when nothing automated was accepted |
+| `detectionRuns` | DetectionRun[] | required; `[]` when no detection run was reviewed |
 | `updatedAt` | timestamp | |
 
 **Group snapshots.** `project.json` is the source of truth for annotation groups
@@ -201,8 +201,27 @@ Annotation:
 | `detector` | `{name, version, runId, params?, confidence}`? | automated only; `confidence: null` = the method has no meaningful score; `runId` refers to `detectionRuns` |
 | `geometry` | `{kind:"circle", r, quality?, source:"fit"\|"seed-estimate"}`? | inferred colony extent in image pixels; never changes origin or review fields |
 
-DetectionRun (one automated run whose results were at least partly accepted; pending
-suggestions are never stored):
+DetectionRun (one reviewed automated run; pending, undecided suggestions are never
+stored). There are two kinds:
+
+- **Accept run.** Written with an accept, as part of the same undo step. The accepted
+  annotations refer to it through `detector.runId`; `negatives` are the suggestions
+  rejected in the accepted scope. Undo removes it, redo restores it (only while the
+  image bytes still match `imageFingerprint`).
+- **Reject-only run.** Rejections the user made without an accept that records them
+  (for example "Reject all") are kept in one run per review with `negatives` and zero
+  accepted annotations (`diagnostics.accepted = 0`, `diagnostics.acceptScope =
+  "reject"`); no annotation refers to it. It follows the review while the panel's
+  suggestions exist: restoring a rejection removes it from `negatives` (the run is
+  removed when none are left). It is not an undo step, because it changes no
+  annotation or count.
+
+Negatives are audit and training data only. They never suppress suggestions: a
+later run may suggest the same spots again, and the user can accept them then.
+
+Runs are an audit trail. Deleting an annotation group keeps the runs that targeted
+it, so `targetGroupId` may name a group that no longer exists; readers must accept
+that (validation checks only that it is a string).
 
 | Field | Type | Notes |
 | --- | --- | --- |
@@ -210,11 +229,11 @@ suggestions are never stored):
 | `imageFingerprint` | string | must equal the document's `imageFingerprint` |
 | `seedImageFingerprints` | `{imageId: sha256}`? | for seeds taken from other plates |
 | `analysisScale` | number | analysis resolution relative to the original, e.g. `0.5` |
-| `targetGroupId` | string | |
+| `targetGroupId` | string | may name a deleted group (see above) |
 | `roi` | `{kind:"circle",cx,cy,r}` \| `{kind:"rect",x,y,w,h}`? | image coordinates; absent = whole image |
 | `seeds` | `{annotationId, imageId, x, y, radiusPx (number\|null), quality}[]` | `quality`: `ok`, `touching`, `edge`, `glare`, `weak`; coordinates copied for reproducibility |
 | `prior`, `settings` | object | method-specific |
-| `negatives` | `{x, y}[]`? | rejected suggestions kept as negative examples |
+| `negatives` | `{x, y}[]`? | rejected suggestions kept as negative examples (never a filter) |
 | `diagnostics` | object? | |
 
 Example:
