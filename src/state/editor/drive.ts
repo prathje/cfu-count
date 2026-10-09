@@ -7,6 +7,7 @@ import type { Accessor } from 'solid-js'
 import type { DriveLinkMode, DriveState } from '../../storage/api'
 import { isCancelled } from '../../storage/errors'
 import { errorText, type EditorContext } from './context'
+import type { VersionCommands } from './versions'
 
 export interface DriveCommands {
   state: Accessor<DriveState>
@@ -22,7 +23,12 @@ export interface DriveCommands {
   takeRemote(): Promise<void>
 }
 
-export function createDrive(ctx: EditorContext, driveState: Accessor<DriveState>, afterOpen: () => Promise<void>): DriveCommands {
+export function createDrive(
+  ctx: EditorContext,
+  driveState: Accessor<DriveState>,
+  afterOpen: () => Promise<void>,
+  versions: Pick<VersionCommands, 'beforeDestructive'>,
+): DriveCommands {
   const { state, notify, saver } = ctx
 
   /** Sign-in (sync start) + local flush in parallel; resolves false if sign-in failed or was cancelled. */
@@ -103,6 +109,9 @@ export function createDrive(ctx: EditorContext, driveState: Accessor<DriveState>
       }
       // Unsaved edits would not be in the backup copy: save them first, or ask.
       if (!(await ctx.guardUnsaved('Loading the Drive version'))) return
+      // Local version first (storage also keeps the local copy as a backup project, so a failure is not fatal).
+      const pre = await versions.beforeDestructive('Before loading the Drive version')
+      if (!pre.ok) console.warn('[history] no version before taking the Drive version:', pre.reason)
       // Freeze: no autosave and no edits until the Drive version is loaded.
       saver.suspend()
       try {

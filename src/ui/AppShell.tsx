@@ -10,6 +10,7 @@ import { createMediaQuery, isApple, MOD } from './media'
 import { DialogHost, ToastRegion } from './primitives'
 import { shortcutSheet, useShortcuts } from './shortcuts'
 import { ShortcutSheet } from './help/ShortcutSheet'
+import { VersionHistoryContainer } from './history/VersionHistoryContainer'
 import type { ViewportHandle } from '../viewport/api'
 import { SidebarContainer } from './sidebar/SidebarContainer'
 import { LoadingScreen, NoProject } from './workspace/EmptyStates'
@@ -138,6 +139,7 @@ export function AppShell() {
             onOpenFromDrive={driveActions.onOpenFromDrive}
             onDelete={() => void actions.deleteProject()}
             onShowShortcuts={() => setHelpOpen(true)}
+            onShowVersionHistory={actions.showVersionHistory}
           />
           </div>
         }
@@ -233,6 +235,7 @@ export function AppShell() {
         )}
       </Show>
       <ToastRegion toaster={toaster} />
+      <VersionHistoryContainer />
       <DialogHost dialogs={dialogs} />
       <ShortcutSheet open={helpOpen()} sections={shortcutSheet(MOD)} onClose={() => setHelpOpen(false)} />
     </div>

@@ -1,6 +1,7 @@
 import { For, Show } from 'solid-js'
 import type { ProjectSummary } from '../../storage/api'
 import { Check, ChevronDown, Cloud, Download, FileArchive, FileSpreadsheet, FolderOpen, Keyboard, Plus, Trash } from '../icons'
+import HistoryIcon from 'lucide-solid/icons/rotate-ccw-clock'
 import { InlineEdit, MenuItem, MenuSection, Popover, createPopoverState } from '../primitives'
 import { formatRelativeDate, plural } from '../format'
 
@@ -21,6 +22,7 @@ export interface ProjectMenuProps {
   onOpenFromDrive(): void
   onDelete(): void
   onShowShortcuts(): void
+  onShowVersionHistory(): void
 }
 
 export function ProjectMenu(props: ProjectMenuProps) {
@@ -80,6 +82,14 @@ export function ProjectMenu(props: ProjectMenuProps) {
           </Show>
         </MenuSection>
         <Show when={props.projectId}>
+          <MenuSection>
+            <MenuItem
+              icon={HistoryIcon}
+              label="Version history…"
+              description="Restore an earlier state of this project"
+              onClick={act(props.onShowVersionHistory)}
+            />
+          </MenuSection>
           <MenuSection title="Export">
             <MenuItem icon={Download} label="Download project (.zip)" description="Images, annotations and summary" onClick={act(props.onDownloadArchive)} />
             <MenuItem icon={FileSpreadsheet} label="Export CSV summary" description="One row per image and annotation group" onClick={act(props.onExportCsv)} />

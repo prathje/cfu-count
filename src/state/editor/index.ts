@@ -28,6 +28,7 @@ import { createImageGroups, type ImageGroupCommands } from './imageGroups'
 import { createImages, type ImageCommands } from './images'
 import { createProjects, type ProjectCommands } from './projects'
 import { createView, type ViewCommands } from './view'
+import { createVersions, type VersionCommands, type VersionOptions } from './versions'
 
 export type { EditorState } from './context'
 export type { AnnotationCommands, BatchOptions, ClearScope, ClearSummary } from './annotations'
@@ -37,6 +38,7 @@ export type { ImageGroupCommands } from './imageGroups'
 export type { ProjectCommands } from './projects'
 export type { DriveCommands } from './drive'
 export type { ViewCommands } from './view'
+export type { VersionCommands, SnapshotOutcome } from './versions'
 
 export interface EditorDeps {
   notify: Notify
@@ -46,6 +48,8 @@ export interface EditorDeps {
   feedback?: Feedback
   /** Autosave debounce in ms (tests). */
   autosaveDelay?: number
+  /** Automatic version timing (tests). */
+  versions?: VersionOptions
 }
 
 export interface Editor {
@@ -67,6 +71,8 @@ export interface Editor {
   readonly view: ViewCommands
   readonly projects: ProjectCommands
   readonly drive: DriveCommands
+  /** Version history (local snapshots) and the `beforeDestructive` hook. */
+  readonly versions: VersionCommands
 
   /** Stop reactive computations and storage subscriptions. */
   dispose(): void
@@ -120,6 +126,7 @@ export function createEditor(repo: ProjectRepository, deps: EditorDeps): Editor 
         await session.save(snapshot, docs)
       },
       onDirtyChange(d) {
+        if (d) onChange()
         batch(() => {
           setDirty(d)
           setDirtySince(d ? Date.now() : null)
@@ -149,6 +156,10 @@ export function createEditor(repo: ProjectRepository, deps: EditorDeps): Editor 
         setState('project', 'images', reconcile(merged.images, { key: 'id' }))
       })
     }
+
+    // Late-bound hooks of the versions slice (created after the context).
+    let onChange = () => {}
+    let onLoaded = () => {}
 
     // ---------------------------------------------------------------- context
     const ctx: EditorContext = {
@@ -188,6 +199,7 @@ export function createEditor(repo: ProjectRepository, deps: EditorDeps): Editor 
           loadCount: state.loadCount + 1,
         })
         prefs.set('lastProject', project.id)
+        onLoaded()
         if (needsSave) ctx.touchProject()
         if (snapshot.warnings?.length) {
           notify({
@@ -263,7 +275,10 @@ export function createEditor(repo: ProjectRepository, deps: EditorDeps): Editor 
     const imageGroups = createImageGroups(ctx)
     const view = createView(ctx)
     const projects = createProjects(ctx)
-    const drive = createDrive(ctx, driveState, projects.refresh)
+    const versions = createVersions(ctx, annotations, deps.versions)
+    onChange = versions.noteChange
+    onLoaded = versions.sessionLoaded
+    const drive = createDrive(ctx, driveState, projects.refresh, versions.commands)
 
     return {
       state,
@@ -278,7 +293,9 @@ export function createEditor(repo: ProjectRepository, deps: EditorDeps): Editor 
       view,
       projects,
       drive,
+      versions: versions.commands,
       dispose() {
+        versions.dispose()
         unsubscribeRepo()
         unsubscribeSession?.()
         disposeRoot()
