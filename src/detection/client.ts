@@ -9,6 +9,12 @@
  * re-running with a different sensitivity is cheap. Starting a new detect()
  * cancels the one in flight (slider drags). Aborting `signal` rejects with
  * DetectionCancelled.
+ *
+ * Failure handling: if the worker script fails to load or the worker crashes
+ * ('error'), or a reply cannot be deserialised ('messageerror'), every pending
+ * detect() rejects with DetectorError('internal'). With the default factory a
+ * fresh worker is started on the next detect(); with a plain instance later
+ * calls reject. detect() after dispose() rejects with DetectionCancelled.
  */
 import { DetectionCancelled } from './detect.ts'
 import type { DetectRequest, FromWorker, ToWorker } from './protocol.ts'
@@ -18,6 +24,8 @@ import type { DetectProgress, DetectResult } from './types.ts'
 export interface WorkerLike {
   postMessage(m: ToWorker, transfer?: Transferable[]): void
   addEventListener(type: 'message', fn: (e: MessageEvent<FromWorker>) => void): void
+  /** Optional for fakes: script load failure / crash, and undecodable replies. */
+  addEventListener(type: 'error' | 'messageerror', fn: (e: Event) => void): void
   terminate(): void
 }
 
@@ -37,11 +45,28 @@ export interface DetectorClient {
   dispose(): void
 }
 
-export function createDetectorClient(worker: WorkerLike = new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' }) as unknown as WorkerLike): DetectorClient {
+const defaultWorker = (): WorkerLike => new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' }) as unknown as WorkerLike
+
+interface Pending {
+  resolve: (r: DetectResult) => void
+  reject: (e: unknown) => void
+  onProgress?: (p: DetectProgress) => void
+}
+
+/**
+ * @param worker a worker factory (default: the bundled module worker) or a
+ *   single instance (tests). Only a factory allows a restart after a failure.
+ */
+export function createDetectorClient(worker: WorkerLike | (() => WorkerLike) = defaultWorker): DetectorClient {
+  const factory = typeof worker === 'function' ? worker : null
+  let instance: WorkerLike | null = null
+  let broken = false
+  let disposed = false
   let nextId = 1
   let current: number | null = null
-  const pending = new Map<number, { resolve: (r: DetectResult) => void; reject: (e: unknown) => void; onProgress?: (p: DetectProgress) => void }>()
-  worker.addEventListener('message', (e) => {
+  const pending = new Map<number, Pending>()
+
+  const onMessage = (e: MessageEvent<FromWorker>) => {
     const m = e.data
     const p = pending.get(m.id)
     if (!p) return
@@ -54,35 +79,63 @@ export function createDetectorClient(worker: WorkerLike = new Worker(new URL('./
     if (m.type === 'result') p.resolve(m.result)
     else if (m.type === 'cancelled') p.reject(new DetectionCancelled())
     else p.reject(new DetectorError(m.code, m.message))
-  })
+  }
+
+  const onFailure = (source: WorkerLike, e: Event) => {
+    if (source !== instance) return // a worker we already replaced
+    const message = (e as ErrorEvent).message || (e.type === 'messageerror' ? 'A detector reply could not be read.' : 'The detector stopped unexpectedly.')
+    for (const p of pending.values()) p.reject(new DetectorError('internal', message))
+    pending.clear()
+    current = null
+    source.terminate()
+    instance = null
+    broken = true
+  }
+
+  const ensureWorker = (): WorkerLike | null => {
+    if (instance) return instance
+    if (broken && !factory) return null
+    const w = factory ? factory() : (worker as WorkerLike)
+    w.addEventListener('message', onMessage)
+    w.addEventListener('error', (e) => onFailure(w, e))
+    w.addEventListener('messageerror', (e) => onFailure(w, e))
+    instance = w
+    broken = false
+    return w
+  }
+  if (!factory) ensureWorker()
+
   return {
     detect(request, opts = {}) {
-      if (current !== null) worker.postMessage({ type: 'cancel', id: current })
+      if (disposed) return Promise.reject(new DetectionCancelled())
+      const w = ensureWorker()
+      if (!w) return Promise.reject(new DetectorError('internal', 'The detector stopped unexpectedly. Reload the page to try again.'))
+      if (current !== null) w.postMessage({ type: 'cancel', id: current })
       const id = nextId++
       current = id
       return new Promise<DetectResult>((resolve, reject) => {
-        pending.set(id, { resolve, reject, onProgress: opts.onProgress })
-        if (opts.signal) {
-          if (opts.signal.aborted) {
-            pending.delete(id)
-            reject(new DetectionCancelled())
-            return
-          }
-          opts.signal.addEventListener('abort', () => worker.postMessage({ type: 'cancel', id }), { once: true })
+        if (opts.signal?.aborted) {
+          current = null
+          reject(new DetectionCancelled())
+          return
         }
+        pending.set(id, { resolve, reject, onProgress: opts.onProgress })
+        opts.signal?.addEventListener('abort', () => pending.has(id) && instance?.postMessage({ type: 'cancel', id }), { once: true })
         const transfer: Transferable[] = []
         if (request.source.kind === 'bitmap') transfer.push(request.source.bitmap)
         if (request.source.kind === 'rgba') transfer.push(request.source.data.buffer as ArrayBuffer)
-        worker.postMessage({ type: 'detect', id, request }, transfer)
+        w.postMessage({ type: 'detect', id, request }, transfer)
       })
     },
     clearCache() {
-      worker.postMessage({ type: 'clear-cache' })
+      instance?.postMessage({ type: 'clear-cache' })
     },
     dispose() {
+      disposed = true
       for (const p of pending.values()) p.reject(new DetectionCancelled())
       pending.clear()
-      worker.terminate()
+      instance?.terminate()
+      instance = null
     },
   }
 }

@@ -20,10 +20,12 @@ import {
   type PreparedImage,
 } from './features.ts'
 import { nearFixed, sensitivityParams, maskThreshold, type AnalysisPrior, type FixedColony, type MethodContext } from './methods/common.ts'
-import { runFitter } from './methods/fitter.ts'
+import { runFitter, type FitterState } from './methods/fitter.ts'
 import { priorRadii, runLog } from './methods/log.ts'
 import { runWatershed, type MethodOutput } from './methods/watershed.ts'
 import type {
+  ClusterResult,
+  Suggestion,
   CalibrationReport,
   DetectInput,
   DetectProgress,
@@ -45,7 +47,7 @@ export const DEFAULT_SETTINGS: DetectSettings = {
   priorWidth: 1,
   edgeMarginFrac: 0.025,
   kMax: 400,
-  reviewGap: 0.25,
+  reviewGap: 0.1,
   sMin: 0.25,
   minUsableSeeds: 3,
 }
@@ -58,26 +60,52 @@ export class DetectionCancelled extends Error {
   }
 }
 
-/** Cache key for a prepared image: same pixels, scale, ROI and margin → reuse. */
-export function prepareKey(imageId: string, scale: number, roi: Roi | undefined, edgeMarginFrac: number, width: number, height: number): string {
-  return JSON.stringify([imageId, scale, roi ?? null, edgeMarginFrac, width, height])
+/** Cache key for a prepared image: same bytes (fingerprint), scale, crop, ROI and margin → reuse. */
+export function prepareKey(input: Pick<DetectInput, 'imageId' | 'imageFingerprint' | 'scale' | 'roi' | 'origin' | 'image'>, edgeMarginFrac: number): string {
+  return JSON.stringify([input.imageId, input.imageFingerprint ?? null, input.scale, input.roi ?? null, input.origin ?? null, edgeMarginFrac, input.image.width, input.image.height])
 }
 
-/** Holds the last prepared image so slider re-runs skip Lab conversion and ROI detection. */
+const seedKey = (input: Pick<DetectInput, 'seeds'>) =>
+  JSON.stringify(input.seeds.map((s) => [s.annotationId, s.imageId, Math.round(s.x * 10), Math.round(s.y * 10), s.patch ? [s.patch.image.width, s.patch.image.height, s.patch.scale] : 0]))
+const existingKey = (input: Pick<DetectInput, 'existing'>) => JSON.stringify(input.existing.map((e) => [e.id, Math.round(e.x * 10), Math.round(e.y * 10), e.r ?? null]))
+
+/**
+ * Holds the last prepared image, its calibration and the fitter's
+ * configuration tables, so slider re-runs (sensitivity, size tolerance)
+ * re-score stored fits instead of recomputing (see methods/fitter.ts).
+ */
 export class DetectorCache {
-  private key: string | null = null
-  private value: PreparedImage | null = null
-  get(input: DetectInput, settings: DetectSettings): PreparedImage {
-    const k = prepareKey(input.imageId, input.scale, input.roi, settings.edgeMarginFrac, input.image.width, input.image.height)
-    if (k !== this.key || !this.value) {
-      this.value = prepareImage(input.image, input.scale, input.roi, settings.edgeMarginFrac)
-      this.key = k
+  private prepKeyV: string | null = null
+  private prep: PreparedImage | null = null
+  private calKeyV: string | null = null
+  private cal: Calibrated | null = null
+  private fitter: FitterState | null = null
+  get(input: Pick<DetectInput, 'image' | 'scale' | 'roi' | 'imageId' | 'imageFingerprint' | 'origin'>, settings: DetectSettings): PreparedImage {
+    const k = prepareKey(input, settings.edgeMarginFrac)
+    if (k !== this.prepKeyV || !this.prep) {
+      this.prep = prepareImage(input.image, input.scale, input.roi, settings.edgeMarginFrac)
+      this.prepKeyV = k
+      this.cal = null
+      this.calKeyV = null
+      this.fitter = null
     }
-    return this.value
+    return this.prep
+  }
+  calibration(prep: PreparedImage, input: Pick<DetectInput, 'seeds' | 'imageId'>, settings: DetectSettings): Calibrated {
+    const k = JSON.stringify([this.prepKeyV, seedKey(input), settings.sMin, settings.minUsableSeeds])
+    if (k !== this.calKeyV || !this.cal) {
+      this.cal = calibrate(prep, input, settings)
+      this.calKeyV = k
+      this.fitter = null
+    }
+    return this.cal
+  }
+  fitterSlot(key: string) {
+    return { key, get: () => this.fitter, set: (s: FitterState) => void (this.fitter = s) }
   }
   clear(): void {
-    this.key = null
-    this.value = null
+    this.prepKeyV = this.calKeyV = null
+    this.prep = this.cal = this.fitter = null
   }
 }
 
@@ -89,6 +117,37 @@ const newRunId = (): string =>
  * @throws DetectionCancelled when `signal` aborts.
  */
 export async function detect(input: DetectInput, onProgress?: ProgressFn, signal?: AbortSignal, cache?: DetectorCache): Promise<DetectResult> {
+  const o = input.origin
+  if (!o || (o.x === 0 && o.y === 0)) return detectLocal(input, onProgress, signal, cache)
+  const sx = <T extends { x: number; y: number }>(p: T): T => ({ ...p, x: p.x - o.x, y: p.y - o.y })
+  const local: DetectInput = {
+    ...input,
+    seeds: input.seeds.map((q) => (q.imageId === input.imageId ? sx(q) : q)),
+    existing: input.existing.map(sx),
+    roi: !input.roi ? undefined : input.roi.kind === 'circle' ? { ...input.roi, cx: input.roi.cx - o.x, cy: input.roi.cy - o.y } : { ...input.roi, x: input.roi.x - o.x, y: input.roi.y - o.y },
+  }
+  const r = await detectLocal(local, onProgress, signal, cache)
+  const back = <T extends { x: number; y: number }>(p: T): T => ({ ...p, x: p.x + o.x, y: p.y + o.y })
+  const backSeed = <T extends { x: number; y: number; fitX: number; fitY: number; imageId: string }>(q: T): T =>
+    q.imageId === input.imageId ? { ...back(q), fitX: q.fitX + o.x, fitY: q.fitY + o.y } : q
+  r.suggestions = r.suggestions.map(back)
+  r.clusters = r.clusters.map((c) => ({
+    ...c,
+    bbox: [c.bbox[0] + o.x, c.bbox[1] + o.y, c.bbox[2], c.bbox[3]],
+    ...(c.alternative ? { alternative: { k: c.alternative.k, colonies: c.alternative.colonies.map(back) } } : {}),
+  }))
+  r.calibration = { ...r.calibration, seeds: r.calibration.seeds.map(backSeed) }
+  r.roi = { ...r.roi, outline: r.roi.outline.map(back) }
+  r.run = {
+    ...r.run,
+    roi: input.roi ?? (r.run.roi?.kind === 'rect' ? { ...r.run.roi, x: r.run.roi.x + o.x, y: r.run.roi.y + o.y } : r.run.roi),
+    seeds: r.run.seeds.map((q) => (q.imageId === input.imageId ? back(q) : q)),
+  }
+  if (r.clusterLabels) r.clusterLabels = { ...r.clusterLabels, origin: o }
+  return r
+}
+
+async function detectLocal(input: DetectInput, onProgress?: ProgressFn, signal?: AbortSignal, cache?: DetectorCache): Promise<DetectResult> {
   const settings: DetectSettings = { ...DEFAULT_SETTINGS, ...input.settings }
   const t0 = now()
   const timings: Record<string, number> = {}
@@ -103,13 +162,16 @@ export async function detect(input: DetectInput, onProgress?: ProgressFn, signal
 
   await checkpoint(0, 'prepare')
   const prep = cache ? cache.get(input, settings) : prepareImage(input.image, input.scale, input.roi, settings.edgeMarginFrac)
+  const pKey = prepareKey(input, settings.edgeMarginFrac)
   timings.prepare = now() - t0
   await checkpoint(0.15, 'calibrate')
 
   // ---- calibration (two passes: background without, then with, a foreground exclusion)
   const t1 = now()
-  const cal = calibrate(prep, input, settings)
+  const cal = cache ? cache.calibration(prep, input, settings) : calibrate(prep, input, settings)
   timings.calibrate = now() - t1
+  // the prior width only widens the size prior; structural steps use the calibrated prior
+  const widened = widenPrior(cal.priorA, settings.priorWidth)
   await checkpoint(0.35, 'mask')
 
   // ---- method
@@ -120,7 +182,7 @@ export async function detect(input: DetectInput, onProgress?: ProgressFn, signal
     F: cal.F,
     Fs: gaussianBlur(cal.F, Math.max(0.5, 0.15 * cal.priorA.rMed)),
     noise: cal.noise,
-    prior: cal.priorA,
+    prior: settings.method === 'fitter' ? cal.priorA : widened,
     contrastRef: cal.contrastRef,
     contrastLo: cal.contrastLo,
     fixed,
@@ -131,19 +193,24 @@ export async function detect(input: DetectInput, onProgress?: ProgressFn, signal
   let out: MethodOutput
   if (settings.method === 'watershed') out = await runWatershed(ctx)
   else if (settings.method === 'log') out = await runLog(ctx, localSeedPts)
-  else out = await runFitter(ctx, localSeedPts)
+  else {
+    const fitKey = JSON.stringify([pKey, seedKey(input), existingKey(input), settings.kMax, settings.sMin, settings.fitWeights ?? null])
+    out = await runFitter(ctx, localSeedPts, cache?.fitterSlot(fitKey))
+  }
   timings.method = now() - t2
 
   // keep suggestions whose centre lies in the analysed region and inside the image,
   // and never one on top of an existing colony (any group)
   const roiMask = prep.roi.mask
-  const suggestions = out.suggestions.filter((s) => {
+  const keep = (s: { x: number; y: number; r: number }) => {
     const x = Math.floor(s.x * prep.scale)
     const y = Math.floor(s.y * prep.scale)
     if (!(x >= 0 && y >= 0 && x < roiMask.width && y < roiMask.height && roiMask.data[y * roiMask.width + x] === 1)) return false
     if (!(s.x < input.originalWidth && s.y < input.originalHeight)) return false
     return !nearFixed(fixed, s.x * prep.scale, s.y * prep.scale, s.r * prep.scale, 0.5)
-  })
+  }
+  const suggestions = out.suggestions.filter(keep)
+  const clusters = reconcileClusters(out.clusters, suggestions, keep)
   timings.total = now() - t0
 
   const sp = sensitivityParams(settings.sensitivity)
@@ -155,7 +222,7 @@ export async function detect(input: DetectInput, onProgress?: ProgressFn, signal
     method: `colony-${settings.method}`,
     version: DETECTOR_VERSION,
     createdAt: new Date().toISOString(),
-    imageFingerprint: '',
+    imageFingerprint: input.imageFingerprint ?? '',
     ...(crossPlate ? { seedImageFingerprints: {} } : {}),
     analysisScale: prep.scale,
     targetGroupId: input.targetGroupId,
@@ -179,9 +246,10 @@ export async function detect(input: DetectInput, onProgress?: ProgressFn, signal
     },
     diagnostics: {
       suggestions: suggestions.length,
-      clusters: out.clusters.length,
-      review: out.clusters.filter((c) => c.status === 'review').length,
-      tooLarge: out.clusters.filter((c) => c.status === 'too-large').length,
+      clusters: clusters.length,
+      review: clusters.filter((c) => c.status === 'review').length,
+      tooLarge: clusters.filter((c) => c.status === 'too-large').length,
+      analysis: { scale: prep.scale, width: prep.width, height: prep.height, typicalRadiusPx: round(cal.priorA.rMed), origin: input.origin ?? null },
       roi: { source: prep.roi.report.source, shape: prep.roi.report.shape, marginPx: round(prep.roi.report.marginPx), area: Math.round(prep.roi.report.area) },
       timingsMs: Object.fromEntries(Object.entries(timings).map(([k, v]) => [k, Math.round(v)])),
       method: out.diagnostics,
@@ -189,14 +257,16 @@ export async function detect(input: DetectInput, onProgress?: ProgressFn, signal
     },
   }
   const px = prep.width * prep.height
-  // planes alive at the peak: RGBA + Lab + background + F/Fs + LoG stack (5) + method scratch (~3) + masks
+  // planes alive at the peak: RGBA + Lab + background (calibration) + F/Fs + method scratch;
+  // the LoG method also holds one plane per scale (the fitter works on cluster patches)
+  const logPlanes = settings.method === 'log' ? priorRadii(cal.priorA).length : 0
   const peakRasterBytes =
-    rasterBytes(input.image, prep.lab.L, prep.lab.a, prep.lab.b, cal.F, ctx.Fs) + 3 * 4 * px + (priorRadii(cal.priorA).length + 3) * 4 * px + 4 * px
+    rasterBytes(input.image, prep.lab.L, prep.lab.a, prep.lab.b, cal.F, ctx.Fs) + 3 * 4 * px + (logPlanes + 3) * 4 * px + 4 * px
   await checkpoint(1, 'done')
   return {
     method: settings.method,
     suggestions,
-    clusters: out.clusters,
+    clusters,
     calibration: report,
     roi: prep.roi.report,
     run,
@@ -206,7 +276,36 @@ export async function detect(input: DetectInput, onProgress?: ProgressFn, signal
   }
 }
 
-interface Calibrated {
+/**
+ * After the post-filter dropped suggestions (outside the ROI, on an existing
+ * colony), make each cluster's K, alternative and status agree with what is
+ * actually suggested: "k or k+1?" must count the colonies the user sees.
+ */
+function reconcileClusters(clusters: ClusterResult[], kept: Suggestion[], keep: (s: { x: number; y: number; r: number }) => boolean): ClusterResult[] {
+  const per = new Map<string, number>()
+  for (const s of kept) per.set(s.clusterId, (per.get(s.clusterId) ?? 0) + 1)
+  return clusters.map((c) => {
+    if (c.status === 'too-large') return c
+    const k = per.get(c.clusterId) ?? 0
+    if (k === c.chosenK && !c.alternative) return c
+    const out: ClusterResult = { ...c, chosenK: k }
+    if (c.alternative) {
+      const colonies = c.alternative.colonies.filter(keep)
+      if (colonies.length === k) {
+        delete out.alternative
+        out.runnerUpK = null
+        out.objectiveGap = null
+        out.status = 'ok'
+      } else {
+        out.alternative = { k: colonies.length, colonies }
+        out.runnerUpK = colonies.length
+      }
+    }
+    return out
+  })
+}
+
+export interface Calibrated {
   F: Plane
   noise: number
   priorA: AnalysisPrior
@@ -295,7 +394,7 @@ export function calibrate(prep: PreparedImage, input: Pick<DetectInput, 'seeds' 
   let noise = noiseSigma(F, roiW)
   let measured = measureAll(F, noise)
   let prior = radiusPrior(usableRadii(measured), settings.sMin)
-  let priorA = analysisPrior(prior, measured, scale, prep.plateDiameter, settings.priorWidth)
+  let priorA = analysisPrior(prior, measured, scale, prep.plateDiameter, 1)
   // pass 2: exclude bright foreground from the background estimate
   {
     const contrasts = measured.filter((q) => q.m && q.m.snr >= 4).map((q) => q.m!.contrast)
@@ -317,7 +416,7 @@ export function calibrate(prep: PreparedImage, input: Pick<DetectInput, 'seeds' 
     // remeasure local seeds on the better plane (patch seeds unchanged)
     measured = measureAll(F, noise)
     prior = radiusPrior(usableRadii(measured), settings.sMin)
-    priorA = analysisPrior(prior, measured, scale, prep.plateDiameter, settings.priorWidth)
+    priorA = analysisPrior(prior, measured, scale, prep.plateDiameter, 1)
   }
 
   // ---- report
@@ -400,6 +499,13 @@ function fixedColonies(existing: DetectInput['existing'], prep: PreparedImage, c
     const near = Math.hypot(m.cx - x, m.cy - y) < 0.5 * r
     return { id: e.id, x: near ? m.cx : x, y: near ? m.cy : y, r }
   })
+}
+
+/** The calibrated prior with its log-radius spread multiplied by `width`. */
+function widenPrior(p: AnalysisPrior, width: number): AnalysisPrior {
+  if (width === 1) return p
+  const s = p.s * width
+  return { ...p, s, rLo: Math.max(1, Math.exp(p.logR - 2 * s)), rHi: Math.exp(p.logR + 2 * s) }
 }
 
 /** Prior in analysis px; falls back to any measured seed radius, then to a plate-relative guess. */

@@ -9,9 +9,10 @@
  *     at which the smallest expected colony still has a radius of
  *     `targetMinRadius` analysis px AND a typical colony `targetTypicalRadius`
  *     px (seams between touching colonies are only 1–2 px wide at r ≈ 6;
- *     separating them needs r ≈ 8–10), capped by `maxPixels` (iPad Safari memory).
- *     If that is below the preliminary scale the preliminary image can be
- *     reduced in memory; otherwise the worker re-decodes at the higher scale.
+ *     separating them needs r ≈ 8–10). Product decision (2026-10-09): accuracy
+ *     first — there is NO default pixel cap, also not on iPad. Memory is kept
+ *     down by analysing only the plate (crop) and by per-cluster processing,
+ *     not by downsampling. `maxPixels` remains as an explicit override.
  */
 
 export interface ScaleRequest {
@@ -25,7 +26,7 @@ export interface ScaleRequest {
   typicalRadiusOriginal?: number
   /** Desired analysis radius of a typical colony (default 8). */
   targetTypicalRadius?: number
-  /** Pixel budget for the analysis image (default 4 MP). */
+  /** Optional pixel budget for the analysis image (default: none). */
   maxPixels?: number
   /** Never upsample (default max 1). */
   maxScale?: number
@@ -42,7 +43,7 @@ export interface ScaleChoice {
 }
 
 export function chooseAnalysisScale(req: ScaleRequest): ScaleChoice {
-  const maxPixels = req.maxPixels ?? 4_000_000
+  const maxPixels = req.maxPixels ?? Infinity
   const maxScale = req.maxScale ?? 1
   const capScale = Math.min(maxScale, Math.sqrt(maxPixels / (req.width * req.height)))
   let scale: number

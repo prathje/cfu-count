@@ -21,14 +21,19 @@ export interface RemoteSeed extends Omit<SeedInput, 'patch'> {
   imageHeight: number
 }
 
-export interface DetectRequest extends Omit<DetectInput, 'image' | 'scale' | 'seeds'> {
+export interface DetectRequest extends Omit<DetectInput, 'image' | 'scale' | 'seeds' | 'origin'> {
   source: ImageSource
   /** Seeds on the analysed image. */
   seeds: Omit<SeedInput, 'patch'>[]
   /** Seeds on other images, with the bytes of each reference image (keyed by imageId). */
   remoteSeeds?: RemoteSeed[]
   remoteSources?: Record<string, Blob>
-  /** Analysis-scale policy; see chooseAnalysisScale. */
+  /** ImageRecord.fingerprint of each reference image (cache keys); recommended. */
+  remoteFingerprints?: Record<string, string>
+  /**
+   * Analysis-scale policy. Defaults: typical colony 8 px, budget 2.5 MP (raised
+   * up to 4 MP only when needed for 8 px), decode cropped to the plate.
+   */
   analysis?: { scale?: number; targetTypicalRadius?: number; maxPixels?: number }
 }
 

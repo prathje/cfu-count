@@ -113,7 +113,10 @@ export function nmsCircles<T extends { x: number; y: number; r: number }>(items:
   const sorted = items.slice().sort((a, b) => score(b) - score(a))
   const kept: T[] = []
   // uniform grid for neighbour lookup
-  const cell = Math.max(1, Math.max(...sorted.map((s) => s.r), 1) * overlap * 2)
+  // a loop, not Math.max(...spread): dense plates can exceed the engine's argument limit
+  let rMax = 1
+  for (const s of sorted) if (s.r > rMax) rMax = s.r
+  const cell = Math.max(1, rMax * overlap * 2)
   const grid = new Map<string, T[]>()
   const key = (cx: number, cy: number) => `${cx},${cy}`
   for (const c of sorted) {

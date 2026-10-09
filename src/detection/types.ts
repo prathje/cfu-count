@@ -68,7 +68,11 @@ export interface DetectSettings {
   edgeMarginFrac: number
   /** Clusters whose area exceeds kMax typical colonies are returned as 'too-large' without a fit (default 400). */
   kMax: number
-  /** Objective gap (in units of one typical colony) below which a cluster/suggestion is flagged for review (default 0.25). */
+  /**
+   * Fitter: a group is flagged for review when its RELATIVE objective gap (evidence
+   * per contested colony, see ClusterResult.relativeGap) is below this (default 0.1).
+   * A runner-up of "no colony" (K = 0) never makes a review region.
+   */
   reviewGap: number
   /** Floor for the log-radius spread s (default 0.25, i.e. ±25 %). */
   sMin: number
@@ -92,6 +96,13 @@ export interface DetectInput {
   existing: ExistingAnnotation[]
   /** User-supplied ROI (original px). Absent → auto-detect the plate. */
   roi?: Roi
+  /**
+   * When `image` is a crop of the original: original-px position of the crop's
+   * top-left corner. Seeds/existing/ROI/results stay in full-image coordinates.
+   */
+  origin?: { x: number; y: number }
+  /** ImageRecord.fingerprint of the analysed bytes: part of every cache key, copied into the run record. */
+  imageFingerprint?: string
   settings?: Partial<DetectSettings>
   /** Optional run id (otherwise generated). */
   runId?: ID
@@ -106,6 +117,8 @@ export interface ClusterLabels {
   /** Analysis px per original px. */
   scale: number
   labels: Int32Array
+  /** Original-px position of the raster's top-left (crop analysis); absent = (0, 0). */
+  origin?: { x: number; y: number }
 }
 
 export type SuggestionStatus = 'ok' | 'review'
@@ -118,8 +131,8 @@ export interface Suggestion {
   /** Fitted colony radius in original px (→ Annotation.geometry.r on accept). */
   r: number
   /**
-   * Method-specific support score, NOT a probability. Fitter: objective increase if
-   * this colony were removed, in units of one typical colony. Null when not meaningful.
+   * Method-specific support score, NOT a probability. Fitter: the relative gap of the
+   * colony's group (see ClusterResult.relativeGap). Null when not meaningful.
    */
   score: number | null
   clusterId: string
@@ -142,6 +155,12 @@ export interface ClusterResult {
   runnerUpK: number | null
   /** J(runner-up) − J(chosen) in units of one typical colony; null if not computed. */
   objectiveGap: number | null
+  /**
+   * Fitter: objectiveGap divided by the contested area (colonies that differ
+   * between the chosen and the runner-up explanation, in typical-colony units).
+   * The review flag uses this; it is a diagnostic, not a probability.
+   */
+  relativeGap?: number | null
   status: ClusterStatus
   /** For review clusters: the runner-up explanation (new colonies only), so the UI can offer "2 or 3?". */
   alternative?: { k: number; colonies: { x: number; y: number; r: number }[] }

@@ -320,3 +320,10 @@ describe('watershed', () => {
     expect(Math.abs(a1 - a2) / (a1 + a2)).toBeLessThan(0.1)
   })
 })
+
+describe('nmsCircles at scale', () => {
+  it('handles more candidates than the engine argument limit', () => {
+    const items = Array.from({ length: 300_000 }, (_, i) => ({ x: (i % 1000) * 3, y: Math.floor(i / 1000) * 3, r: i === 7 ? 1.2 : 1 }))
+    expect(nmsCircles(items, 0.5, () => 1).length).toBe(300_000)
+  })
+})

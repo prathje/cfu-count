@@ -112,6 +112,17 @@ export function computeRoi(image: RgbaImage, scale: number, userRoi: Roi | undef
     const contour = traceAllOuterContours(plateSmall, 8).sort((a, b) => b.length - a.length)[0] ?? []
     hullSmall = convexHull(contour)
   }
+  if (hullSmall.length < 3) {
+    // degenerate outline (e.g. a tiny or blank image): analyse the central 90 %
+    source = 'fallback'
+    warnings.push('Could not find the plate outline; analysing the central 90 % of the image. Draw a region to restrict the search.')
+    hullSmall = [
+      { x: sw * 0.05, y: sh * 0.05 },
+      { x: sw * 0.95, y: sh * 0.05 },
+      { x: sw * 0.95, y: sh * 0.95 },
+      { x: sw * 0.05, y: sh * 0.95 },
+    ]
+  }
   // map hull to analysis scale and rasterise
   const toAnalysis = (p: Pt): Pt => ({ x: (p.x / sw) * w, y: (p.y / sh) * h })
   const hullA = hullSmall.map(toAnalysis)
@@ -123,7 +134,8 @@ export function computeRoi(image: RgbaImage, scale: number, userRoi: Roi | undef
   const marginA = source === 'fallback' ? 0 : Math.max(edgeMarginFrac * eqDiam, rim > 0 ? rim + 0.01 * eqDiam : 0)
   if (rim > 0.1 * eqDiam) warnings.push('A wide bright or dark band was found along the plate wall and excluded; check the analysed region.')
   const mask = thresholdDistance(dist, marginA)
-  const outline = simplifyPolyline([...hullA, hullA[0]], 0.75).slice(0, -1).map((p) => ({ x: p.x / scale, y: p.y / scale }))
+  const simplified = simplifyPolyline([...hullA, hullA[0]], 0.75).slice(0, -1)
+  const outline = (simplified.length >= 3 ? simplified : hullA).map((p) => ({ x: p.x / scale, y: p.y / scale }))
   return {
     mask,
     plate,

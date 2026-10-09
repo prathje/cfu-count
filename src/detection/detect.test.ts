@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest'
 import { detect, DetectionCancelled, chooseAnalysisScale, suggestionsToAnnotations } from './index.ts'
 import { computeRoi } from './roi.ts'
 import { measureSeed, radiusPrior, seedQuality } from './calibrate.ts'
-import { ClusterFit, fitCluster, DEFAULT_WEIGHTS } from './methods/fitter.ts'
+import { ClusterFit, fitCluster as fitClusterRaw, summarizeSolution, DEFAULT_WEIGHTS, type ClusterFitParams } from './methods/fitter.ts'
+import type { FixedColony } from './methods/common.ts'
+import type { Mask, Plane } from './image/plane.ts'
 import { makeMask, makePlane, type RgbaImage } from './image/plane.ts'
 import type { DetectInput } from './types.ts'
 
@@ -85,6 +87,13 @@ describe('roi', () => {
     expect(roi.mask.data[5 * W + 5]).toBe(0)
     expect(roi.mask.data[130 * W + Math.floor(W * 0.15) + 2]).toBe(0)
   })
+  it('never crashes and always yields a usable outline on blank or tiny images', () => {
+    for (const [w, h] of [[12, 9], [3, 2], [1, 1]]) {
+      const blank = { width: w, height: h, data: new Uint8ClampedArray(w * h * 4).fill(128) }
+      const roi = computeRoi(blank, 1, undefined, 0.025)
+      expect(roi.report.outline.length).toBeGreaterThanOrEqual(3)
+    }
+  })
   it('honours a user circle', () => {
     const roi = computeRoi(image, 0.5, { kind: 'circle', cx: 150, cy: 130, r: 40 }, 0.025)
     expect(roi.report.source).toBe('user')
@@ -124,6 +133,7 @@ describe('seed calibration', () => {
 describe('union-of-circles fit', () => {
   const prior = { logR: Math.log(R), s: 0.2, rMed: R, rLo: R * Math.exp(-0.4), rHi: R * Math.exp(0.4) }
   const params = { prior, weights: { ...DEFAULT_WEIGHTS, lambda: 0.175 }, contrastRef: 50, contrastLo: 0.5, tau: 2, rMaxFit: 14, coreLevel: 37 }
+  const fitCluster = (m: Mask, F: Plane, ox: number, oy: number, p: ClusterFitParams, fixed: FixedColony[], blobs: Disk[]) => summarizeSolution(fitClusterRaw(m, F, ox, oy, p, fixed, blobs), p)
   function patch(ds: Disk[], w = 70, h = 50) {
     const m = makeMask(w, h)
     const F = makePlane(w, h)
@@ -209,12 +219,16 @@ describe('detect()', () => {
 })
 
 describe('chooseAnalysisScale', () => {
-  it('keeps small colonies resolvable and respects the pixel cap', () => {
+  it('keeps small colonies resolvable, has no default cap and honours an explicit one', () => {
     const a = chooseAnalysisScale({ width: 6000, height: 4000, minRadiusOriginal: 20, typicalRadiusOriginal: 30 })
     expect(a.scale).toBeCloseTo(8 / 30)
+    // tiny colonies: full resolution, no silent downsampling
     const b = chooseAnalysisScale({ width: 6000, height: 4000, minRadiusOriginal: 2 })
-    expect(b.reason).toBe('pixel-cap')
-    expect(b.width * b.height).toBeLessThanOrEqual(4_000_000 * 1.01)
+    expect(b.scale).toBe(1)
+    expect(b.reason).toBe('full-resolution')
+    const c = chooseAnalysisScale({ width: 6000, height: 4000, minRadiusOriginal: 2, maxPixels: 4_000_000 })
+    expect(c.reason).toBe('pixel-cap')
+    expect(c.width * c.height).toBeLessThanOrEqual(4_000_000 * 1.01)
     expect(chooseAnalysisScale({ width: 6000, height: 4000 }).width).toBe(2048)
   })
 })

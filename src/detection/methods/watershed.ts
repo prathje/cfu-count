@@ -8,7 +8,7 @@ import { labelComponents } from '../image/components.ts'
 import { distanceTransform } from '../image/distance.ts'
 import { gaussianBlur } from '../image/filters.ts'
 import { localMaxima, nmsCircles } from '../image/blobs.ts'
-import { makePlane } from '../image/plane.ts'
+import { makeMask, makePlane } from '../image/plane.ts'
 import { watershed } from '../image/watershed.ts'
 import type { ClusterResult, Suggestion } from '../types.ts'
 import { bboxToOriginal, clusterId, fixedInRegion, foregroundMask, nearFixed, type MethodContext } from './common.ts'
@@ -29,9 +29,19 @@ export async function runWatershed(ctx: MethodContext): Promise<MethodOutput> {
   const dt = gaussianBlur(distanceTransform(mask), 1)
   const cl = labelComponents(mask, 8)
   const peaks = localMaxima(dt, Math.max(1, Math.round(0.4 * prior.rMed)), 0.5 * prior.rLo, mask.data)
+  // compact clusters (triangles, squares) have a single DT peak; the CORE mask
+  // (F above ~0.75 of the seed contrast) keeps the faint seams and splits them
+  const core = makeMask(mask.width, mask.height)
+  for (let i = 0; i < core.data.length; i++) core.data[i] = mask.data[i] && ctx.F.data[i] > 0.75 * ctx.contrastRef ? 1 : 0
+  const cdt = gaussianBlur(distanceTransform(core), 0.7)
+  const corePeaks = localMaxima(cdt, Math.max(1, Math.round(0.3 * prior.rMed)), Math.max(1, 0.3 * prior.rLo), core.data).map((p) => ({ ...p, value: p.value + 0.5 * prior.rMed }))
+  // marker spacing follows the sensitivity slider
+  const spacing = 0.85 - 0.3 * Math.min(Math.max(ctx.settings.sensitivity, 0), 1)
+  // plain DT peaks only where the core mask has no peak nearby (else they sit between core peaks)
+  const extra = peaks.filter((p) => !corePeaks.some((c) => Math.hypot(c.x - p.x, c.y - p.y) < 1.5 * prior.rMed))
   const markers = nmsCircles(
-    peaks.map((p) => ({ ...p, r: prior.rMed })),
-    0.7,
+    [...corePeaks, ...extra].map((p) => ({ ...p, r: prior.rMed })),
+    spacing,
     (p) => p.value,
   )
   // every component gets at least one marker (its deepest pixel)
