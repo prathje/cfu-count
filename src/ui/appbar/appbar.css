@@ -1,0 +1,337 @@
+/* App bar: brand, project menu, save status pill, Drive button and panel. */
+/* ==========================================================================
+   App bar
+   ========================================================================== */
+.appbar {
+  position: relative;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  height: calc(var(--appbar-h) + var(--safe-t));
+  padding: var(--safe-t) calc(var(--s-3) + var(--safe-r)) 0 calc(var(--s-3) + var(--safe-l));
+  background: var(--c-surface);
+  border-bottom: 1px solid var(--c-border);
+  flex: none;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  flex: none;
+  padding-right: var(--s-1);
+}
+
+.brand__mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--r-md);
+  background: linear-gradient(160deg, #3b7bea, #2257bd);
+  color: #fff;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.15);
+}
+
+.brand__name {
+  font-size: var(--fs-lg);
+  font-weight: 650;
+  letter-spacing: -0.015em;
+}
+
+.appbar__divider {
+  width: 1px;
+  height: 20px;
+  background: var(--c-border);
+  flex: none;
+}
+
+.appbar__project {
+  min-width: 0;
+  display: flex;
+}
+
+.appbar__spacer {
+  flex: 1;
+  min-width: 0;
+}
+
+.appbar__right {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  flex: none;
+}
+
+.project-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 360px;
+  height: var(--ctl);
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--r-md);
+  background: none;
+  font-weight: 600;
+  font-size: var(--fs-md);
+}
+
+.project-trigger:hover,
+.project-trigger.is-open {
+  background: var(--c-hover);
+}
+
+.project-trigger__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-trigger svg {
+  flex: none;
+  color: var(--c-text-3);
+}
+
+.project-pop__name {
+  font-size: var(--fs-lg);
+  font-weight: 600;
+}
+
+.project-pop__list {
+  max-height: 220px;
+  overflow: auto;
+}
+
+.demo-badge {
+  flex: none;
+  padding: 3px 8px;
+  border: 1px dashed var(--c-warn-border);
+  border-radius: var(--r-pill);
+  background: var(--c-warn-soft);
+  color: var(--c-warn);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* Save status pill */
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 10px 0 8px;
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-pill);
+  background: var(--c-surface);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  white-space: nowrap;
+  transition: background-color var(--t-fast) var(--ease);
+}
+
+@media (pointer: coarse) {
+  .status-pill {
+    height: 40px;
+    padding: 0 12px 0 10px;
+  }
+}
+
+.status-pill:hover {
+  background: var(--c-surface-2);
+}
+
+.status-pill.is-compact .status-pill__label {
+  display: none;
+}
+
+.status-pill.is-compact {
+  width: var(--ctl);
+  justify-content: center;
+  padding: 0;
+}
+
+.tone-ok {
+  color: var(--c-ok);
+}
+.status-pill.tone-ok {
+  border-color: #cfe7da;
+  background: var(--c-ok-soft);
+}
+.tone-busy {
+  color: var(--c-accent-text);
+}
+.status-pill.tone-busy {
+  border-color: #cddcf8;
+  background: var(--c-accent-soft);
+}
+.tone-warn {
+  color: var(--c-warn);
+}
+.status-pill.tone-warn {
+  border-color: var(--c-warn-border);
+  background: var(--c-warn-soft);
+}
+.tone-error {
+  color: var(--c-danger);
+}
+.status-pill.tone-error {
+  border-color: #f4c4c4;
+  background: var(--c-danger-soft);
+}
+.tone-neutral {
+  color: var(--c-text-2);
+}
+
+/* Drive button */
+.drive-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: var(--ctl);
+  max-width: 240px;
+  padding: 0 12px 0 10px;
+  border: 1px solid var(--c-border-strong);
+  border-radius: var(--r-md);
+  background: var(--c-surface);
+  box-shadow: var(--shadow-sm);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.drive-btn:hover {
+  background: var(--c-surface-2);
+}
+
+.drive-btn__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.drive-btn.is-connected svg {
+  color: var(--c-ok);
+}
+
+.drive-btn.is-warn {
+  border-color: var(--c-warn-border);
+  background: var(--c-warn-soft);
+  color: var(--c-warn);
+}
+
+.drive-btn.is-muted {
+  color: var(--c-text-2);
+}
+
+.drive-btn.is-compact {
+  width: var(--ctl);
+  padding: 0;
+  justify-content: center;
+}
+
+.drive-btn.is-compact .drive-btn__label {
+  display: none;
+}
+
+.drive-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+  padding: var(--s-2);
+}
+
+.drive-panel__status {
+  display: flex;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: var(--r-md);
+  background: var(--c-surface-2);
+}
+
+.drive-panel__status svg {
+  flex: none;
+  margin-top: 2px;
+}
+
+.drive-panel__status-label {
+  font-weight: 650;
+}
+
+.drive-panel__status-detail {
+  margin-top: 2px;
+  font-size: var(--fs-sm);
+  color: var(--c-text-2);
+}
+
+.drive-panel__section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}
+
+.drive-panel__text {
+  font-size: var(--fs-sm);
+  color: var(--c-text-2);
+  line-height: 1.45;
+}
+
+.drive-panel__actions {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+}
+
+.drive-panel__actions .btn {
+  justify-content: flex-start;
+}
+
+.drive-facts {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px var(--s-3);
+  margin: 0;
+  font-size: var(--fs-sm);
+}
+
+.drive-facts dt {
+  color: var(--c-text-3);
+}
+
+.drive-facts dd {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-weight: 500;
+}
+
+.conflict {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  padding: var(--s-3);
+  border: 1px solid #f4c4c4;
+  border-radius: var(--r-md);
+  background: #fff8f8;
+  font-size: var(--fs-sm);
+}
+
+.conflict__files {
+  margin: 0;
+  padding-left: 18px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--c-text-2);
+}
+
+.conflict__actions {
+  display: flex;
+  gap: var(--s-2);
+  flex-wrap: wrap;
+}

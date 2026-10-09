@@ -1,6 +1,7 @@
 import { Show, type JSX } from 'solid-js'
 import { Microscope, PanelLeft } from '../icons'
 import { ToggleButton } from '../primitives'
+import './appbar.css'
 
 /** Top application bar layout: brand, sidebar toggle, project slot, status + Drive slots. */
 export interface AppBarProps {

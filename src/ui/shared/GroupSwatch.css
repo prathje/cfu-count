@@ -1,0 +1,21 @@
+/* Colour chip previewing a group marker (dot vs circle). */
+.swatch {
+  flex: none;
+  display: inline-block;
+  width: var(--swatch-size);
+  height: var(--swatch-size);
+  border-radius: 50%;
+  background: var(--swatch);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.18) inset;
+}
+
+.swatch--circle {
+  background: transparent;
+  box-shadow:
+    inset 0 0 0 2.5px var(--swatch),
+    0 0 0 1px rgba(0, 0, 0, 0.08);
+}
+
+.swatch.is-muted {
+  opacity: 0.4;
+}

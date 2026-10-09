@@ -1,0 +1,331 @@
+/* Workspace: image header, stage, overlays on the image, viewport lower edge. */
+/* ==========================================================================
+   Workspace
+   ========================================================================== */
+.workspace {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--c-surface);
+}
+
+.workspace {
+  container-type: inline-size;
+  container-name: workspace;
+}
+
+.image-header {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--s-2) var(--s-4);
+  min-height: 64px;
+  padding: var(--s-2) calc(var(--s-4) + var(--safe-r)) var(--s-2) var(--s-3);
+  border-bottom: 1px solid var(--c-border);
+  background: var(--c-surface);
+  flex: none;
+}
+
+.image-header__nav {
+  display: flex;
+  flex-direction: column;
+  flex: none;
+}
+
+@media (pointer: coarse) {
+  .image-header__nav {
+    flex-direction: row;
+  }
+}
+
+.image-header__nav .btn {
+  height: 22px;
+  min-width: 26px;
+  width: 26px;
+}
+
+@media (pointer: coarse) {
+  .image-header__nav .btn {
+    height: 44px;
+    width: 40px;
+  }
+}
+
+.image-header__title {
+  flex: 1;
+  min-width: 0;
+}
+
+.image-header__context {
+  display: flex;
+  gap: 6px;
+  font-size: var(--fs-sm);
+  color: var(--c-text-3);
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.image-header__context > span:first-child {
+  color: var(--c-text-2);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.image-header__name {
+  font-size: var(--fs-xl);
+  font-weight: 650;
+  letter-spacing: -0.015em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tallies {
+  display: flex;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  max-width: 45%;
+}
+
+.tally {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: var(--r-pill);
+  background: var(--c-surface-2);
+  font-size: var(--fs-sm);
+  color: var(--c-text-2);
+  white-space: nowrap;
+}
+
+.tally svg {
+  color: var(--c-text-3);
+}
+
+.tally__count {
+  font-weight: 650;
+  color: var(--c-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.tally.is-hidden .tally__name {
+  text-decoration: line-through;
+  text-decoration-color: var(--c-text-3);
+}
+
+.image-total {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex: none;
+  padding-left: var(--s-4);
+  border-left: 1px solid var(--c-border);
+}
+
+.image-total__value {
+  font-size: var(--fs-total);
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.image-total__label {
+  font-size: var(--fs-sm);
+  color: var(--c-text-3);
+  font-weight: 500;
+}
+
+.image-header__warning {
+  flex-basis: 100%;
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: 6px 10px;
+  border: 1px solid var(--c-warn-border);
+  border-radius: var(--r-md);
+  background: var(--c-warn-soft);
+  color: var(--c-warn);
+  font-size: var(--fs-sm);
+}
+
+/* The image stage: darker neutral backdrop; viewport fills it. */
+.stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  background: var(--c-stage);
+  overflow: hidden;
+}
+
+.stage > :first-child {
+  position: absolute;
+  inset: 0;
+}
+
+.stage__overlay {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: 10px 14px;
+  border-radius: var(--r-lg);
+  background: var(--glass);
+  backdrop-filter: var(--blur);
+  -webkit-backdrop-filter: var(--blur);
+  box-shadow: var(--shadow-float);
+  color: var(--c-text-2);
+  pointer-events: none;
+}
+
+.stage__overlay--error {
+  color: var(--c-danger);
+  max-width: min(420px, 80%);
+  align-items: flex-start;
+}
+
+.stage__overlay--error div div {
+  color: var(--c-text-2);
+  font-size: var(--fs-sm);
+}
+
+
+/* ==========================================================================
+   Viewport lower edge
+   ========================================================================== */
+.vp-footer {
+  position: absolute;
+  z-index: 10;
+  left: calc(var(--s-3) + var(--safe-l));
+  right: calc(var(--s-3) + var(--safe-r));
+  bottom: calc(var(--s-3) + var(--safe-b));
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--s-2);
+  pointer-events: none;
+}
+
+.vp-footer > *,
+.vp-footer__right > * {
+  pointer-events: auto;
+}
+
+.vp-zoom {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  padding: 3px;
+  border-radius: var(--r-lg);
+  flex: none;
+}
+
+.vp-zoom .btn {
+  height: calc(var(--ctl) - 4px);
+  min-width: calc(var(--ctl) - 4px);
+}
+
+.vp-zoom .btn--icon {
+  width: calc(var(--ctl) - 4px);
+}
+
+.vp-zoom__level {
+  min-width: 52px;
+  height: calc(var(--ctl) - 4px);
+  padding: 0 4px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: none;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.vp-zoom__level:hover:not(:disabled) {
+  background: var(--c-hover);
+}
+
+.vp-footer__right {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  min-width: 0;
+  pointer-events: none;
+}
+
+.vp-touch {
+  border-radius: var(--r-lg);
+}
+
+.vp-touch.is-pressed {
+  background: var(--c-accent-soft);
+}
+
+.vp-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  height: var(--ctl);
+  padding: 0 12px;
+  border-radius: var(--r-lg);
+  font-size: var(--fs-sm);
+  color: var(--c-text-2);
+  white-space: nowrap;
+}
+
+.vp-status strong {
+  color: var(--c-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.vp-status__counts {
+  flex: none;
+}
+
+.vp-status__dot {
+  margin: 0 5px;
+  color: var(--c-text-3);
+}
+
+.vp-status__hint {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding-left: 10px;
+  border-left: 1px solid var(--c-border-strong);
+  color: var(--c-text-3);
+}
+
+
+/* Decoded size differs from the recorded size: markers may not line up. */
+.stage__banner {
+  position: absolute;
+  left: 50%;
+  bottom: 64px;
+  transform: translateX(-50%);
+  z-index: 6;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  max-width: min(560px, calc(100% - 32px));
+  padding: 8px 12px;
+  border-radius: var(--r-lg);
+  background: var(--c-warn-soft);
+  color: var(--c-text);
+  font-size: var(--fs-sm);
+  box-shadow: var(--shadow-pop);
+  border: 1px solid var(--c-warn-border);
+}

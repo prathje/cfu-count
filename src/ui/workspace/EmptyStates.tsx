@@ -3,6 +3,7 @@ import type { DriveState, ProjectSummary } from '../../storage/api'
 import { Cloud, FileArchive, FolderOpen, ImagePlus, Loader, Microscope, Plus, Upload } from '../icons'
 import { Button } from '../primitives'
 import { formatRelativeDate, plural } from '../format'
+import './empty-states.css'
 
 /** Shown inside the workspace when the open project has no images yet. */
 export interface NoImagesProps {

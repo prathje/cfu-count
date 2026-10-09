@@ -21,6 +21,8 @@ import { Button, IconButton, MenuItem, Popover, ToggleButton, createPopoverState
 import { GroupSelector } from './GroupSelector'
 import { StylePanel } from './StylePanel'
 import type { ToolbarMode } from './layout'
+import '../shared/float-bar.css'
+import './toolbar.css'
 
 export { toolbarModeFor, type ToolbarMode } from './layout'
 

@@ -1,0 +1,9 @@
+/* Shared glass for elements floating over the image (toolbar, zoom footer). */
+.float-bar,
+.toolbar {
+  background: var(--glass);
+  backdrop-filter: var(--blur);
+  -webkit-backdrop-filter: var(--blur);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--shadow-float);
+}

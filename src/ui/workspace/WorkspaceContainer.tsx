@@ -12,6 +12,7 @@ import { ImageHeader } from './ImageHeader'
 import { ViewportFooter } from './ViewportFooter'
 import { NoImages } from './EmptyStates'
 import { AlertTriangle, Loader } from '../icons'
+import './workspace.css'
 
 /** Container: wires the editor to the image header, viewport, floating toolbar and footer. */
 export interface WorkspaceContainerProps {

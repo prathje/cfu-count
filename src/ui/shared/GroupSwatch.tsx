@@ -1,4 +1,5 @@
 import type { MarkerRender } from '../../model/types'
+import './GroupSwatch.css'
 
 /** Colour chip that previews a group's marker style (filled dot vs circle outline). */
 export interface GroupSwatchProps {

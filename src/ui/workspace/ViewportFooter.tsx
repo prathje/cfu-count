@@ -1,6 +1,7 @@
 import { Show } from 'solid-js'
 import { Maximize, Pointer, ZoomIn, ZoomOut } from '../icons'
 import { IconButton, ToggleButton } from '../primitives'
+import '../shared/float-bar.css'
 
 /** Zoom controls and a compact visible/hidden count or interaction hint along the viewport's lower edge. */
 export interface ViewportFooterProps {

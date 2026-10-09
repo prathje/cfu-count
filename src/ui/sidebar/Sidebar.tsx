@@ -6,6 +6,7 @@ import { Button, IconButton, InlineEdit } from '../primitives'
 import { plural } from '../format'
 import { ImageGroupSection } from './ImageGroupSection'
 import { ImageRow } from './ImageRow'
+import './sidebar.css'
 
 /** Left sidebar: project name, image groups with images, import actions. */
 export interface SidebarProps {
