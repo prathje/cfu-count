@@ -222,3 +222,22 @@ describe('accept', () => {
     expect(undone.reviewClusters.map((c) => c.clusterId)).toEqual(['c3'])
   })
 })
+
+describe('review questions', () => {
+  it('asks "One more?" when the detector proposes nothing new but the runner-up adds a colony', () => {
+    const l = layer([], [cluster('c1', 'review', { chosenK: 0, runnerUpK: 1, alternative: { k: 1, colonies: [{ x: 5, y: 5, r: 4 }] } })])
+    expect(pendingView(l, []).reviewClusters[0]).toMatchObject({ primary: [], question: 'One more?' })
+  })
+})
+
+describe('negatives', () => {
+  it('records rejected suggestions of an accepted review cluster', () => {
+    const l = toggleRejected(
+      layer([sug(200, 200, 'c3', 'review'), sug(230, 200, 'c3', 'review')], [cluster('c3', 'review', { chosenK: 2, runnerUpK: 1 })]),
+      1,
+    )
+    const plan = planAccept(l, pendingView(l, []), { kind: 'cluster', clusterId: 'c3', choice: 'primary' }, ctx([]))!
+    expect(plan.annotations).toHaveLength(1)
+    expect(plan.run.negatives).toEqual([{ x: 230, y: 200 }])
+  })
+})

@@ -226,6 +226,8 @@ export function resolvedClusters(layer: SuggestionLayer, annotations: readonly A
 }
 
 function question(chosen: number, alt: number | null): string {
+  // Nothing new proposed, but the runner-up adds colonies next to marked ones.
+  if (chosen === 0 && alt) return alt === 1 ? 'One more?' : `${alt} more?`
   if (alt === null || alt === chosen) return chosen === 1 ? 'Colony?' : `${chosen} colonies?`
   const [a, b] = chosen < alt ? [chosen, alt] : [alt, chosen]
   return `${a} or ${b}?`

@@ -18,6 +18,8 @@ export interface ReviewSummary {
   /** Rim band excluded from the search, in image px. */
   rimPx: number
   elapsedMs: number
+  /** Time spent in the detector itself (worker), in ms. */
+  detectorMs: number | null
   /** Reference image the examples came from, if any. */
   referenceName: string | null
 }
@@ -215,7 +217,10 @@ export function ReviewPanel(props: ReviewPanelProps) {
                   <Show when={sum().tooLarge > 0}>
                     <li>{plural(sum().tooLarge, 'area is', 'areas are')} too dense to separate (red outline): count by hand.</li>
                   </Show>
-                  <li>Analysed in {seconds(sum().elapsedMs)} on this device.</li>
+                  <li>
+                    Analysed in {seconds(sum().elapsedMs)} on this device
+                    <Show when={sum().detectorMs != null}>{` (detector ${seconds(sum().detectorMs!)})`}</Show>.
+                  </li>
                 </ul>
               </details>
 
@@ -230,13 +235,15 @@ export function ReviewPanel(props: ReviewPanelProps) {
                       <IconButton icon={ChevronRight} label="Next region" size="sm" onClick={() => props.onNextReview()} />
                     </div>
                     <div class="review-nav__actions">
-                      <Button size="sm" icon={Check} disabled={r().cluster.primary.length === 0} onClick={() => props.onAcceptPrimary()}>
-                        {`Accept ${r().cluster.primary.length}`}
-                      </Button>
+                      <Show when={r().cluster.primary.length > 0}>
+                        <Button size="sm" icon={Check} onClick={() => props.onAcceptPrimary()}>
+                          {`Accept ${r().cluster.primary.length}`}
+                        </Button>
+                      </Show>
                       <Show when={r().cluster.alternative}>
                         {(alt) => (
                           <Button size="sm" icon={Check} onClick={() => props.onAcceptAlternative()}>
-                            {`Accept ${alt().colonies.length} instead`}
+                            {r().cluster.primary.length > 0 ? `Accept ${alt().colonies.length} instead` : `Add ${alt().colonies.length}`}
                           </Button>
                         )}
                       </Show>
@@ -244,6 +251,9 @@ export function ReviewPanel(props: ReviewPanelProps) {
                         Skip
                       </Button>
                     </div>
+                    <Show when={r().cluster.alternative}>
+                      <p class="review-nav__legend">Dashed rings: the suggestion · dotted amber rings: the alternative.</p>
+                    </Show>
                   </div>
                 )}
               </Show>

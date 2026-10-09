@@ -275,6 +275,12 @@
   gap: 6px;
 }
 
+.review-nav__legend {
+  margin: 0;
+  font-size: var(--fs-xs);
+  color: var(--c-text-3);
+}
+
 .review-panel__actions {
   display: flex;
   gap: 8px;
@@ -282,6 +288,16 @@
 
 .review-panel__actions .btn--primary {
   flex: 1;
+}
+
+/* On the sheet the main actions stay reachable while the content scrolls. */
+.review-panel--sheet .review-panel__actions {
+  position: sticky;
+  bottom: calc(-14px - var(--safe-b));
+  margin: 0 -14px calc(-14px - var(--safe-b));
+  padding: 10px 14px calc(14px + var(--safe-b));
+  background: var(--c-surface);
+  border-top: 1px solid var(--c-border);
 }
 
 /* Toolbar entry: trailing item after Redo, separated. */

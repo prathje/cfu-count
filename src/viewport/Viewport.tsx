@@ -172,6 +172,8 @@ export function Viewport(props: ViewportProps) {
     updateHover()
     if (viewChanged) {
       viewChanged = false
+      // Diagnostics for automated browser checks: scale,offsetX,offsetY.
+      root.dataset.view = `${view.scale},${view.offsetX},${view.offsetY}`
       props.onViewChange?.({ ...view })
     }
   }
@@ -335,7 +337,8 @@ export function Viewport(props: ViewportProps) {
     const list = props.suggestions
     if (!props.onSuggestionTap || !list?.length) return null
     if (!suggestionIndex) {
-      const pts: SuggestionPoint[] = list.map((s, index) => ({ x: s.x, y: s.y, r: s.r, index }))
+      const pts: SuggestionPoint[] = []
+      list.forEach((s, index) => s.state !== 'alternative' && pts.push({ x: s.x, y: s.y, r: s.r, index }))
       suggestionIndex = { index: createPointIndex(pts), maxR: pts.reduce((m, p) => Math.max(m, p.r), 0) }
     }
     return suggestionAt(suggestionIndex.index, suggestionIndex.maxR, view, sx, sy, pointer)

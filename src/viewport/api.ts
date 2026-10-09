@@ -58,8 +58,12 @@ export interface SuggestionMark {
   y: number
   /** Fitted colony radius in image px (drawn to scale, with a small on-screen minimum). */
   r: number
-  /** ok = would be accepted by "Accept all OK"; review = in a cluster that needs a decision; rejected = tapped away. */
-  state: 'ok' | 'review' | 'rejected'
+  /**
+   * ok = would be accepted by "Accept all OK"; review = in a cluster that needs a
+   * decision; rejected = tapped away; alternative = the runner-up explanation of
+   * the selected review region (shown for comparison, not tappable).
+   */
+  state: 'ok' | 'review' | 'rejected' | 'alternative'
 }
 
 /** A region that needs a decision, outlined with a question chip ("2 or 3?"). */

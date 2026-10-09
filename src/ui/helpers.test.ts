@@ -39,7 +39,7 @@ describe('groupTallies', () => {
 
 describe('toolbarModeFor', () => {
   it('collapses as width shrinks', () => {
-    expect([1000, 860, 700, 620, 500, 470, 300].map(toolbarModeFor)).toEqual(['full', 'full', 'compact', 'compact', 'minimal', 'minimal', 'tiny'])
+    expect([1000, 860, 700, 650, 620, 470, 300].map(toolbarModeFor)).toEqual(['full', 'full', 'compact', 'compact', 'minimal', 'minimal', 'tiny'])
   })
 })
 

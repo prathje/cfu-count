@@ -9,7 +9,8 @@ export type ToolbarMode = 'full' | 'compact' | 'minimal' | 'tiny'
 
 export function toolbarModeFor(width: number): ToolbarMode {
   if (width >= 860) return 'full'
-  if (width >= 620) return 'compact'
+  // 650: the compact row with 44 px touch targets plus the trailing Find similar button is ~630 px.
+  if (width >= 650) return 'compact'
   if (width >= 470) return 'minimal'
   return 'tiny'
 }

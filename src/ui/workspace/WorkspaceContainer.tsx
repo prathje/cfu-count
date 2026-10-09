@@ -61,7 +61,7 @@ export function WorkspaceContainer(props: WorkspaceContainerProps) {
     const b = baseInsets()
     if (!assist.open()) return b
     if (sheet()) return { ...b, bottom: Math.max(b.bottom, panelHeight() + 8) }
-    return stageWidth() >= 900 ? { ...b, right: 348 + 24 } : b
+    return { ...b, right: 348 + 24 }
   }
   const tallies = createMemo(() => groupTallies(groups.list(), annotations.counts()))
   const imageGroupName = () => {
@@ -105,8 +105,14 @@ export function WorkspaceContainer(props: WorkspaceContainerProps) {
   // ------------------------------------------------ assisted counting (review overlay + panel)
   createEffect(() => assist.setSizeMismatch(!!bitmapSizeMismatch(bitmap())))
   const pending = assist.view
-  const suggestionMarks = createMemo<readonly SuggestionMark[]>(() => (assist.open() ? pending()?.marks ?? [] : []))
   const [reviewIdx, setReviewIdx] = createSignal(0)
+  // Pending rings, plus the runner-up explanation of the selected review region (for comparison).
+  const suggestionMarks = createMemo<readonly (SuggestionMark & { index: number })[]>(() => {
+    const v = assist.open() ? pending() : null
+    if (!v) return []
+    const alt = currentReview()?.cluster.alternative?.colonies ?? []
+    return alt.length ? [...v.marks, ...alt.map((c) => ({ ...c, state: 'alternative' as const, index: -1 }))] : v.marks
+  })
   createEffect(on(() => assist.layer()?.result, () => setReviewIdx(0)))
   const reviewList = () => pending()?.reviewClusters ?? []
   const currentReview = () => {
@@ -169,6 +175,7 @@ export function WorkspaceContainer(props: WorkspaceContainerProps) {
       calibration: l.result.calibration,
       rimPx: l.result.roi.marginPx,
       elapsedMs: l.elapsedMs,
+      detectorMs: typeof l.result.timingsMs.total === 'number' ? l.result.timingsMs.total : null,
       referenceName: l.reference ? ref?.name ?? 'another image' : null,
     }
   })
@@ -291,8 +298,8 @@ export function WorkspaceContainer(props: WorkspaceContainerProps) {
                 suggestionColor={assist.targetGroup()?.color}
                 reviewClusters={clusterMarks()}
                 onSuggestionTap={assist.open() ? (i) => {
-                  const m = suggestionMarks()[i] as (SuggestionMark & { index: number }) | undefined
-                  if (m) assist.toggleReject(m.index)
+                  const m = suggestionMarks()[i]
+                  if (m && m.index >= 0) assist.toggleReject(m.index)
                 } : undefined}
                 onAdd={onAdd}
                 onErase={annotations.erase}

@@ -426,7 +426,7 @@ function quantiseRadius(r: number): number {
   return r < 16 ? Math.round(r * 2) / 2 : Math.round(r)
 }
 
-type SuggestionState = 'ok' | 'review' | 'rejected'
+type SuggestionState = 'ok' | 'review' | 'rejected' | 'alternative'
 
 const suggestionSpriteCache = new Map<string, MarkerSprite>()
 const SUGGESTION_SPRITE_MAX = 160
@@ -449,8 +449,9 @@ function strokeSuggestion(
   c.lineWidth = 3.25
   c.stroke()
   c.setLineDash([dash, dash * 0.75])
-  c.strokeStyle = state === 'rejected' ? REJECTED_COLOR : color
-  c.lineWidth = state === 'rejected' ? 1.25 : 1.75
+  c.strokeStyle = state === 'rejected' ? REJECTED_COLOR : state === 'alternative' ? REVIEW_OUTLINE : color
+  c.lineWidth = state === 'rejected' || state === 'alternative' ? 1.25 : 1.75
+  if (state === 'alternative') c.setLineDash([1.5, 3])
   c.stroke()
   c.setLineDash([])
   if (state === 'rejected') {
@@ -588,12 +589,17 @@ export function drawSuggestionLayer(
     ctx.font = labelFont(fontPx)
     ctx.textBaseline = 'middle'
     ctx.textAlign = 'left'
+    // Selected region first; others only where they don't collide with a chip already placed.
+    chips.sort((a, b) => Number(b.active) - Number(a.active))
+    const placed: { x: number; y: number; w: number; h: number }[] = []
     for (const chip of chips) {
       const tw = ctx.measureText(chip.label).width
       const w = tw + 14
       const h = fontPx + 9
       const x = Math.max(2, Math.min(viewport.width - w - 2, chip.x))
       const y = chip.y - h - 3 < 2 ? chip.y + 3 : chip.y - h - 3
+      if (!chip.active && placed.some((p) => x < p.x + p.w + 4 && p.x < x + w + 4 && y < p.y + p.h + 3 && p.y < y + h + 3)) continue
+      placed.push({ x, y, w, h })
       roundRect(ctx, x, y, w, h, h / 2)
       ctx.fillStyle = chip.kind === 'too-large' ? '#fde8e8' : chip.active ? '#f5a524' : '#fff4d6'
       ctx.fill()
