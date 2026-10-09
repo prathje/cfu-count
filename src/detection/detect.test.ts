@@ -102,6 +102,32 @@ describe('roi', () => {
   })
 })
 
+describe('roi with a drawn region (polygon)', () => {
+  const poly = [
+    { x: 120, y: 150 },
+    { x: 147.5, y: 150 },
+    { x: 147.5, y: 190 },
+    { x: 120, y: 190 },
+  ]
+  it('intersects the auto plate with the polygon plus a context band; calibration keeps the plate interior', () => {
+    const auto = computeRoi(image, 1, undefined, 0.025)
+    const roi = computeRoi(image, 1, { kind: 'polygon', points: poly }, 0.025)
+    expect(roi.report.source).toBe('auto')
+    expect(roi.report.region).toEqual(poly)
+    expect(roi.report.regionContextPx).toBeGreaterThan(4)
+    expect(roi.inner.data).toEqual(auto.mask.data)
+    expect(roi.mask.data[170 * W + 130]).toBe(1) // inside
+    expect(roi.mask.data[170 * W + 152]).toBe(1) // just outside: context band
+    expect(roi.mask.data[80 * W + 90]).toBe(0) // far away
+    // analysed area = plate interior inside the polygon only
+    expect(Math.abs(roi.report.area - 27.5 * 40)).toBeLessThan(60)
+  })
+  it('warns when the region misses the plate interior', () => {
+    const roi = computeRoi(image, 1, { kind: 'polygon', points: [{ x: 0, y: 0 }, { x: 20, y: 0 }, { x: 0, y: 20 }] }, 0.025)
+    expect(roi.warnings.join(' ')).toMatch(/outside the analysed plate/)
+  })
+})
+
 describe('seed calibration', () => {
   it('estimates the radius of an isolated colony from an off-centre click', () => {
     const F = makePlane(40, 40)
@@ -240,6 +266,53 @@ describe('detect()', () => {
     expect(r.run.method).toBe(`colony-${method}`)
     expect(r.run.seeds).toHaveLength(4)
     expect(r.run.imageFingerprint).toBe('')
+  })
+  it('restricts suggestions to a drawn polygon by centre, fitting a cut cluster whole', async () => {
+    // the polygon cuts the touching pair between its two colonies: only the left one's centre is inside
+    const poly = [
+      { x: 120, y: 150 },
+      { x: 147.5, y: 150 },
+      { x: 147.5, y: 190 },
+      { x: 120, y: 190 },
+    ]
+    const r = await detect(input({ roi: { kind: 'polygon', points: poly } }))
+    expect(r.suggestions).toHaveLength(1)
+    const s = r.suggestions[0]
+    expect(Math.hypot(s.x - 140, s.y - 170)).toBeLessThan(3)
+    expect(Math.abs(s.r - R)).toBeLessThan(2.5) // a whole colony, not the clipped half
+    // seeds outside the region still calibrate the size
+    expect(r.calibration.nUsable).toBe(4)
+    expect(r.run.roi).toEqual({ kind: 'polygon', points: poly })
+    expect(r.roi.region).toEqual(poly)
+  })
+  it('does not re-suggest a colony at the region edge that is already marked outside it', async () => {
+    const poly = [
+      { x: 120, y: 150 },
+      { x: 160, y: 150 },
+      { x: 160, y: 190 },
+      { x: 120, y: 190 },
+    ]
+    const base = input()
+    const marked = { id: 'edge', x: 155, y: 170, groupId: 'g', origin: 'manual' as const }
+    const r = await detect({ ...base, roi: { kind: 'polygon', points: poly }, existing: [...base.existing, marked] })
+    expect(r.suggestions).toHaveLength(1)
+    expect(Math.hypot(r.suggestions[0].x - 140, r.suggestions[0].y - 170)).toBeLessThan(3)
+  })
+  it('keeps polygon coordinates in full-image px when analysing a crop', async () => {
+    const ox = 30
+    const oy = 20
+    const crop: RgbaImage = { width: W - ox, height: H - oy, data: new Uint8ClampedArray((W - ox) * (H - oy) * 4) }
+    for (let y = 0; y < H - oy; y++) crop.data.set(image.data.subarray(((y + oy) * W + ox) * 4, ((y + oy) * W + W) * 4), y * (W - ox) * 4)
+    const poly = [
+      { x: 120, y: 150 },
+      { x: 147.5, y: 150 },
+      { x: 147.5, y: 190 },
+      { x: 120, y: 190 },
+    ]
+    const r = await detect(input({ image: crop, origin: { x: ox, y: oy }, roi: { kind: 'polygon', points: poly } }))
+    expect(r.run.roi).toEqual({ kind: 'polygon', points: poly })
+    for (const s of r.suggestions) expect(s.x).toBeLessThan(147.5)
+    expect(r.suggestions.some((s) => Math.hypot(s.x - 140, s.y - 170) < 3)).toBe(true)
   })
   it('maps results to original coordinates at analysis scale < 1', async () => {
     // same plate rendered at half size, claimed to come from a 2× original

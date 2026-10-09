@@ -7,6 +7,13 @@
  * writing, bubbles), takes the convex hull (colonies touching the wall would
  * otherwise notch the outline) and finally erodes by a rim margin.
  * A user ROI (circle or rectangle, original px) overrides the auto result.
+ * A user POLYGON (a region drawn with the Region tool) restricts it instead: the
+ * auto plate is still found (it drives the background and noise estimates and
+ * the rim exclusion), and the analysed mask is the plate interior inside the
+ * polygon grown by a context band (REGION_CONTEXT_FRAC of the plate diameter),
+ * so a cluster cut by the polygon is still fitted whole. Which colonies count is
+ * decided later by centre: detect() keeps suggestions whose centre lies inside
+ * the polygon.
  */
 import { toLuma } from './image/color.ts'
 import { fillHoles, labelComponents } from './image/components.ts'
@@ -19,8 +26,14 @@ import { mad, median, quantile } from './image/threshold.ts'
 import type { Roi, RoiReport } from './types.ts'
 
 export interface RoiResult {
-  /** Analysis-scale mask of pixels to analyse (after the margin). */
+  /** Analysis-scale mask of pixels to analyse (after the margin; with a polygon, plus its context band). */
   mask: Mask
+  /**
+   * Analysis-scale plate interior after the margin, ignoring a user polygon (equals
+   * `mask` otherwise). Calibration measures seeds and noise on it, so seeds outside
+   * a drawn region are not mistaken for edge colonies.
+   */
+  inner: Mask
   /** Analysis-scale mask of the whole plate (before the margin). */
   plate: Mask
   report: RoiReport
@@ -28,15 +41,49 @@ export interface RoiResult {
 }
 
 const WORK_SIDE = 480
+/** Context band around a user polygon, as a fraction of the plate's equivalent diameter. */
+export const REGION_CONTEXT_FRAC = 0.04
 
 /**
  * @param image analysis-scale RGBA
  * @param scale analysis px per original px
  */
 export function computeRoi(image: RgbaImage, scale: number, userRoi: Roi | undefined, edgeMarginFrac: number): RoiResult {
+  if (userRoi?.kind === 'polygon') return withRegion(autoRoi(image, scale, edgeMarginFrac), userRoi.points, scale)
+  return userRoi ? shapeRoi(image, scale, userRoi) : autoRoi(image, scale, edgeMarginFrac)
+}
+
+/** Restrict an auto ROI to a polygon (original px) plus a context band. */
+function withRegion(auto: RoiResult, points: readonly Pt[], scale: number): RoiResult {
+  const { width: w, height: h } = auto.mask
+  const core = rasterizePolygon(points.map((p) => ({ x: p.x * scale, y: p.y * scale })), w, h)
+  const eqDiam = 2 * Math.sqrt(Math.max(1, count(auto.plate)) / Math.PI)
+  const band = Math.max(4, REGION_CONTEXT_FRAC * eqDiam)
+  const outside = makeMask(w, h)
+  for (let i = 0; i < outside.data.length; i++) outside.data[i] = core.data[i] ? 0 : 1
+  const dOut = distanceTransform(outside, false)
+  const mask = makeMask(w, h)
+  let inside = 0
+  for (let i = 0; i < mask.data.length; i++) {
+    if (!auto.mask.data[i]) continue
+    if (dOut.data[i] <= band) mask.data[i] = 1
+    if (core.data[i]) inside++
+  }
+  const warnings = [...auto.warnings]
+  if (inside === 0) warnings.push('The selected region lies outside the analysed plate area (or in its rim band).')
+  return {
+    mask,
+    inner: auto.mask,
+    plate: auto.plate,
+    report: { ...auto.report, region: points.map((p) => ({ x: p.x, y: p.y })), regionContextPx: band / scale, area: inside / (scale * scale) },
+    warnings,
+  }
+}
+
+function shapeRoi(image: RgbaImage, scale: number, userRoi: Exclude<Roi, { kind: 'polygon' }>): RoiResult {
   const { width: w, height: h } = image
   const warnings: string[] = []
-  if (userRoi) {
+  {
     const plate =
       userRoi.kind === 'circle'
         ? rasterizeCircle(userRoi.cx * scale, userRoi.cy * scale, userRoi.r * scale, w, h)
@@ -53,9 +100,13 @@ export function computeRoi(image: RgbaImage, scale: number, userRoi: Roi | undef
             { x: userRoi.x + userRoi.w, y: userRoi.y + userRoi.h },
             { x: userRoi.x, y: userRoi.y + userRoi.h },
           ]
-    return { mask: plate, plate, report: { source: 'user', outline, shape: 'user', marginPx: 0, area: count(plate) / (scale * scale) }, warnings }
+    return { mask: plate, inner: plate, plate, report: { source: 'user', outline, shape: 'user', marginPx: 0, area: count(plate) / (scale * scale) }, warnings }
   }
+}
 
+function autoRoi(image: RgbaImage, scale: number, edgeMarginFrac: number): RoiResult {
+  const { width: w, height: h } = image
+  const warnings: string[] = []
   // --- auto: work on a small luma image
   const f = Math.min(1, WORK_SIDE / Math.max(w, h))
   const sw = Math.max(8, Math.round(w * f))
@@ -138,6 +189,7 @@ export function computeRoi(image: RgbaImage, scale: number, userRoi: Roi | undef
   const outline = (simplified.length >= 3 ? simplified : hullA).map((p) => ({ x: p.x / scale, y: p.y / scale }))
   return {
     mask,
+    inner: mask,
     plate,
     report: { source, outline, shape: source === 'fallback' ? 'other' : classifyShape(hullA), marginPx: marginA / scale, area: count(mask) / (scale * scale) },
     warnings,

@@ -110,3 +110,14 @@ export function simplifyPolyline(pts: Pt[], tol: number): Pt[] {
   }
   return pts.filter((_, i) => keep[i])
 }
+
+/** Even–odd point-in-polygon test (ray casting). */
+export function pointInPolygon(x: number, y: number, poly: readonly Pt[]): boolean {
+  let inside = false
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const a = poly[i]
+    const b = poly[j]
+    if (a.y > y !== b.y > y && x < ((b.x - a.x) * (y - a.y)) / (b.y - a.y) + a.x) inside = !inside
+  }
+  return inside
+}

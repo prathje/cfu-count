@@ -5,6 +5,7 @@
 import { measureSeed, radiusPrior, robustRange, seedQuality, calibrationSummary, coverageWarnings, type SeedMeasurement } from './calibrate.ts'
 import { toLab } from './image/color.ts'
 import { distanceTransform } from './image/distance.ts'
+import { pointInPolygon } from './image/geometry.ts'
 import { gaussianBlur, normalizedBlur } from './image/filters.ts'
 import { makeMask, rasterBytes, type Plane } from './image/plane.ts'
 import { median } from './image/threshold.ts'
@@ -125,7 +126,7 @@ export async function detect(input: DetectInput, onProgress?: ProgressFn, signal
     ...input,
     seeds: input.seeds.map((q) => (q.imageId === input.imageId ? sx(q) : q)),
     existing: input.existing.map(sx),
-    roi: !input.roi ? undefined : input.roi.kind === 'circle' ? { ...input.roi, cx: input.roi.cx - o.x, cy: input.roi.cy - o.y } : { ...input.roi, x: input.roi.x - o.x, y: input.roi.y - o.y },
+    roi: shiftRoi(input.roi, -o.x, -o.y),
   }
   const r = await detectLocal(local, onProgress, signal, cache)
   const back = <T extends { x: number; y: number }>(p: T): T => ({ ...p, x: p.x + o.x, y: p.y + o.y })
@@ -138,7 +139,7 @@ export async function detect(input: DetectInput, onProgress?: ProgressFn, signal
     ...(c.alternative ? { alternative: { ...c.alternative, colonies: c.alternative.colonies.map(back), ...(c.alternative.added ? { added: c.alternative.added.map(back) } : {}) } } : {}),
   }))
   r.calibration = { ...r.calibration, seeds: r.calibration.seeds.map(backSeed) }
-  r.roi = { ...r.roi, outline: r.roi.outline.map(back) }
+  r.roi = { ...r.roi, outline: r.roi.outline.map(back), ...(r.roi.region ? { region: r.roi.region.map(back) } : {}) }
   r.run = {
     ...r.run,
     roi: input.roi ?? (r.run.roi?.kind === 'rect' ? { ...r.run.roi, x: r.run.roi.x + o.x, y: r.run.roi.y + o.y } : r.run.roi),
@@ -146,6 +147,14 @@ export async function detect(input: DetectInput, onProgress?: ProgressFn, signal
   }
   if (r.clusterLabels) r.clusterLabels = { ...r.clusterLabels, origin: o }
   return r
+}
+
+/** A ROI translated by (dx, dy). */
+function shiftRoi(roi: Roi | undefined, dx: number, dy: number): Roi | undefined {
+  if (!roi) return undefined
+  if (roi.kind === 'circle') return { ...roi, cx: roi.cx + dx, cy: roi.cy + dy }
+  if (roi.kind === 'rect') return { ...roi, x: roi.x + dx, y: roi.y + dy }
+  return { kind: 'polygon', points: roi.points.map((p) => ({ x: p.x + dx, y: p.y + dy })) }
 }
 
 async function detectLocal(input: DetectInput, onProgress?: ProgressFn, signal?: AbortSignal, cache?: DetectorCache): Promise<DetectResult> {
@@ -201,12 +210,15 @@ async function detectLocal(input: DetectInput, onProgress?: ProgressFn, signal?:
   timings.method = now() - t2
 
   // keep suggestions whose centre lies in the analysed region and inside the image,
-  // and never one on top of an existing colony (any group)
+  // and never one on top of an existing colony (any group). With a drawn region the
+  // centre must also lie inside the polygon itself (the mask includes a context band).
   const roiMask = prep.roi.mask
+  const region = input.roi?.kind === 'polygon' ? input.roi.points : null
   const keep = (s: { x: number; y: number; r: number }) => {
     const x = Math.floor(s.x * prep.scale)
     const y = Math.floor(s.y * prep.scale)
     if (!(x >= 0 && y >= 0 && x < roiMask.width && y < roiMask.height && roiMask.data[y * roiMask.width + x] === 1)) return false
+    if (region && !pointInPolygon(s.x, s.y, region)) return false
     if (!(s.x < input.originalWidth && s.y < input.originalHeight)) return false
     return !nearFixed(fixed, s.x * prep.scale, s.y * prep.scale, s.r * prep.scale, 0.5)
   }
@@ -331,7 +343,8 @@ interface MeasuredSeed {
 export function calibrate(prep: PreparedImage, input: Pick<DetectInput, 'seeds' | 'imageId'>, settings: DetectSettings): Calibrated {
   const scale = prep.scale
   const plateW = weightMask(prep.roi.plate)
-  const roiW = prep.roi.mask.data
+  // seeds and noise are measured on the plate interior, also when a region restricts the search
+  const roiW = prep.roi.inner.data
   const sigma1 = Math.max(4, 0.05 * prep.plateDiameter)
   const bg1 = labBackground(prep.lab, plateW, sigma1)
   const local = input.seeds.filter((s) => s.imageId === input.imageId)
@@ -353,7 +366,7 @@ export function calibrate(prep: PreparedImage, input: Pick<DetectInput, 'seeds' 
   const axis = colorAxisFromDiffs(diffs)
 
   const rMax = Math.max(6, 0.06 * prep.plateDiameter)
-  const regionDistance = distanceTransform(prep.roi.mask)
+  const regionDistance = distanceTransform(prep.roi.inner)
 
   const measureAll = (F: Plane, noise: number): MeasuredSeed[] => {
     const out: MeasuredSeed[] = []
@@ -414,7 +427,7 @@ export function calibrate(prep: PreparedImage, input: Pick<DetectInput, 'seeds' 
     const sigma2 = Math.max(4, 4 * priorA.rHi, 0.04 * prep.plateDiameter)
     const bg2 = labBackground(prep.lab, weightMask(prep.roi.plate, fg), sigma2)
     F = contrastPlane(prep.lab, bg2, axis)
-    noise = noiseSigma(F, weightMask(prep.roi.mask, fg))
+    noise = noiseSigma(F, weightMask(prep.roi.inner, fg))
     // remeasure local seeds on the better plane (patch seeds unchanged)
     measured = measureAll(F, noise)
     prior = radiusPrior(usableRadii(measured), settings.sMin)

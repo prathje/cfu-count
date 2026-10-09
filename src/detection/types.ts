@@ -240,8 +240,12 @@ export interface RoiReport {
   shape: 'round' | 'square' | 'other' | 'user'
   /** Rim band excluded inside the outline (original px). */
   marginPx: number
-  /** Analysed area in original px². */
+  /** Analysed area in original px² (with a region: the plate interior inside the polygon). */
   area: number
+  /** The user's polygon (original px) when the run was restricted to a drawn region. */
+  region?: { x: number; y: number }[]
+  /** Context band analysed around the region so cut clusters are fitted whole (original px). */
+  regionContextPx?: number
 }
 
 export interface DetectResult {
