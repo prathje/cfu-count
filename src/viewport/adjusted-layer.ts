@@ -331,6 +331,8 @@ export class AdjustedLayer {
     try {
       if (job.kind === 'histogram') {
         const hist = await this.processor.histogram(src, g.matrix)
+        // The image changed meanwhile (setLevels cleared the ranges): this histogram no longer applies.
+        if (this.disposed || !this.levels.some((l) => l.source === src)) return
         this.ranges.set(g.matrixKey, percentileRange(hist))
         for (const gen of [this.cur, this.stale]) if (gen && gen.matrixKey === g.matrixKey && !gen.lut) this.updateLut(gen)
         g.done.add(job.key)
@@ -373,7 +375,7 @@ export class AdjustedLayer {
       this.opts.onChange()
     } catch (err) {
       g.done.add(job.key) // don't retry in a loop; a settings change retries
-      if (job.kind === 'histogram') {
+      if (job.kind === 'histogram' && !this.disposed && this.levels.some((l) => l.source === src)) {
         this.ranges.set(g.matrixKey, null) // show without the stretch rather than nothing
         this.updateLut(g)
       }

@@ -149,3 +149,70 @@ describe('AdjustedLayer before the pyramid exists', () => {
     expect(calls).toEqual([])
   })
 })
+
+describe('AdjustedLayer image switch during auto contrast', () => {
+  it('does not apply the previous image’s histogram to the next image', async () => {
+    const calls: string[] = []
+    let releaseA!: () => void
+    const processor: AdjustProcessor = {
+      adjust: vi.fn(async (s, rect) => src(rect.w, rect.h, `adj-${(s as unknown as { name: string }).name}`)),
+      histogram: vi.fn(async (s) => {
+        const name = (s as unknown as { name: string }).name
+        calls.push(name)
+        if (name === 'A') await new Promise<void>((r) => (releaseA = r))
+        const h = new Uint32Array(256)
+        h[40] = 100
+        h[200] = 100
+        return h
+      }),
+      mode: () => 'main',
+      dispose: vi.fn(),
+    }
+    const layer = new AdjustedLayer({ onChange: () => {}, createProcessor: () => processor, now: () => 0, release: () => {} })
+    layer.setLevels([{ source: src(800, 600, 'A'), scale: 1 }])
+    layer.setAdjust(adj({ autoContrast: true }))
+    layer.drawable(1, whole)
+    await flush()
+    expect(calls).toEqual(['A'])
+    // Switch image while A's histogram is still running, then let it finish.
+    // (no frame in between: a fast histogram can finish before the next rAF)
+    layer.setLevels([{ source: src(800, 600, 'B'), scale: 1 }])
+    releaseA()
+    await flush()
+    await flush()
+    layer.drawable(1, whole)
+    await flush()
+    expect(calls).toEqual(['A', 'B'])
+  })
+})
+
+describe('AdjustedLayer histogram failure after an image switch', () => {
+  it('still stretches the next image when the old histogram fails late', async () => {
+    const calls: string[] = []
+    let failA!: () => void
+    const processor: AdjustProcessor = {
+      adjust: vi.fn(async (_s, rect) => src(rect.w, rect.h, 'adj')),
+      histogram: vi.fn(async (s) => {
+        const name = (s as unknown as { name: string }).name
+        calls.push(name)
+        if (name === 'A') await new Promise<void>((_, reject) => (failA = () => reject(new Error('closed'))))
+        return new Uint32Array(256)
+      }),
+      mode: () => 'main',
+      dispose: vi.fn(),
+    }
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const layer = new AdjustedLayer({ onChange: () => {}, createProcessor: () => processor, now: () => 0, release: () => {} })
+    layer.setLevels([{ source: src(800, 600, 'A'), scale: 1 }])
+    layer.setAdjust(adj({ autoContrast: true }))
+    layer.drawable(1, whole)
+    await flush()
+    layer.setLevels([{ source: src(800, 600, 'B'), scale: 1 }])
+    failA()
+    await flush()
+    layer.drawable(1, whole)
+    await flush()
+    expect(calls).toEqual(['A', 'B'])
+    warn.mockRestore()
+  })
+})
