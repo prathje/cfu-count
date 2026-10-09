@@ -15,12 +15,17 @@ import { editBlock } from '../model/policy'
 import { resolveHover, resolveTap, type InteractionScene } from './interaction'
 import { createPointIndex, type PointIndex } from './spatial-index'
 import { displayRadius } from './marker-size'
+import { displayKey } from '../model/display'
+import { AdjustedLayer } from './adjusted-layer'
+import { createAdjustProcessor } from './adjust-processor'
 import {
   buildPyramid,
   disposePyramid,
   drawAnnotationLayer,
   drawImageLayer,
   effectiveDpr,
+  visibleImageRect,
+  type ImageLayerTile,
   type ImageSourceLike,
   type PyramidLevel,
 } from './render'
@@ -97,6 +102,15 @@ export function Viewport(props: ViewportProps) {
   let index: PointIndex | null = null
   let indexed: readonly unknown[] | null = null
   const machine = new GestureMachine()
+  // Display-adjusted copies of the pyramid, computed lazily off the main thread.
+  const adjusted = new AdjustedLayer({
+    createProcessor: createAdjustProcessor,
+    onChange() {
+      root.dataset.adjustTimings = adjusted.timings.map((t) => `${t.kind}:${(t.px / 1e6).toFixed(1)}MP:${t.ms}ms`).join(' ')
+      dirtyImage = true
+      schedule()
+    },
+  })
 
   const [spaceHeld, setSpaceHeld] = createSignal(false)
   const [navigating, setNavigating] = createSignal(false)
@@ -126,7 +140,17 @@ export function Viewport(props: ViewportProps) {
     if (!ictx || !actx) return
     if (dirtyImage) {
       dirtyImage = false
-      drawImageLayer(ictx, levels, imageSize(), view, viewport, dpr)
+      let drawLevels = levels
+      let tiles: readonly ImageLayerTile[] = []
+      if (!props.compareOriginal && adjusted.active()) {
+        const d = adjusted.drawable(view.scale * dpr, visibleImageRect(imageSize(), view, viewport))
+        if (d) {
+          if (d.levels.length) drawLevels = d.levels
+          tiles = d.tiles
+        }
+      }
+      root.dataset.adjusted = String(drawLevels !== levels || tiles.length > 0)
+      drawImageLayer(ictx, drawLevels, imageSize(), view, viewport, dpr, tiles)
     }
     if (dirtyAnno) {
       dirtyAnno = false
@@ -213,14 +237,38 @@ export function Viewport(props: ViewportProps) {
           void buildPyramid(src, signal).then((built) => {
             if (signal.aborted) return disposePyramid(built)
             levels = built.map((l) => ({ source: l.source, scale: l.scale * base }))
+            adjusted.setLevels(levels)
             dirtyImage = true
             schedule()
           })
         }
+        adjusted.setLevels(levels)
         fit()
         dirtyImage = dirtyAnno = true
         schedule()
       },
+    ),
+  )
+
+  // Image adjustment: compared by value, so a new but equal object does no work.
+  createEffect(
+    on(
+      () => displayKey(props.adjust),
+      () => {
+        adjusted.setAdjust(props.adjust)
+        dirtyImage = true
+        schedule()
+      },
+    ),
+  )
+  createEffect(
+    on(
+      () => !!props.compareOriginal,
+      () => {
+        dirtyImage = true
+        schedule()
+      },
+      { defer: true },
     ),
   )
 
@@ -561,6 +609,7 @@ export function Viewport(props: ViewportProps) {
       if (raf) cancelAnimationFrame(raf)
       pyramidSignal.aborted = true
       disposePyramid(levels)
+      adjusted.dispose()
       // Release canvas backing stores promptly (matters for Safari's canvas memory cap).
       for (const c of [imageCanvas, surface]) {
         c.width = 0

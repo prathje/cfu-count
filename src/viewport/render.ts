@@ -55,6 +55,25 @@ export function pickLevel(levels: readonly PyramidLevel[], needed: number): Pyra
 /** Above this many screen CSS px per image px, show crisp pixels (no smoothing). */
 export const PIXELATED_ABOVE_SCALE = 4
 
+/** Visible part of the image in image px, clipped to the image (empty when x1 <= x0 or y1 <= y0). */
+export function visibleImageRect(imageSize: Size, view: ViewState, viewport: Size) {
+  return {
+    x0: Math.max(0, Math.floor(view.offsetX)),
+    y0: Math.max(0, Math.floor(view.offsetY)),
+    x1: Math.min(imageSize.width, Math.ceil(view.offsetX + viewport.width / view.scale)),
+    y1: Math.min(imageSize.height, Math.ceil(view.offsetY + viewport.height / view.scale)),
+  }
+}
+
+/** A bitmap drawn over the level at an image-px rectangle (display-adjusted full-resolution tiles). */
+export interface ImageLayerTile {
+  source: CanvasImageSource
+  x: number
+  y: number
+  w: number
+  h: number
+}
+
 export function drawImageLayer(
   ctx: CanvasRenderingContext2D,
   levels: readonly PyramidLevel[],
@@ -62,6 +81,7 @@ export function drawImageLayer(
   view: ViewState,
   viewport: Size,
   dpr: number,
+  tiles: readonly ImageLayerTile[] = [],
 ) {
   const canvas = ctx.canvas
   ctx.setTransform(1, 0, 0, 1, 0, 0)
@@ -69,11 +89,7 @@ export function drawImageLayer(
   if (levels.length === 0) return
 
   const level = pickLevel(levels, view.scale * dpr)
-  // Visible part of the image, in image px, clipped to the image.
-  const x0 = Math.max(0, Math.floor(view.offsetX))
-  const y0 = Math.max(0, Math.floor(view.offsetY))
-  const x1 = Math.min(imageSize.width, Math.ceil(view.offsetX + viewport.width / view.scale))
-  const y1 = Math.min(imageSize.height, Math.ceil(view.offsetY + viewport.height / view.scale))
+  const { x0, y0, x1, y1 } = visibleImageRect(imageSize, view, viewport)
   if (x1 <= x0 || y1 <= y0) return
 
   const k = view.scale * dpr
@@ -86,8 +102,9 @@ export function drawImageLayer(
   const sy = y0 * ls
   const sw = Math.min(level.source.width - sx, (x1 - x0) * ls)
   const sh = Math.min(level.source.height - sy, (y1 - y0) * ls)
-  if (sw <= 0 || sh <= 0) return
-  ctx.drawImage(level.source, sx, sy, sw, sh, x0, y0, sw / ls, sh / ls)
+  if (sw > 0 && sh > 0) ctx.drawImage(level.source, sx, sy, sw, sh, x0, y0, sw / ls, sh / ls)
+  // Tiles cover their exact rectangles; any anti-aliased seam shows the level underneath.
+  for (const t of tiles) ctx.drawImage(t.source, t.x, t.y, t.w, t.h)
 }
 
 /**

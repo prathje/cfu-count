@@ -2,7 +2,7 @@
  * Contract for the image viewport component (src/viewport). It is a pure view +
  * input component: it never mutates annotations itself; it reports intents.
  */
-import type { Annotation, AnnotationGroup, ID } from '../model/types'
+import type { Annotation, AnnotationGroup, ID, ImageDisplayAdjust } from '../model/types'
 import type { EditBlockReason } from '../model/policy'
 import type { Tool } from '../model/tool'
 
@@ -80,4 +80,12 @@ export interface ViewportProps {
    * Fit and auto-fit contain the image within the viewport minus these insets.
    */
   fitInsets?: { top: number; right: number; bottom: number; left: number }
+  /**
+   * Display-only adjustment of the IMAGE layer (model/display.ts). Markers and
+   * labels are drawn unfiltered; image bytes and coordinates are untouched.
+   * Absent / default = the original image. Compared by value (displayKey).
+   */
+  adjust?: ImageDisplayAdjust | null
+  /** While true, show the unadjusted image (hold-to-compare). */
+  compareOriginal?: boolean
 }
