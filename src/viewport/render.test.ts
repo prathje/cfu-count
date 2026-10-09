@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { contrastOutline, effectiveDpr, luminance, MAX_LAYER_PIXELS, pickLevel, type PyramidLevel } from './render'
+import { contrastOutline, effectiveDpr, luminance, MAX_LAYER_PIXELS, pickLevel, regionDimPath, regionScreenPath, type PyramidLevel } from './render'
 
 describe('effectiveDpr', () => {
   it('uses the device DPR when the backing store is small enough', () => {
@@ -37,5 +37,23 @@ describe('marker contrast', () => {
   it('outlines light colours dark and dark colours light', () => {
     expect(contrastOutline('#ffe14d')).toMatch(/^rgba\(0,0,0/)
     expect(contrastOutline('#1f3fbf')).toMatch(/^rgba\(255,255,255/)
+  })
+})
+
+describe('region paths', () => {
+  const view = { scale: 2, offsetX: 10, offsetY: 20 }
+  const tri = [
+    { x: 10, y: 20 },
+    { x: 20, y: 20 },
+    { x: 15, y: 30.04 },
+  ]
+  it('maps image px to screen px', () => {
+    expect(regionScreenPath(tri, view)).toBe('M0 0L20 0L10 20.1Z')
+    expect(regionScreenPath(tri, view, false)).toBe('M0 0L20 0L10 20.1')
+    expect(regionScreenPath(tri.slice(0, 1), view)).toBe('')
+  })
+  it('dims outside with an outer frame plus the polygon (evenodd)', () => {
+    expect(regionDimPath(tri, view, { width: 100, height: 50 })).toBe('M-4 -4H104V54H-4ZM0 0L20 0L10 20.1Z')
+    expect(regionDimPath([], view, { width: 100, height: 50 })).toBe('')
   })
 })

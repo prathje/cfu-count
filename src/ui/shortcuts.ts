@@ -42,7 +42,7 @@ export interface ShortcutBinding {
   command?: (key: string) => ShortcutCommand
 }
 
-const TOOL_LABEL: Record<Tool, string> = { add: 'Add colonies', erase: 'Erase colonies', pan: 'Pan' }
+const TOOL_LABEL: Record<Tool, string> = { add: 'Add colonies', erase: 'Erase colonies', pan: 'Pan', region: 'Select a region (drag a loop; Shift+drag: rectangle)' }
 /** Hold to show the unadjusted image (KeyboardEvent.key). */
 export const COMPARE_KEY = '\\'
 /**

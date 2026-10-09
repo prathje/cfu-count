@@ -16,6 +16,7 @@ import { resolveHover, resolveTap, suggestionAt, type InteractionScene, type Sug
 import { createPointIndex, type PointIndex } from './spatial-index'
 import { displayRadius } from './marker-size'
 import { displayKey } from '../model/display'
+import { finishRegion, type Pt, type RegionShape } from '../model/region'
 import { AdjustedLayer } from './adjusted-layer'
 import { attachInputDebug, inputDebugEnabled } from './input-debug'
 import { createAdjustProcessor } from './adjust-processor'
@@ -23,7 +24,10 @@ import {
   buildPyramid,
   disposePyramid,
   drawAnnotationLayer,
+  drawCompareLayer,
   drawImageLayer,
+  regionDimPath,
+  regionScreenPath,
   drawSuggestionLayer,
   effectiveDpr,
   suggestionScreenRadius,
@@ -82,11 +86,19 @@ function naturalSize(src: ImageSourceLike): Size {
   return { width: src.width, height: src.height }
 }
 
+/** Rectangle preview corners while dragging (the stored polygon comes from model/region). */
+function rectCorners(a: Pt, b: Pt): Pt[] {
+  return [a, { x: b.x, y: a.y }, b, { x: a.x, y: b.y }]
+}
+
 export function Viewport(props: ViewportProps) {
   let root!: HTMLDivElement
   let imageCanvas!: HTMLCanvasElement
   let surface!: HTMLCanvasElement
   let hoverEl!: HTMLDivElement
+  let regionDim!: SVGPathElement
+  let regionHalo!: SVGPathElement
+  let regionLine!: SVGPathElement
 
   // Mutable render state (deliberately not reactive: changes go through schedule()).
   let view: ViewState = { scale: 1, offsetX: 0, offsetY: 0 }
@@ -103,6 +115,10 @@ export function Viewport(props: ViewportProps) {
   let lastWheel: { intent: WheelIntent; time: number } | null = null
   let gestureScale = 1
   let gestureActive = false
+  // Region lasso in progress (image px) and the last accepted screen sample.
+  let lasso: { points: Pt[]; shape: RegionShape; lastX: number; lastY: number } | null = null
+  let shiftAtDown = false
+  let dirtyRegion = true
   // Spatial index over all annotations, rebuilt lazily on the first query after a change.
   let index: PointIndex | null = null
   let indexed: readonly unknown[] | null = null
@@ -130,6 +146,7 @@ export function Viewport(props: ViewportProps) {
     if (navigating()) return 'grabbing'
     if (props.pickMode && !spaceHeld()) return 'crosshair'
     if (props.tool === 'pan' || spaceHeld()) return 'grab'
+    if (props.tool === 'region') return 'crosshair'
     if (editBlock(activeGroup())) return 'not-allowed'
     return props.tool === 'erase' ? ERASER_CURSOR : 'crosshair'
   })
@@ -168,9 +185,15 @@ export function Viewport(props: ViewportProps) {
       const clusters = props.reviewClusters ?? []
       const sugDrawn =
         sug.length || clusters.length ? drawSuggestionLayer(actx, sug, clusters, props.suggestionColor ?? '#ffffff', view, viewport, dpr) : 0
+      const cmp = props.compareMarks ?? []
+      root.dataset.compareDrawn = String(cmp.length ? drawCompareLayer(actx, cmp, view, viewport, dpr) : 0)
       root.dataset.drawMs = (performance.now() - t0).toFixed(2)
       root.dataset.markersDrawn = String(stats.drawn)
       root.dataset.suggestionsDrawn = String(sugDrawn)
+    }
+    if (dirtyRegion) {
+      dirtyRegion = false
+      drawRegion()
     }
     updateHover()
     if (viewChanged) {
@@ -187,7 +210,7 @@ export function Viewport(props: ViewportProps) {
     if (viewsEqual(v, view)) return
     view = v
     clearPulses()
-    dirtyImage = dirtyAnno = true
+    dirtyImage = dirtyAnno = dirtyRegion = true
     viewChanged = true
     schedule()
   }
@@ -230,7 +253,7 @@ export function Viewport(props: ViewportProps) {
     }
     if (old.width === 0 || old.height === 0 || fitted) fit()
     else setView(resizeView(view, old, next), false)
-    dirtyImage = dirtyAnno = true
+    dirtyImage = dirtyAnno = dirtyRegion = true
     viewChanged = true
     // Draw now (ResizeObserver runs before paint) so resizing never shows a blank canvas.
     if (raf) cancelAnimationFrame(raf)
@@ -252,6 +275,8 @@ export function Viewport(props: ViewportProps) {
         disposePyramid(levels)
         levels = []
         machine.reset()
+        lasso = null
+        dirtyRegion = true
         setNavigating(false)
         if (img && props.imageWidth > 0) {
           const src = img as ImageSourceLike
@@ -334,6 +359,46 @@ export function Viewport(props: ViewportProps) {
       { defer: true },
     ),
   )
+
+  createEffect(
+    on(
+      () => props.compareMarks,
+      () => {
+        dirtyAnno = true
+        schedule()
+      },
+      { defer: true },
+    ),
+  )
+  createEffect(
+    on(
+      () => props.region,
+      () => {
+        dirtyRegion = true
+        schedule()
+      },
+    ),
+  )
+
+  /** Region overlay: the lasso being drawn, else the committed region (SVG paths). */
+  function drawRegion() {
+    if (lasso) {
+      const pts = lasso.shape === 'rect' && lasso.points.length > 1 ? rectCorners(lasso.points[0], lasso.points.at(-1)!) : lasso.points
+      const d = regionScreenPath(pts, view, lasso.shape === 'rect')
+      regionDim.setAttribute('d', '')
+      regionHalo.setAttribute('d', d)
+      regionLine.setAttribute('d', d)
+      root.dataset.region = 'drawing'
+      return
+    }
+    const poly = props.region
+    const has = !!poly && poly.length >= 3
+    regionDim.setAttribute('d', has ? regionDimPath(poly!, view, viewport) : '')
+    const d = has ? regionScreenPath(poly!, view) : ''
+    regionHalo.setAttribute('d', d)
+    regionLine.setAttribute('d', d)
+    root.dataset.region = has ? String(poly!.length) : ''
+  }
 
   /** Suggestion under a screen point, when suggestion taps are enabled. */
   function suggestionHit(sx: number, sy: number, pointer: PointerKind): SuggestionPoint | null {
@@ -485,9 +550,41 @@ export function Viewport(props: ViewportProps) {
           // Reviewing suggestions never edits annotations, so a finger may toggle them.
           const s = suggestionHit(e.x, e.y, 'touch')
           if (s) props.onSuggestionTap?.(s.index)
-          else if (props.tool !== 'pan') props.onBlocked?.('touch-navigates')
+          else if (props.tool !== 'pan' && props.tool !== 'region') props.onBlocked?.('touch-navigates')
           break
         }
+        case 'lassoStart': {
+          const p = screenToImage(view, e.x, e.y)
+          lasso = { points: [p], shape: shiftAtDown ? 'rect' : props.regionShape ?? 'lasso', lastX: e.x, lastY: e.y }
+          dirtyRegion = true
+          schedule()
+          break
+        }
+        case 'lassoMove':
+          if (lasso && Math.hypot(e.x - lasso.lastX, e.y - lasso.lastY) >= 2) {
+            lasso.points.push(screenToImage(view, e.x, e.y))
+            lasso.lastX = e.x
+            lasso.lastY = e.y
+            dirtyRegion = true
+            schedule()
+          }
+          break
+        case 'lassoEnd': {
+          if (!lasso) break
+          lasso.points.push(screenToImage(view, e.x, e.y))
+          const done = finishRegion({ points: lasso.points, shape: lasso.shape, scale: view.scale, imageWidth: props.imageWidth, imageHeight: props.imageHeight })
+          lasso = null
+          dirtyRegion = true
+          schedule()
+          if (done.ok) props.onRegion?.(done.polygon)
+          else props.onRegionTooSmall?.()
+          break
+        }
+        case 'lassoCancel':
+          lasso = null
+          dirtyRegion = true
+          schedule()
+          break
       }
     }
     setNavigating(machine.navigating)
@@ -524,6 +621,7 @@ export function Viewport(props: ViewportProps) {
       root.dataset.pointerFocus = ''
       root.focus({ preventScroll: true })
     }
+    shiftAtDown = e.shiftKey
     try {
       surface.setPointerCapture(e.pointerId)
     } catch {
@@ -647,6 +745,13 @@ export function Viewport(props: ViewportProps) {
     apply(machine.reset())
     setSpaceHeld(false)
   }
+  /** Escape while drawing a region drops the lasso (before popovers/panels see the key). */
+  function onLassoEscape(e: KeyboardEvent) {
+    if (e.key !== 'Escape' || !machine.lassoing) return
+    e.preventDefault()
+    e.stopPropagation()
+    apply(machine.abortLasso())
+  }
   function onWindowKeyDown(e: KeyboardEvent) {
     if (e.code !== 'Space' || isEditableTarget(e.target)) return
     if (e.target === root) e.preventDefault() // no page scroll from the focused viewport
@@ -688,6 +793,7 @@ export function Viewport(props: ViewportProps) {
     root.addEventListener('keydown', onKeyDown)
     root.addEventListener('blur', onBlur)
     window.addEventListener('keydown', onWindowKeyDown)
+    window.addEventListener('keydown', onLassoEscape, true)
     window.addEventListener('keyup', onWindowKeyUp)
     window.addEventListener('blur', clearTransient)
     document.addEventListener('visibilitychange', onVisibility)
@@ -714,6 +820,7 @@ export function Viewport(props: ViewportProps) {
       mq?.removeEventListener('change', onDpr)
       clearTimeout(touchSyncTimer)
       window.removeEventListener('keydown', onWindowKeyDown)
+      window.removeEventListener('keydown', onLassoEscape, true)
       window.removeEventListener('keyup', onWindowKeyUp)
       window.removeEventListener('blur', clearTransient)
       document.removeEventListener('visibilitychange', onVisibility)
@@ -747,6 +854,11 @@ export function Viewport(props: ViewportProps) {
         role="img"
         aria-label={props.label ?? 'Plate image with colony markers'}
       />
+      <svg class="cfu-viewport__region" aria-hidden="true">
+        <path ref={regionDim} class="cfu-viewport__region-dim" fill-rule="evenodd" />
+        <path ref={regionHalo} class="cfu-viewport__region-halo" />
+        <path ref={regionLine} class="cfu-viewport__region-line" />
+      </svg>
       <div ref={hoverEl} class="cfu-viewport__hover" style={{ display: 'none' }} />
     </div>
   )

@@ -5,6 +5,7 @@
 import type { Annotation, AnnotationGroup, ID, ImageDisplayAdjust } from '../model/types'
 import type { EditBlockReason } from '../model/policy'
 import type { Tool } from '../model/tool'
+import type { Pt, RegionShape } from '../model/region'
 
 export type { Tool } from '../model/tool'
 
@@ -79,6 +80,15 @@ export interface ReviewClusterMark {
   kind: 'review' | 'too-large'
 }
 
+/** One mark of the detector comparison overlay (image px; r = colony radius in image px). */
+export interface CompareMark {
+  x: number
+  y: number
+  r: number
+  /** missed = manual mark the detector did not find; extra = detection without a manual mark; matched = both. */
+  kind: 'missed' | 'extra' | 'matched'
+}
+
 export interface ViewportProps {
   /** Decoded image; null while loading. */
   image: ImageBitmap | HTMLImageElement | null
@@ -149,4 +159,24 @@ export interface ViewportProps {
    */
   pickMode?: boolean
   onPick?(x: number, y: number): void
+  /**
+   * Selection region to draw (closed polygon, image px): dashed outline, the rest
+   * of the image subtly dimmed. Read-only; null/absent = none. Hidden while a new
+   * one is being drawn.
+   */
+  region?: readonly Pt[] | null
+  /**
+   * Region tool shape: freehand loop (default) or rectangle. Holding Shift when
+   * the drag starts draws a rectangle either way.
+   */
+  regionShape?: RegionShape
+  /**
+   * Region tool: a drawn region was completed (closed, simplified, clamped to the
+   * image, image px). Never accompanied by onAdd/onErase: a region never edits.
+   */
+  onRegion?(polygon: Pt[]): void
+  /** Region tool: the drawn loop was below the minimum size and was discarded. */
+  onRegionTooSmall?(): void
+  /** Detector comparison overlay (immutable snapshot, compared by identity). */
+  compareMarks?: readonly CompareMark[]
 }

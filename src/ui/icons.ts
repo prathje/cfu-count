@@ -70,3 +70,6 @@ import { mergeProps } from 'solid-js'
 export const CircleFilled: IconComponent = (props) => CircleIcon(mergeProps(props, { fill: 'currentColor' }))
 export { default as Settings } from 'lucide-solid/icons/settings'
 export { default as Volume2 } from 'lucide-solid/icons/volume-2'
+export { default as Lasso } from 'lucide-solid/icons/lasso'
+export { default as SquareDashed } from 'lucide-solid/icons/square-dashed'
+export { default as GitCompare } from 'lucide-solid/icons/git-compare'

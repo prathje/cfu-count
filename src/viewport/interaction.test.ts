@@ -48,6 +48,13 @@ describe('edit blocking', () => {
   it('pan tool taps do nothing', () => {
     expect(resolveTap(scene([], [g1], 'g1'), 'pan', 5, 5, 'mouse')).toEqual({ kind: 'none' })
   })
+
+  it('region tool taps never add, erase or refuse (even on a locked group or a marker)', () => {
+    const a = ann('a', 5, 5)
+    expect(resolveTap(scene([a], [g1], 'g1'), 'region', 5, 5, 'mouse')).toEqual({ kind: 'none' })
+    expect(resolveTap(scene([], [group('g1', { locked: true })], 'g1'), 'region', 5, 5, 'touch')).toEqual({ kind: 'none' })
+    expect(resolveHover(scene([a], [g1], 'g1'), 'region', 5, 5, 'pen')).toEqual({ kind: 'none' })
+  })
 })
 
 describe('add', () => {

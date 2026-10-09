@@ -296,3 +296,112 @@ describe('navTap (finger tap while touch annotation is off)', () => {
     expect(taps(fx)).toHaveLength(1)
   })
 })
+
+describe('region tool (lasso)', () => {
+  const region: GestureContext = { tool: 'region', touchAnnotates: false, spaceHeld: false }
+  const kinds = (fx: GestureEffect[]) => fx.filter((e) => e.type !== 'hoverEnd' && e.type !== 'hover').map((e) => e.type)
+
+  it('mouse: drag past the threshold draws (start at the press point, moves, end on release); never pans or taps', () => {
+    m.down(s(1, 'mouse', 10, 10), region)
+    expect(m.lassoing).toBe(false)
+    expect(m.move(s(1, 'mouse', 12, 10))).toEqual([]) // within the threshold
+    const fx = m.move(s(1, 'mouse', 30, 10))
+    expect(fx).toEqual([
+      { type: 'lassoStart', x: 10, y: 10, pointerType: 'mouse' },
+      { type: 'lassoMove', x: 30, y: 10 },
+    ])
+    expect(m.lassoing).toBe(true)
+    expect(m.navigating).toBe(false)
+    expect(m.move(s(1, 'mouse', 30, 40))).toEqual([{ type: 'lassoMove', x: 30, y: 40 }])
+    expect(m.up(s(1, 'mouse', 10, 40))).toEqual([{ type: 'lassoEnd', x: 10, y: 40 }])
+    expect(m.modeKind).toBe('idle')
+  })
+
+  it('a press without movement is still a tap (suggestion rings), never a lasso', () => {
+    m.down(s(1, 'mouse', 10, 10), region)
+    expect(m.up(s(1, 'mouse', 10, 10))).toEqual([{ type: 'tap', x: 10, y: 10, pointerType: 'mouse' }])
+  })
+
+  it('middle button and Space still pan', () => {
+    m.down(s(1, 'mouse', 0, 0, { button: 1, buttons: 4 }), region)
+    expect(pans(m.move(s(1, 'mouse', 20, 0)))).toHaveLength(1)
+    m.up(s(1, 'mouse', 20, 0, { button: 1 }))
+    m.down(s(2, 'mouse', 0, 0), { ...region, spaceHeld: true })
+    expect(kinds(m.move(s(2, 'mouse', 20, 0)))).toEqual(['pan'])
+  })
+
+  it('Apple Pencil draws like the mouse (pen threshold)', () => {
+    m.down(s(1, 'pen', 100, 100), region)
+    expect(m.move(s(1, 'pen', 100 + DRAG_THRESHOLD.pen, 100))).toEqual([])
+    expect(kinds(m.move(s(1, 'pen', 120, 100)))).toEqual(['lassoStart', 'lassoMove'])
+    expect(kinds(m.up(s(1, 'pen', 120, 130)))).toEqual(['lassoEnd'])
+  })
+
+  it('one finger draws even with touch annotation off', () => {
+    m.down(s(1, 'touch', 50, 50), region)
+    expect(kinds(m.move(s(1, 'touch', 80, 50)))).toEqual(['lassoStart', 'lassoMove'])
+    expect(kinds(m.up(s(1, 'touch', 80, 80)))).toEqual(['lassoEnd'])
+  })
+
+  it('a second finger cancels the lasso and pinches; nothing is committed when the fingers lift', () => {
+    m.down(s(1, 'touch', 50, 50), region)
+    m.move(s(1, 'touch', 80, 50))
+    const fx = m.down(s(2, 'touch', 200, 50), region)
+    expect(kinds(fx)).toEqual(['lassoCancel'])
+    expect(m.modeKind).toBe('pinch')
+    expect(kinds(m.move(s(2, 'touch', 260, 50)))).toEqual(['pinch'])
+    expect(kinds(m.up(s(1, 'touch', 80, 50)))).toEqual([])
+    expect(kinds(m.move(s(2, 'touch', 270, 60)))).toEqual(['pan']) // remaining finger pans, never draws
+    expect(kinds(m.up(s(2, 'touch', 270, 60)))).toEqual([])
+  })
+
+  it('a second finger before the threshold starts a pinch without any lasso effect', () => {
+    m.down(s(1, 'touch', 50, 50), region)
+    expect(kinds(m.down(s(2, 'touch', 150, 50), region))).toEqual([])
+    expect(m.modeKind).toBe('pinch')
+  })
+
+  it('a pen landing cancels a finger lasso and starts its own', () => {
+    m.down(s(1, 'touch', 50, 50), region)
+    m.move(s(1, 'touch', 80, 50))
+    expect(kinds(m.down(s(2, 'pen', 300, 300), region))).toEqual(['lassoCancel'])
+    expect(kinds(m.move(s(1, 'touch', 90, 90)))).toEqual([]) // palm ignored
+    expect(kinds(m.move(s(2, 'pen', 330, 300)))).toEqual(['lassoStart', 'lassoMove'])
+  })
+
+  it('fingers navigate in the region tool while a pen was used recently (palm)', () => {
+    m.down(s(9, 'pen', 0, 0), region)
+    m.up(s(9, 'pen', 0, 0))
+    t += 1000
+    m.down(s(1, 'touch', 50, 50), region)
+    expect(kinds(m.move(s(1, 'touch', 80, 50)))).toEqual(['pan'])
+    m.up(s(1, 'touch', 80, 50))
+    t += PEN_RECENT_MS
+    m.down(s(2, 'touch', 50, 50), region)
+    expect(kinds(m.move(s(2, 'touch', 80, 50)))).toEqual(['lassoStart', 'lassoMove'])
+  })
+
+  it('pointercancel, reset and abortLasso (Escape) cancel; the aborted pointer stays inert', () => {
+    m.down(s(1, 'pen', 0, 0), region)
+    m.move(s(1, 'pen', 40, 0))
+    expect(m.cancel(1)).toEqual([{ type: 'lassoCancel' }])
+
+    m.down(s(2, 'mouse', 0, 0), region)
+    m.move(s(2, 'mouse', 40, 0))
+    expect(kinds(m.reset())).toEqual(['lassoCancel'])
+
+    m.down(s(3, 'mouse', 0, 0), region)
+    m.move(s(3, 'mouse', 40, 0))
+    expect(m.abortLasso()).toEqual([{ type: 'lassoCancel' }])
+    expect(m.move(s(3, 'mouse', 60, 0))).toEqual([])
+    expect(m.up(s(3, 'mouse', 60, 0))).toEqual([])
+    expect(m.abortLasso()).toEqual([])
+  })
+
+  it('a ghost finger dropped by syncTouches abandons its lasso', () => {
+    m.down(s(1, 'touch', 50, 50), region)
+    m.move(s(1, 'touch', 90, 50))
+    expect(m.syncTouches(0)).toEqual([{ type: 'lassoCancel' }])
+    expect(m.modeKind).toBe('idle')
+  })
+})

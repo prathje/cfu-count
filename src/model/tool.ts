@@ -1,5 +1,9 @@
-/** Annotation tools offered by the toolbar, the shortcuts and the viewport. */
-export type Tool = 'add' | 'erase' | 'pan'
+/**
+ * Tools offered by the toolbar, the shortcuts and the viewport. `region` selects
+ * an area of the image (lasso or rectangle); it never creates or changes
+ * annotations itself (see model/region.ts).
+ */
+export type Tool = 'add' | 'erase' | 'pan' | 'region'
 
 /**
  * Keyboard keys selecting each tool (lower-case `KeyboardEvent.key`). The first
@@ -9,6 +13,7 @@ export const TOOL_KEYS: Readonly<Record<Tool, readonly string[]>> = {
   add: ['a'],
   erase: ['e'],
   pan: ['h', 'p'],
+  region: ['r'],
 }
 
 /** Key shown in tooltips / hints for a tool, e.g. "A". */

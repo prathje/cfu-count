@@ -42,7 +42,7 @@ export type TapIntent =
 
 /**
  * Resolve a completed tap at screen (sx, sy).
- *  - Pan tool: nothing.
+ *  - Pan and Region tools: nothing (a region is drawn by dragging; it never edits).
  *  - Hidden/locked/no active group: blocked (both add and erase).
  *  - Add: inside the image bounds only; never refused for being near another
  *    marker (adds are undoable), but the overlapping marker is reported for a cue.
@@ -55,7 +55,7 @@ export function resolveTap(
   sy: number,
   pointer: PointerKind,
 ): TapIntent {
-  if (tool === 'pan') return { kind: 'none' }
+  if (tool === 'pan' || tool === 'region') return { kind: 'none' }
   const g = scene.activeGroup
   const block = editBlock(g)
   if (block || !g) return { kind: 'blocked', reason: block ?? 'no-group' }
@@ -113,7 +113,7 @@ export function resolveHover(
   pointer: PointerKind,
 ): HoverPreview {
   const g = scene.activeGroup
-  if (tool === 'pan' || editBlock(g) || !g) return { kind: 'none' }
+  if (tool === 'pan' || tool === 'region' || editBlock(g) || !g) return { kind: 'none' }
   const r = displayRadius(g.size, scene.view.scale)
   if (tool === 'add') return { kind: 'add', x: sx, y: sy, r: Math.max(3, r), color: g.color }
   const p = screenToImage(scene.view, sx, sy)

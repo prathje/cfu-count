@@ -116,3 +116,34 @@
   white-space: pre;
   overflow: hidden;
 }
+
+/* Selection region (Region tool): dim outside, dashed outline over a dark halo. */
+.cfu-viewport__region {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+.cfu-viewport__region-dim {
+  fill: rgba(10, 14, 20, 0.32);
+  stroke: none;
+}
+.cfu-viewport__region-halo {
+  fill: none;
+  stroke: rgba(0, 0, 0, 0.6);
+  stroke-width: 3.5;
+  stroke-linejoin: round;
+}
+.cfu-viewport__region-line {
+  fill: none;
+  stroke: #fff;
+  stroke-width: 1.75;
+  stroke-dasharray: 7 5;
+  stroke-linejoin: round;
+}
+.cfu-viewport[data-region='drawing'] .cfu-viewport__region-line {
+  stroke: #ffd24a;
+  stroke-dasharray: none;
+}

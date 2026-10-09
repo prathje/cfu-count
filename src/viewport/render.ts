@@ -614,3 +614,78 @@ export function drawSuggestionLayer(
   ctx.restore()
   return drawn
 }
+
+// ---------------------------------------------------------------------------
+// Region (selection polygon) and detector comparison
+// ---------------------------------------------------------------------------
+
+/**
+ * SVG path data of an image-px polyline in screen CSS px (1 decimal). `closed`
+ * appends Z. Empty string for fewer than two points.
+ */
+export function regionScreenPath(points: readonly { x: number; y: number }[], view: ViewState, closed = true): string {
+  if (points.length < 2) return ''
+  const { scale, offsetX, offsetY } = view
+  const f = (v: number) => (Math.round(v * 10) / 10).toString()
+  let d = ''
+  points.forEach((p, i) => {
+    d += `${i ? 'L' : 'M'}${f((p.x - offsetX) * scale)} ${f((p.y - offsetY) * scale)}`
+  })
+  return closed ? `${d}Z` : d
+}
+
+/** Path data that dims everything in the viewport OUTSIDE the polygon (fill-rule evenodd). */
+export function regionDimPath(points: readonly { x: number; y: number }[], view: ViewState, viewport: Size): string {
+  const inner = regionScreenPath(points, view, true)
+  if (!inner) return ''
+  // generous outer frame: never shows an undimmed edge while panning
+  const m = 4
+  return `M${-m} ${-m}H${viewport.width + m}V${viewport.height + m}H${-m}Z${inner}`
+}
+
+export interface CompareMarkLike {
+  x: number
+  y: number
+  r: number
+  kind: 'missed' | 'extra' | 'matched'
+}
+
+const MISSED_COLOR = '#ff8a00'
+const EXTRA_COLOR = '#22d3ee'
+const MATCHED_COLOR = '#4ade80'
+
+/**
+ * Detector comparison overlay, ON TOP of the annotation layer: missed manual marks
+ * (solid orange ring), extra detections (dashed cyan ring) and matches (thin
+ * green ring). Shape differs as well as colour. Returns the number drawn.
+ */
+export function drawCompareLayer(ctx: CanvasRenderingContext2D, marks: readonly CompareMarkLike[], view: ViewState, viewport: Size, dpr: number): number {
+  const { scale, offsetX, offsetY } = view
+  let drawn = 0
+  ctx.save()
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+  ctx.globalAlpha = 1
+  ctx.lineCap = 'round'
+  for (const k of ['matched', 'extra', 'missed'] as const) {
+    for (const m of marks) {
+      if (m.kind !== k) continue
+      const r = Math.max(k === 'matched' ? 5 : 7, m.r * scale + (k === 'matched' ? 1 : 3))
+      const x = (m.x - offsetX) * scale
+      const y = (m.y - offsetY) * scale
+      if (x < -r || y < -r || x > viewport.width + r || y > viewport.height + r) continue
+      drawn++
+      ctx.beginPath()
+      ctx.arc(x, y, r, 0, Math.PI * 2)
+      ctx.setLineDash([])
+      ctx.strokeStyle = 'rgba(0,0,0,0.6)'
+      ctx.lineWidth = k === 'matched' ? 2.5 : 4.5
+      ctx.stroke()
+      if (k === 'extra') ctx.setLineDash([4, 3])
+      ctx.strokeStyle = k === 'missed' ? MISSED_COLOR : k === 'extra' ? EXTRA_COLOR : MATCHED_COLOR
+      ctx.lineWidth = k === 'matched' ? 1.25 : 2.25
+      ctx.stroke()
+    }
+  }
+  ctx.restore()
+  return drawn
+}

@@ -8,6 +8,7 @@ import {
   Eye,
   EyeOff,
   Hand,
+  Lasso,
   Lock,
   LockOpen,
   MoreHorizontal,
@@ -33,6 +34,9 @@ export const TOOLS: readonly { tool: Tool; label: string; icon: IconComponent; k
   { tool: 'erase', label: 'Erase', icon: Eraser, key: toolHintKey('erase') },
   { tool: 'pan', label: 'Pan', icon: Hand, key: toolHintKey('pan') },
 ]
+
+/** Region selection: a trailing tool next to Find similar (not part of the approved order 1–9). */
+export const REGION_TOOL = { tool: 'region' as const, label: 'Region', icon: Lasso, key: toolHintKey('region') }
 
 /** The single-row annotation toolbar floating over the image. Order is fixed by the approved layout. */
 export interface FloatingToolbarProps {
@@ -64,6 +68,11 @@ export interface FloatingToolbarProps {
    * panel, which explains the reason and offers the fix).
    */
   assist?: { open: boolean; blockedReason: string | null; shortcut: string; onClick(): void }
+  /**
+   * Region selection entry, trailing after Find similar (More popover / tool
+   * switcher in narrow layouts). `active` = the Region tool is selected.
+   */
+  region?: { active: boolean; onClick(): void }
 }
 
 export function FloatingToolbar(props: FloatingToolbarProps) {
@@ -72,7 +81,7 @@ export function FloatingToolbar(props: FloatingToolbarProps) {
   const toolPop = createPopoverState()
   const labelled = () => props.mode === 'full'
   const g = () => props.activeGroup
-  const activeTool = () => TOOLS.find((t) => t.tool === props.tool)!
+  const activeTool = () => TOOLS.find((t) => t.tool === props.tool) ?? REGION_TOOL
 
   const stylePanel = () => (
     <Show when={g()} fallback={<p class="pop-empty">Select a group to change its appearance.</p>}>
@@ -176,6 +185,22 @@ export function FloatingToolbar(props: FloatingToolbarProps) {
                   />
                 )}
               </For>
+              <Show when={props.region}>
+                {(r) => (
+                  <MenuItem
+                    role="menuitemradio"
+                    aria-checked={r().active}
+                    checked={r().active}
+                    icon={REGION_TOOL.icon}
+                    label="Region (select an area)"
+                    trailing={<kbd>{REGION_TOOL.key}</kbd>}
+                    onClick={() => {
+                      if (!r().active) r().onClick()
+                      toolPop.close()
+                    }}
+                  />
+                )}
+              </Show>
             </Popover>
           </>
         }
@@ -229,6 +254,21 @@ export function FloatingToolbar(props: FloatingToolbarProps) {
                   </div>
                 )}
               </Show>
+              <Show when={props.region && props.mode !== 'tiny'}>
+                <div class="more-assist">
+                  <Button
+                    icon={REGION_TOOL.icon}
+                    variant={props.region!.active ? 'subtle' : 'ghost'}
+                    aria-pressed={props.region!.active}
+                    onClick={() => {
+                      more.close()
+                      props.region!.onClick()
+                    }}
+                  >
+                    Region (select an area)
+                  </Button>
+                </div>
+              </Show>
               <div class="more-history">
                 <Button icon={Undo} disabled={!props.canUndo} onClick={() => props.onUndo()}>
                   Undo
@@ -263,6 +303,20 @@ export function FloatingToolbar(props: FloatingToolbarProps) {
                 onClick={() => a().onClick()}
               />
             </>
+          )}
+        </Show>
+        <Show when={props.region}>
+          {(r) => (
+            <ToggleButton
+              icon={REGION_TOOL.icon}
+              label={labelled() ? 'Region' : 'Region: select an area'}
+              showLabel={labelled()}
+              shortcut={REGION_TOOL.key}
+              hint="Select an area to count, clear or check against the detector"
+              pressed={r().active}
+              class="btn--tool btn--region"
+              onClick={() => r().onClick()}
+            />
           )}
         </Show>
       </Show>

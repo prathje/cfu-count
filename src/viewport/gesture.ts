@@ -18,6 +18,13 @@
  *    If touchAnnotates is OFF (and no pen was seen recently), a one-finger tap
  *    still pans nothing but emits `navTap` so the UI can explain why nothing
  *    was added. It never edits.
+ *  - Region tool (lasso): a drag past the threshold by the primary mouse button,
+ *    the pen, or ONE finger (touchAnnotates is irrelevant: a region never edits;
+ *    fingers still only navigate while a pen was seen recently) draws a lasso:
+ *    lassoStart, lassoMove…, lassoEnd on release. A second finger cancels the
+ *    lasso (lassoCancel) and starts a pinch; a pen landing cancels a finger
+ *    lasso; pointercancel / reset / abortLasso (Escape) cancel it. A press that
+ *    never moves is still a tap (it can toggle a suggestion ring).
  */
 import type { Tool } from './api'
 
@@ -62,6 +69,13 @@ export type GestureEffect =
    * add/erase, no recent pen). Lets the UI offer to turn touch annotation on.
    */
   | { type: 'navTap'; x: number; y: number }
+  /** Region tool: a lasso started at (x, y) (the press position) after a drag past the threshold. */
+  | { type: 'lassoStart'; x: number; y: number; pointerType: PointerKind }
+  | { type: 'lassoMove'; x: number; y: number }
+  /** The lasso pointer lifted at (x, y): close and commit the path. */
+  | { type: 'lassoEnd'; x: number; y: number }
+  /** The lasso was abandoned (second finger, pen, cancel, Escape): discard the path. */
+  | { type: 'lassoCancel' }
 
 /** Movement (CSS px) beyond which a press becomes a drag instead of a tap. */
 export const DRAG_THRESHOLD: Record<PointerKind, number> = { mouse: 4, pen: 8, touch: 10 }
@@ -86,10 +100,12 @@ interface Tracked {
 
 type Mode =
   | { kind: 'idle' }
-  | { kind: 'pending'; id: number }
+  /** `lasso`: a drag would draw a region instead of panning. */
+  | { kind: 'pending'; id: number; lasso?: boolean }
   /** `tapCandidate`: a finger that would have annotated with touchAnnotates on (see navTap). */
   | { kind: 'drag'; id: number; tapCandidate?: boolean }
   | { kind: 'pinch'; a: number; b: number; dist: number; mx: number; my: number }
+  | { kind: 'lasso'; id: number }
 
 /** Current recogniser state, for cursors and tests. */
 export type GestureMode = Mode['kind']
@@ -110,6 +126,11 @@ export class GestureMachine {
   /** True while a pan/pinch is in progress (for the grabbing cursor). */
   get navigating(): boolean {
     return this.mode.kind === 'drag' || this.mode.kind === 'pinch'
+  }
+
+  /** True while a region lasso is being drawn. */
+  get lassoing(): boolean {
+    return this.mode.kind === 'lasso'
   }
 
   get activePointerCount(): number {
@@ -140,17 +161,32 @@ export class GestureMachine {
     let excess = touches.length - Math.max(0, activeTouches)
     if (excess <= 0) return []
     touches.sort((a, b) => a.lastTime - b.lastTime)
+    const fx: GestureEffect[] = []
     for (const t of touches) {
       if (excess-- <= 0) break
-      this.release(t.id)
+      fx.push(...this.release(t.id))
     }
-    return []
+    return fx
   }
 
   reset(): GestureEffect[] {
+    const fx: GestureEffect[] = this.mode.kind === 'lasso' ? [{ type: 'lassoCancel' }] : []
     this.pointers.clear()
     this.mode = { kind: 'idle' }
-    return [{ type: 'hoverEnd' }]
+    return [...fx, { type: 'hoverEnd' }]
+  }
+
+  /**
+   * Escape while drawing: drop the lasso (or a press that would become one). The
+   * pointer stays tracked but is ignored until it lifts, so it never taps or pans.
+   */
+  abortLasso(): GestureEffect[] {
+    const m = this.mode
+    if (m.kind !== 'lasso' && !(m.kind === 'pending' && m.lasso)) return []
+    const t = this.pointers.get(m.id)
+    if (t) t.ignored = true
+    this.mode = { kind: 'idle' }
+    return m.kind === 'lasso' ? [{ type: 'lassoCancel' }] : []
   }
 
   down(p: PointerSample, ctx: GestureContext): GestureEffect[] {
@@ -173,6 +209,7 @@ export class GestureMachine {
       this.lastPenTime = p.time
       if (this.ownerType() === 'touch') {
         // Pen wins over fingers: drop the finger gesture without emitting a tap.
+        if (this.mode.kind === 'lasso') fx.push({ type: 'lassoCancel' })
         for (const q of this.pointers.values()) if (q.type === 'touch') q.ignored = true
         this.mode = { kind: 'idle' }
       }
@@ -180,7 +217,8 @@ export class GestureMachine {
         t.ignored = true
         return fx
       }
-      this.mode = ctx.tool === 'pan' || ctx.spaceHeld ? { kind: 'drag', id: p.id } : { kind: 'pending', id: p.id }
+      this.mode =
+        ctx.tool === 'pan' || ctx.spaceHeld ? { kind: 'drag', id: p.id } : { kind: 'pending', id: p.id, ...(ctx.tool === 'region' ? { lasso: true } : {}) }
       return fx
     }
 
@@ -190,7 +228,7 @@ export class GestureMachine {
         return fx
       }
       const pan = p.button === 1 || ctx.tool === 'pan' || ctx.spaceHeld
-      this.mode = pan ? { kind: 'drag', id: p.id } : { kind: 'pending', id: p.id }
+      this.mode = pan ? { kind: 'drag', id: p.id } : { kind: 'pending', id: p.id, ...(ctx.tool === 'region' ? { lasso: true } : {}) }
       return fx
     }
 
@@ -205,14 +243,20 @@ export class GestureMachine {
     }
     const m = this.mode
     if (m.kind === 'idle') {
+      if (ctx.tool === 'region' && !ctx.spaceHeld && !this.penSeenRecently(p.time)) {
+        this.mode = { kind: 'pending', id: p.id, lasso: true }
+        return fx
+      }
       const annotate =
         ctx.touchAnnotates && !this.penSeenRecently(p.time) && ctx.tool !== 'pan' && !ctx.spaceHeld
       const navOnly = !ctx.touchAnnotates && !this.penSeenRecently(p.time) && ctx.tool !== 'pan' && !ctx.spaceHeld
       this.mode = annotate ? { kind: 'pending', id: p.id } : { kind: 'drag', id: p.id, tapCandidate: navOnly }
       return fx
     }
-    if ((m.kind === 'pending' || m.kind === 'drag') && this.pointers.get(m.id)?.type === 'touch') {
+    if ((m.kind === 'pending' || m.kind === 'drag' || m.kind === 'lasso') && this.pointers.get(m.id)?.type === 'touch') {
       const a = this.pointers.get(m.id)!
+      // A second finger means navigation: the lasso is abandoned, never committed.
+      if (m.kind === 'lasso') fx.push({ type: 'lassoCancel' })
       this.mode = {
         kind: 'pinch',
         a: a.id,
@@ -247,11 +291,21 @@ export class GestureMachine {
     const m = this.mode
     if (m.kind === 'pending' && m.id === p.id) {
       if (Math.hypot(t.x - t.startX, t.y - t.startY) > DRAG_THRESHOLD[t.type]) {
+        if (m.lasso) {
+          this.mode = { kind: 'lasso', id: p.id }
+          return [
+            { type: 'lassoStart', x: t.startX, y: t.startY, pointerType: t.type },
+            { type: 'lassoMove', x: t.x, y: t.y },
+          ]
+        }
         this.mode = { kind: 'drag', id: p.id }
         // Catch up the whole movement since pointer down so the image tracks the pointer.
         return [{ type: 'pan', dx: t.x - t.startX, dy: t.y - t.startY }]
       }
       return []
+    }
+    if (m.kind === 'lasso' && m.id === p.id) {
+      return t.x === prevX && t.y === prevY ? [] : [{ type: 'lassoMove', x: t.x, y: t.y }]
     }
     if (m.kind === 'drag' && m.id === p.id) {
       const dx = t.x - prevX
@@ -286,19 +340,21 @@ export class GestureMachine {
         // Use the contact-down position: lift-off jitter (pen/finger roll) is ignored.
         fx.push({ type: 'tap', x: t.startX, y: t.startY, pointerType: t.type })
       }
+    } else if (!t.ignored && m.kind === 'lasso' && m.id === p.id) {
+      fx.push({ type: 'lassoEnd', x: t.x, y: t.y })
+      this.mode = { kind: 'idle' } // committed: releasing must not also cancel
     } else if (!t.ignored && m.kind === 'drag' && m.id === p.id && m.tapCandidate) {
       const moved = Math.hypot(t.x - t.startX, t.y - t.startY) > DRAG_THRESHOLD.touch
       if (!moved && p.time - t.downTime <= TOUCH_TAP_MAX_MS) fx.push({ type: 'navTap', x: t.startX, y: t.startY })
     }
-    this.release(p.id)
+    fx.push(...this.release(p.id))
     return fx
   }
 
-  /** pointercancel / lostpointercapture without up: never taps. */
+  /** pointercancel / lostpointercapture without up: never taps (and abandons a lasso). */
   cancel(id: number): GestureEffect[] {
     if (!this.pointers.has(id)) return []
-    this.release(id)
-    return []
+    return this.release(id)
   }
 
   /** Pointer left the surface without being tracked (hover only). */
@@ -308,15 +364,20 @@ export class GestureMachine {
 
   private ownerType(): PointerKind | null {
     const m = this.mode
-    if (m.kind === 'pending' || m.kind === 'drag') return this.pointers.get(m.id)?.type ?? null
+    if (m.kind === 'pending' || m.kind === 'drag' || m.kind === 'lasso') return this.pointers.get(m.id)?.type ?? null
     if (m.kind === 'pinch') return 'touch'
     return null
   }
 
-  private release(id: number) {
+  /** Forget a pointer; abandons the lasso it was drawing (lassoCancel). */
+  private release(id: number): GestureEffect[] {
     this.pointers.delete(id)
     const m = this.mode
-    if ((m.kind === 'pending' || m.kind === 'drag') && m.id === id) {
+    const fx: GestureEffect[] = []
+    if (m.kind === 'lasso' && m.id === id) {
+      fx.push({ type: 'lassoCancel' })
+      this.mode = { kind: 'idle' }
+    } else if ((m.kind === 'pending' || m.kind === 'drag') && m.id === id) {
       this.mode = { kind: 'idle' }
     } else if (m.kind === 'pinch' && (m.a === id || m.b === id)) {
       const other = this.pointers.get(m.a === id ? m.b : m.a)
@@ -324,5 +385,6 @@ export class GestureMachine {
       this.mode = other && !other.ignored ? { kind: 'drag', id: other.id } : { kind: 'idle' }
     }
     if (this.pointers.size === 0) this.mode = { kind: 'idle' }
+    return fx
   }
 }

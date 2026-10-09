@@ -15,6 +15,8 @@ export interface HintInput {
 
 /** One-line interaction hint under the viewport; explains a blocked active group first. */
 export function interactionHint(h: HintInput): string {
+  // A region never edits, so a locked or hidden group does not matter while drawing one.
+  if (h.tool === 'region') return h.coarse ? 'Drag around colonies to select · two fingers pan & zoom' : 'Drag around colonies to select a region · Shift+drag: rectangle'
   if (h.tool !== 'pan') {
     const reason = editBlock(h.activeGroup)
     if (reason === 'locked' || reason === 'hidden') return editBlockMessage(reason, h.activeGroup)
