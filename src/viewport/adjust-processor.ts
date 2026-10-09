@@ -67,10 +67,21 @@ export function createAdjustProcessor(): AdjustProcessor {
 
   async function viaWorker(w: Worker, source: ImageSourceLike, rect: PixelRect, build: (id: number, bitmap: ImageBitmap) => WorkerRequest): Promise<WorkerReply> {
     const bitmap = await createImageBitmap(source, rect.x, rect.y, rect.w, rect.h)
+    if (disposed) {
+      bitmap.close()
+      throw new Error('disposed')
+    }
     const id = ++seq
     return new Promise<WorkerReply>((resolve, reject) => {
       pending.set(id, { resolve, reject })
-      w.postMessage(build(id, bitmap), [bitmap])
+      try {
+        w.postMessage(build(id, bitmap), [bitmap])
+      } catch (err) {
+        // Not transferred (e.g. DataCloneError, worker gone): settle the job and free the bitmap.
+        pending.delete(id)
+        bitmap.close()
+        reject(err)
+      }
     })
   }
 
