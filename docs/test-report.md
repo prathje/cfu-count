@@ -6,8 +6,9 @@ a real Google account. Brief §10 asks for this report.
 
 ## Summary
 
-- 346 unit tests in 26 files pass (`npx vitest run`). `npx tsc -b` and `npm run build`
-  are clean.
+- 437 unit tests in 30 files pass (`npx vitest run`, 2026-10-09, after the product-owner
+  decisions in §7; the detection counts include the detector work in progress in the
+  same tree). `npx tsc -b` and `npm run build` are clean.
 - Agents checked desktop behaviour in **headless Google Chrome 154.0.8037.98 on macOS
   26.6.1** (Apple M-series, DPR 2), driving input over the Chrome DevTools Protocol.
 - **Not tested at all:** a real iPad, Apple Pencil, Safari (macOS or iPadOS), Firefox,
@@ -22,15 +23,15 @@ Run with `npx vitest run` (Node, `environment: 'node'`). IndexedDB uses
 
 | Area | Files | Tests | What they cover |
 | --- | --- | --- | --- |
-| Model | `model.test.ts`, `display.test.ts` | 21 + 4 | Edit policy (locked before hidden), annotation ops, counts and `isConfirmed`, groups, image order, origin immutability, storage-owned merge, display-adjust normalisation |
-| Storage: codecs | `codecs.test.ts` | 16 | Zip round trip, CSV (quoting, formula-like text, zero-count rows), validation of imported JSON |
-| Storage: Drive engine | `sync.test.ts`, `drive-plumbing.test.ts` | 14 + 16 | Push and pull against the fake Drive, md5 conflict detection, partial saves, idempotent creates, token expiry, scope handling |
-| Storage: repository | `repository.test.ts` | 22 | Local working copy (9), IndexedDB reconnect after `versionchange` (1), Drive-linked projects (12). Includes the delete-during-save regression from this review |
-| Editor state | `editor.test.ts`, `autosave.test.ts`, `history.test.ts` | 24 + 6 + 6 | Slices, undo/redo with locked groups, autosave debounce and flush, storage updates merged without reload |
-| Assisted counting | `editor.test.ts` (assist block), `review.test.ts`, `seeds.test.ts` | 10 + 15 + 6 | Accept is one undo step with a fresh run id, suggestions never in documents or counts, derived pending view, layer dropped on byte change or group delete, seed and reference-plate selection |
+| Model | `model.test.ts`, `display.test.ts` | 24 + 4 | Edit policy (locked before hidden), annotation ops, counts and `isConfirmed`, groups, image order (removed images left out), origin immutability, storage-owned merge, display-adjust normalisation, clear-group helpers, run/image check |
+| Storage: codecs | `codecs.test.ts` | 19 | Zip round trip (incl. removed images and runs with a deleted target group), CSV (quoting, formula-like text, zero-count rows, removed images left out), validation of imported JSON |
+| Storage: Drive engine | `sync.test.ts`, `drive-plumbing.test.ts` | 14 + 16 | Push and pull against the fake Drive, md5 conflict detection, partial saves, idempotent creates, token expiry, scope handling, removed images never re-imported |
+| Storage: repository | `repository.test.ts` | 22 | Local working copy (9), IndexedDB reconnect after `versionchange` (1), Drive-linked projects (12). Includes the delete-during-save regression and the soft-delete Drive round trip |
+| Editor state | `editor.test.ts`, `autosave.test.ts`, `history.test.ts`, `unload.test.ts` | 32 + 6 + 6 + 3 | Slices, undo/redo with locked groups, redo refused for a run on changed bytes, autosave debounce and flush, storage updates merged without reload, soft delete and restore, clear group (one undo step per image, locked/hidden refused), beforeunload rule |
+| Assisted counting | `editor.test.ts` (assist block), `review.test.ts`, `seeds.test.ts` | 13 + 17 + 6 | Accept is one undo step with a fresh run id, suggestions never in documents or counts, derived pending view, layer dropped on byte change, group delete or Drive version taken, reject-only runs (not filters, restorable), stale re-run after an accept, seed and reference-plate selection |
 | Detection | `detect.test.ts`, `primitives.test.ts`, `worker.test.ts`, `scripts/eval/metrics.test.ts` | 15 + 32 + 3 + 4 | Image primitives on synthetic rasters, the three detectors on synthetic plates, worker protocol and cancellation, eval metrics |
-| Viewport | `gesture`, `interaction`, `transform`, `spatial-index`, `render`, `label-layout`, `image-adjust`, `adjusted-layer`, `adjust-processor` | 28 + 16 + 18 + 15 + 6 + 7 + 16 + 10 + 1 | Tap versus drag, pinch and cancel, pen and touch policy, anchored zoom, hit testing, marker sizing, label placement, adjustment maths, adjusted-layer caching and stale-result handling |
-| UI helpers | `helpers.test.ts`, `shortcuts.test.ts` | 9 + 6 | Toolbar layout (fixed order, Find similar trailing), shortcut table |
+| Viewport | `gesture`, `interaction`, `transform`, `spatial-index`, `render`, `label-layout`, `image-adjust`, `adjusted-layer`, `adjust-processor` | 31 + 16 + 18 + 15 + 6 + 7 + 16 + 10 + 2 | Tap versus drag, pinch and cancel, pen and touch policy, anchored zoom, hit testing, marker sizing, label placement, adjustment maths, adjusted-layer caching and stale-result handling |
+| UI helpers | `helpers.test.ts`, `shortcuts.test.ts`, `images.test.ts`, `download.test.ts` | 10 + 7 + 2 + 3 | Toolbar layout (fixed order, Find similar trailing), shortcut table, compare-key rule, dialog wording, thumbnail retry and URL/bitmap release, file-picker cancel on iOS |
 
 There are no component tests and no end-to-end tests in the repository. The browser
 checks below were run once by agents and are not automated.
@@ -259,11 +260,51 @@ Use plates with clear colonies. Test on desktop and on the iPad.
 - `fix(assist)`: suggestion layers were not dropped when storage reported changed
   image bytes.
 
-**Open issues** are listed in the final review hand-off. The main ones:
+**Open issues** are listed in the final review hand-off. The main ones still open:
 
-- No `beforeunload` warning while edits are unsaved.
 - The detector client hangs if the worker crashes. A patch exists and is deferred
   while the detector is being retuned.
 - The detector cache is keyed by image id only, so it can hold stale pixels after the
   image bytes change.
-- Thumbnails that fail are never retried.
+
+## 7. Product-owner decisions and follow-up fixes (2026-10-09)
+
+Each item has a regression test unless noted.
+
+- **Unsaved-changes warning.** `beforeunload` warns only when the last local save
+  failed (autosave error or `local-error`) or edits have waited more than 3 s, never
+  during the normal 400 ms debounce and never for changes that only wait for Drive
+  (`state/unload.ts`, `unload.test.ts`).
+- **Removing an image is a soft delete** (`ImageRecord.deletedAt`). Nothing is erased
+  (local blob, annotation document, Drive file). Removed images are left out of the
+  sidebar, navigation, counts, `summary.csv` and reference plates, are never
+  re-imported from the Drive folder, and can be restored from "Recently removed" in the
+  sidebar. Replaces `excludedDriveFileIds`. Archive and Drive round trips keep the flag.
+- **Detection runs are an audit trail.** Deleting a group keeps its runs; validation
+  accepts a dangling `targetGroupId`; archive and CSV export handle such runs.
+- **Rejections are recorded.** Reject all (and rejections without an accept) become one
+  reject-only `DetectionRun` per review (negatives, zero accepted), outside undo
+  history and kept in step as the user restores rejections in the panel. Negatives
+  never suppress later suggestions.
+- **Clear a group's annotations** ("Clear…" in the group selector) on this image or on
+  all images, one undo step per image, refused on locked or hidden groups.
+- `fix(assist)`: a slider re-run that finished after an accept brought the resolved
+  region back as pending; the stale result is now discarded and the search runs again.
+- `fix(assist)`: taking the Drive version now drops suggestion layers.
+- `fix(editor)`: redo restoring a detection run now re-checks the image bytes.
+- `fix(ui)`: failed thumbnails are retried (after Drive connects), the decoded bitmap is
+  closed even when drawing fails, and a re-request no longer leaks an object URL.
+- `fix(ui)`: the file picker settles on iOS when the user cancels (no `cancel` event).
+- `fix(ui)`: the remove-image dialog counts every stored annotation, not only confirmed
+  ones.
+- `fix(viewport)`: an adjust job whose `postMessage` throws now settles and frees its
+  bitmap.
+- `fix(ui)`: holding the compare key while switching images no longer leaves the
+  original shown (no test for the container; the key rule is tested).
+- `docs`: `automated_unreviewed_count` describes stored unreviewed automated marks;
+  pending suggestions are never stored.
+
+Manual checks to add to §5: remove an image and restore it (counts, CSV, Drive reopen);
+close the tab during a failed save (warning) and right after an edit (no warning);
+Reject all, restore one, close the panel and check the saved run; clear a group on one
+image and on all images, then undo on each image.
