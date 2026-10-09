@@ -43,8 +43,11 @@ export function createSoundFeedback(deps: SoundFeedbackDeps): SoundFeedback {
   const target = deps.target === undefined ? (typeof window === 'undefined' ? null : window) : deps.target
   const lastAt = new Map<Cue, number>()
 
-  const onGesture = () => {
+  const onGesture = (e: Event) => {
     if (!deps.settings().enabled) return
+    // pointerdown is only a user activation for a mouse. Creating/resuming the
+    // AudioContext from a touch/pen pointerdown leaves it suspended on iOS.
+    if (e.type === 'pointerdown' && (e as PointerEvent).pointerType !== 'mouse') return
     const s = engine.status()
     if (s !== 'running' && s !== 'unavailable') engine.unlock()
   }

@@ -82,6 +82,27 @@ describe('sound engine (fake AudioContext)', () => {
     expect(ctx.state).toBe('closed')
   })
 
+  it('retries resume() on every gesture even while an earlier resume is still pending (iOS)', async () => {
+    FakeAudioContext.instances = []
+    const engine = createSoundEngine({ AudioContext: Ctor })
+    let calls = 0
+    const pending = new Promise<void>(() => {})
+    const orig = FakeAudioContext.prototype.resume
+    FakeAudioContext.prototype.resume = function () {
+      calls++
+      return calls === 1 ? pending : orig.call(this)
+    }
+    try {
+      engine.unlock() // first attempt hangs (e.g. not honoured as a gesture)
+      engine.unlock() // a later real gesture must try again
+      await Promise.resolve()
+      expect(calls).toBe(2)
+      expect(engine.status()).toBe('running')
+    } finally {
+      FakeAudioContext.prototype.resume = orig
+    }
+  })
+
   it('never queues sounds while suspended/interrupted and caps voices', async () => {
     const engine = createSoundEngine({ AudioContext: Ctor, maxVoices: 4 })
     engine.unlock()
@@ -176,6 +197,18 @@ describe('sound feedback runner', () => {
     s.dispose()
     target.dispatchEvent(new Event('pointerup'))
     expect(unlocks()).toBe(3) // preview unlocked once; listeners removed
+  })
+
+  it('ignores touch/pen pointerdown (not a user activation on iOS) but unlocks on mouse pointerdown', () => {
+    const target = new EventTarget()
+    const { engine, unlocks } = fakeEngine('locked')
+    createSoundFeedback({ settings: () => DEFAULT_SOUND, engine, target })
+    const down = (pointerType: string) => Object.assign(new Event('pointerdown'), { pointerType })
+    target.dispatchEvent(down('touch'))
+    target.dispatchEvent(down('pen'))
+    expect(unlocks()).toBe(0)
+    target.dispatchEvent(down('mouse'))
+    expect(unlocks()).toBe(1)
   })
 
   it('never throws from feedback', () => {

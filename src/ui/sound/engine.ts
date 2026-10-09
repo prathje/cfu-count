@@ -92,11 +92,35 @@ export function createSoundEngine(opts: SoundEngineOptions = {}): SoundEngine {
     return ctx
   }
 
-  function resume(c: AudioContext) {
-    if ((c.state as string) === 'running' || c.state === 'closed' || resuming) return
+  /**
+   * `fromGesture`: always call resume() again, even if an earlier attempt is still
+   * pending. On iOS a resume() requested outside a user activation can stay pending
+   * indefinitely; skipping later in-gesture attempts would keep audio locked forever.
+   * Inside a gesture we also play a silent sample, which older iOS needs to unlock.
+   */
+  function resume(c: AudioContext, fromGesture = false) {
+    if ((c.state as string) === 'running' || c.state === 'closed') return
+    if (resuming && !fromGesture) return
     try {
-      const promise = c.resume().catch(() => {}).finally(() => (resuming = null))
+      if (fromGesture) playSilence(c)
+      const promise = c
+        .resume()
+        .catch(() => {})
+        .finally(() => {
+          if (resuming?.promise === promise) resuming = null
+        })
       resuming = { promise }
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function playSilence(c: AudioContext) {
+    try {
+      const src = c.createBufferSource()
+      src.buffer = c.createBuffer(1, 1, c.sampleRate)
+      src.connect(c.destination)
+      src.start(0)
     } catch {
       /* ignore */
     }
@@ -167,7 +191,7 @@ export function createSoundEngine(opts: SoundEngineOptions = {}): SoundEngine {
   return {
     unlock() {
       const c = build()
-      if (c) resume(c)
+      if (c) resume(c, true)
     },
     play,
     status,
