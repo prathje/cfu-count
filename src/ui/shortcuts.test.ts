@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { resolveShortcut, type KeyLike } from './shortcuts'
+import { resolveShortcut, shortcutSheet, SHORTCUTS, type KeyLike } from './shortcuts'
 
 const k = (key: string, mods: Partial<KeyLike> = {}): KeyLike => ({
   key,
@@ -19,7 +19,6 @@ describe('resolveShortcut', () => {
     expect(resolveShortcut(k('v'), true)).toEqual({ type: 'toggle-visibility' })
     expect(resolveShortcut(k('l'), true)).toEqual({ type: 'toggle-lock' })
     expect(resolveShortcut(k('3'), true)).toEqual({ type: 'select-group', index: 2 })
-    expect(resolveShortcut(k('0'), true)).toBeNull()
   })
   it('uses Cmd on Apple and Ctrl elsewhere for undo/redo', () => {
     expect(resolveShortcut(k('z', { metaKey: true }), true)).toEqual({ type: 'undo' })
@@ -31,5 +30,28 @@ describe('resolveShortcut', () => {
   it('ignores tool keys with modifiers (browser shortcuts stay intact)', () => {
     expect(resolveShortcut(k('a', { metaKey: true }), true)).toBeNull()
     expect(resolveShortcut(k('l', { ctrlKey: true }), false)).toBeNull()
+  })
+  it('maps zoom, fit, image navigation and help', () => {
+    expect(resolveShortcut(k('+', { shiftKey: true }), true)).toEqual({ type: 'zoom-in' })
+    expect(resolveShortcut(k('='), true)).toEqual({ type: 'zoom-in' })
+    expect(resolveShortcut(k('-'), true)).toEqual({ type: 'zoom-out' })
+    expect(resolveShortcut(k('0'), true)).toEqual({ type: 'fit' })
+    expect(resolveShortcut(k('['), true)).toEqual({ type: 'image', delta: -1 })
+    expect(resolveShortcut(k(']'), true)).toEqual({ type: 'image', delta: 1 })
+    expect(resolveShortcut(k('?', { shiftKey: true }), true)).toEqual({ type: 'help' })
+    expect(resolveShortcut(k('0', { metaKey: true }), true)).toBeNull() // browser zoom reset stays intact
+  })
+})
+
+describe('shortcutSheet', () => {
+  it('is generated from the binding table, with the platform modifier', () => {
+    const sheet = shortcutSheet('⌘')
+    const rows = sheet.flatMap((s) => s.rows)
+    expect(rows.find((r) => r.label === 'Undo')?.keys).toEqual(['⌘', 'Z'])
+    expect(shortcutSheet('Ctrl+').flatMap((s) => s.rows).find((r) => r.label === 'Undo')?.keys).toEqual(['Ctrl', 'Z'])
+    // Every executable binding with a display row appears exactly once in the sheet.
+    const documented = SHORTCUTS.filter((s) => s.display.length > 0).length
+    expect(rows.length).toBe(documented)
+    expect(sheet.map((s) => s.section)).toEqual(['Tools', 'Annotation groups', 'Edit', 'View', 'Images', 'Help'])
   })
 })

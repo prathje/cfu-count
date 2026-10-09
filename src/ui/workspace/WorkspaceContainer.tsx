@@ -17,6 +17,8 @@ import './workspace.css'
 /** Container: wires the editor to the image header, viewport, floating toolbar and footer. */
 export interface WorkspaceContainerProps {
   dragging: boolean
+  /** Receives the viewport's zoom/fit handle (global shortcuts route through it). */
+  onViewport?(handle: ViewportHandle): void
 }
 
 export function WorkspaceContainer(props: WorkspaceContainerProps) {
@@ -89,7 +91,10 @@ export function WorkspaceContainer(props: WorkspaceContainerProps) {
                 onErase={annotations.erase}
                 onBlocked={annotations.explainBlocked}
                 onViewChange={(v) => setScale(v.scale)}
-                ref={(h) => (handle = h)}
+                ref={(h) => {
+                  handle = h
+                  props.onViewport?.(h)
+                }}
                 label={`${image().name}: ${annotations.total()} confirmed colonies. ${hint()}`}
               />
               <Show when={bitmap().status === 'loading'}>

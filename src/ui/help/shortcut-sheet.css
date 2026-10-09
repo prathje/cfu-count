@@ -1,0 +1,93 @@
+/* Keyboard shortcut cheat sheet (modal). */
+.shortcut-sheet {
+  width: min(640px, calc(100vw - 32px));
+  max-height: min(720px, calc(100dvh - 32px));
+  overflow: auto;
+}
+
+.shortcut-sheet__head {
+  position: sticky;
+  top: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: var(--s-4) var(--s-4) var(--s-3) var(--s-5);
+  background: var(--c-surface);
+  border-bottom: 1px solid var(--c-border);
+  color: var(--c-text-2);
+}
+
+.shortcut-sheet__head .dialog__title {
+  flex: 1;
+  color: var(--c-text);
+  font-size: var(--fs-lg);
+}
+
+.shortcut-sheet__close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--ctl);
+  height: var(--ctl);
+  border: 0;
+  border-radius: var(--r-md);
+  background: none;
+  color: var(--c-text-3);
+}
+
+@media (hover: hover) {
+  .shortcut-sheet__close:hover {
+    background: var(--c-hover);
+    color: var(--c-text);
+  }
+}
+
+.shortcut-sheet__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: var(--s-4) var(--s-6);
+  padding: var(--s-4) var(--s-5);
+}
+
+.shortcut-sheet__section dl {
+  margin: var(--s-2) 0 0;
+}
+
+.shortcut-sheet__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-3);
+  min-height: 30px;
+  border-bottom: 1px solid var(--c-surface-3);
+}
+
+.shortcut-sheet__row dt {
+  font-size: var(--fs-sm);
+  color: var(--c-text);
+}
+
+.shortcut-sheet__row dd {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin: 0;
+  flex: none;
+}
+
+.shortcut-sheet__row kbd {
+  min-width: 22px;
+  text-align: center;
+  color: var(--c-text-2);
+}
+
+.shortcut-sheet__ellipsis {
+  color: var(--c-text-3);
+  font-size: var(--fs-xs);
+}
+
+.shortcut-sheet__foot {
+  padding: 0 var(--s-5) var(--s-4);
+  font-size: var(--fs-xs);
+  color: var(--c-text-3);
+}

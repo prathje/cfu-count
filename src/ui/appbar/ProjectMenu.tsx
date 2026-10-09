@@ -1,6 +1,6 @@
 import { For, Show } from 'solid-js'
 import type { ProjectSummary } from '../../storage/api'
-import { Check, ChevronDown, Cloud, Download, FileArchive, FileSpreadsheet, FolderOpen, Plus, Trash } from '../icons'
+import { Check, ChevronDown, Cloud, Download, FileArchive, FileSpreadsheet, FolderOpen, Keyboard, Plus, Trash } from '../icons'
 import { InlineEdit, MenuItem, MenuSection, Popover, createPopoverState } from '../primitives'
 import { formatRelativeDate, plural } from '../format'
 
@@ -20,6 +20,7 @@ export interface ProjectMenuProps {
   onExportCsv(): void
   onOpenFromDrive(): void
   onDelete(): void
+  onShowShortcuts(): void
 }
 
 export function ProjectMenu(props: ProjectMenuProps) {
@@ -87,6 +88,9 @@ export function ProjectMenu(props: ProjectMenuProps) {
             <MenuItem icon={Trash} danger label="Delete project from this browser" onClick={act(props.onDelete)} />
           </MenuSection>
         </Show>
+        <MenuSection>
+          <MenuItem icon={Keyboard} label="Keyboard shortcuts" trailing={<kbd>?</kbd>} onClick={act(props.onShowShortcuts)} />
+        </MenuSection>
         <Show when={!props.projectId && others().length === 0}>
           <p class="pop-empty">
             <Check size={14} aria-hidden="true" /> No projects yet.

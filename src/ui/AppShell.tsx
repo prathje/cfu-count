@@ -5,9 +5,11 @@ import { ProjectMenu } from './appbar/ProjectMenu'
 import { useApp } from './context'
 import { createFileDrop } from './fileDrop'
 import { ImagePlus, Loader } from './icons'
-import { createMediaQuery, isApple } from './media'
+import { createMediaQuery, isApple, MOD } from './media'
 import { DialogHost, ToastRegion } from './primitives'
-import { useShortcuts } from './shortcuts'
+import { shortcutSheet, useShortcuts } from './shortcuts'
+import { ShortcutSheet } from './help/ShortcutSheet'
+import type { ViewportHandle } from '../viewport/api'
 import { SidebarContainer } from './sidebar/SidebarContainer'
 import { LoadingScreen, NoProject } from './workspace/EmptyStates'
 import { WorkspaceContainer } from './workspace/WorkspaceContainer'
@@ -20,6 +22,8 @@ export function AppShell() {
   const narrow = createMediaQuery('(max-width: 900px)')
   const phone = createMediaQuery('(max-width: 560px)')
   const [sidebarOpen, setSidebarOpen] = createSignal(!narrow())
+  const [helpOpen, setHelpOpen] = createSignal(false)
+  let viewport: ViewportHandle | undefined
   const dragging = createFileDrop((files) => void actions.importFiles(files))
 
   // Drawer: closed by default on narrow screens, open on wide ones.
@@ -56,6 +60,16 @@ export function AppShell() {
           return editor.annotations.undo()
         case 'redo':
           return editor.annotations.redo()
+        case 'zoom-in':
+          return viewport?.zoomIn()
+        case 'zoom-out':
+          return viewport?.zoomOut()
+        case 'fit':
+          return viewport?.fit()
+        case 'image':
+          return editor.images.selectAdjacent(cmd.delta)
+        case 'help':
+          return setHelpOpen(true)
       }
     },
     () => state.phase === 'ready',
@@ -102,6 +116,7 @@ export function AppShell() {
             onExportCsv={() => void actions.downloadCsv()}
             onOpenFromDrive={driveActions.onOpenFromDrive}
             onDelete={() => void actions.deleteProject()}
+            onShowShortcuts={() => setHelpOpen(true)}
           />
         }
         status={<SaveStatusPill {...sync()} {...driveActions} compact={phone()} />}
@@ -141,7 +156,7 @@ export function AppShell() {
               />
             </Match>
             <Match when={state.phase === 'ready'}>
-              <WorkspaceContainer dragging={dragging()} />
+              <WorkspaceContainer dragging={dragging()} onViewport={(h) => (viewport = h)} />
             </Match>
           </Switch>
         </main>
@@ -169,6 +184,7 @@ export function AppShell() {
       </Show>
       <ToastRegion toaster={toaster} />
       <DialogHost dialogs={dialogs} />
+      <ShortcutSheet open={helpOpen()} sections={shortcutSheet(MOD)} onClose={() => setHelpOpen(false)} />
     </div>
   )
 }

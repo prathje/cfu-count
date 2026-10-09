@@ -470,17 +470,6 @@ export function Viewport(props: ViewportProps) {
       case 'ArrowDown':
         setView(panBy(view, 0, -step))
         break
-      case '+':
-      case '=':
-        handle.zoomIn()
-        break
-      case '-':
-      case '_':
-        handle.zoomOut()
-        break
-      case '0':
-        fit()
-        break
       default:
         handled = false
     }
@@ -573,8 +562,8 @@ export function Viewport(props: ViewportProps) {
       tabindex="0"
       role="group"
       aria-roledescription="image viewport"
-      aria-label="Image viewport. Arrow keys pan, plus and minus zoom, 0 fits the image."
-      aria-keyshortcuts="ArrowUp ArrowDown ArrowLeft ArrowRight + - 0"
+      aria-label="Image viewport. Arrow keys pan; plus and minus zoom, 0 fits the image."
+      aria-keyshortcuts="ArrowUp ArrowDown ArrowLeft ArrowRight"
       style={{ cursor: cursor() }}
     >
       <canvas ref={imageCanvas} class="cfu-viewport__layer" aria-hidden="true" />
