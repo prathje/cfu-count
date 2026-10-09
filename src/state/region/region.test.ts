@@ -98,7 +98,7 @@ const square = [
   { x: 0, y: 100 },
 ]
 
-async function setup(make: (req: DetectRequest) => Partial<DetectResult> = () => ({})) {
+async function setup(make: (req: DetectRequest) => Partial<DetectResult> = () => ({}), version: { ok: true } | { ok: false; reason: string } = { ok: true }) {
   const notices: Notice[] = []
   const events: FeedbackEvent[] = []
   const editor = createEditor(repo(), { notify: (n) => notices.push(n), feedback: (e) => events.push(e), confirm: async () => false })
@@ -115,7 +115,7 @@ async function setup(make: (req: DetectRequest) => Partial<DetectResult> = () =>
     newId: () => `r${++ids}`,
     beforeDestructive: async (label) => {
       versions.push(label)
-      return { ok: true }
+      return version
     },
   })
   const settle = () => new Promise((r) => setTimeout(r, 0))
@@ -153,8 +153,8 @@ describe('region controller', () => {
     expect(events.at(-1)).toEqual({ type: 'erased' })
     expect(notices.at(-1)?.message).toMatch(/Removed 2 marks/)
     // a version is saved first (version-history hook), and the toast says so
-    expect(versions).toEqual(['Before clearing “Colonies” in a region of “i1.jpg”'])
-    expect(notices.at(-1)?.detail).toMatch(/version was saved/)
+    expect(versions).toEqual(['Before clearing “Colonies” in the selected region'])
+    expect(notices.at(-1)?.detail).toBe('A version was saved.')
     const left = editor.annotations.current()
     expect(left.map((a) => [a.x, a.y])).toEqual([[150, 20], [20, 20]]) // other group and outside kept
     const h = editor.state.history['i1']
@@ -163,6 +163,15 @@ describe('region controller', () => {
     expect(editor.annotations.current()).toHaveLength(4)
     expect(editor.annotations.redo()).toBe(true)
     expect(editor.annotations.current()).toHaveLength(2)
+  })
+
+  it('still clears (one undo step) when no version could be saved, and says why', async () => {
+    const { editor, region, notices } = await setup(undefined, { ok: false, reason: 'storage is full' })
+    editor.annotations.add(10, 10)
+    region.set(square)
+    expect(await region.clearInRegion()).toBe(true)
+    expect(editor.annotations.current()).toHaveLength(0)
+    expect(notices.at(-1)?.detail).toBe('No version was saved (storage is full); Undo still works.')
   })
 
   it('refuses on a locked or hidden group with the standard explanation and feedback', async () => {

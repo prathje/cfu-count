@@ -9,7 +9,7 @@ import { createThumbnailCache } from './ui/images'
 import { createDialogs, createToaster, type Toaster } from './ui/primitives'
 import { createSoundSettings } from './state/soundSettings'
 import { createSoundFeedback } from './ui/sound'
-import { createProjectActions } from './ui/projectActions'
+import { createProjectActions, VERSION_SAVED_DETAIL } from './ui/projectActions'
 import { shouldWarnBeforeUnload } from './state/unload'
 import { AppShell } from './ui/AppShell'
 
@@ -42,12 +42,20 @@ function AppRoot(props: { choice: RepositoryChoice }) {
   const assist = createAssist({ editor, notify: toaster.push, feedback, createClient: () => createDetectorClient() })
   onCleanup(assist.dispose)
   // Region selection (Region tool): shares the assist controller's detector worker.
-  const region = createRegion({ editor, assist, notify: toaster.push, feedback, beforeDestructive: (label) => editor.versions.beforeDestructive(label) })
-  onCleanup(region.dispose)
   const thumbnails = createThumbnailCache(() => (editor.state.project ? editor.images.blob : null))
   // Thumbnails of Drive images fail while Drive is disconnected: retry once it connects.
   createEffect(on(() => editor.drive.state().state, (s) => s === 'connected' && thumbnails.retryFailed(), { defer: true }))
   const actions = createProjectActions(editor, dialogs, toaster.push)
+  // Region selection (Region tool): shares the assist controller's detector worker.
+  const region = createRegion({
+    editor,
+    assist,
+    notify: toaster.push,
+    feedback,
+    beforeDestructive: (label) => editor.versions.beforeDestructive(label),
+    versionSavedDetail: VERSION_SAVED_DETAIL,
+  })
+  onCleanup(region.dispose)
   const services: AppServices = {
     editor,
     assist,

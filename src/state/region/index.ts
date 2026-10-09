@@ -50,7 +50,9 @@ export interface RegionDeps {
    * version only costs the Version history entry and the clear still proceeds
    * (same rule as clearing a group on one image).
    */
-  beforeDestructive?: (label: string) => Promise<{ ok: boolean }>
+  beforeDestructive?: (label: string) => Promise<{ ok: true } | { ok: false; reason: string }>
+  /** Toast detail after a version was saved (ui/projectActions VERSION_SAVED_DETAIL). */
+  versionSavedDetail?: string
   newId?: () => ID
   now?: () => string
 }
@@ -221,10 +223,9 @@ export function createRegion(deps: RegionDeps): RegionController {
     async function clearInRegion(given?: ClearPlan | null): Promise<boolean> {
       let plan = refuse(given)
       if (!plan) return false
-      let versionSaved = false
+      let version: { ok: true } | { ok: false; reason: string } | null = null
       if (deps.beforeDestructive) {
-        const imageName = images.current()?.name ?? 'an image'
-        versionSaved = (await deps.beforeDestructive(`Before clearing “${plan.groupName}” in a region of “${imageName}”`)).ok
+        version = await deps.beforeDestructive(`Before clearing “${plan.groupName}” in the selected region`)
         // edits were frozen while the version was stored; re-check, keeping only marks still there
         const still = new Set(annotations.current().map((a) => a.id))
         const ops = plan.ops.filter((o) => o.kind === 'remove' && still.has(o.annotation.id))
@@ -246,8 +247,14 @@ export function createRegion(deps: RegionDeps): RegionController {
         tone: 'success',
         key: 'region',
         message: `Removed ${n.toLocaleString()} ${n === 1 ? 'mark' : 'marks'} from “${plan.groupName}” in the region`,
-        // same wording as ui/projectActions VERSION_SAVED_DETAIL
-        detail: [plan.automated ? `${plan.manual} manual, ${plan.automated} automated.` : '', versionSaved ? 'A version was saved — restore it from Version history.' : ''].filter(Boolean).join(' ') || undefined,
+        detail:
+          [
+            plan.automated ? `${plan.manual} manual, ${plan.automated} automated.` : '',
+            // one undo step on one image: a failed version only costs the Version history entry
+            version?.ok ? deps.versionSavedDetail ?? 'A version was saved.' : version ? `No version was saved (${version.reason}); Undo still works.` : '',
+          ]
+            .filter(Boolean)
+            .join(' ') || undefined,
         action: {
           label: 'Undo',
           run: () => {
