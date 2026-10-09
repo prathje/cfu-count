@@ -42,7 +42,7 @@ import { createWorkerHandler, type Decoder } from '../../src/detection/worker-co
 import { parseArgs } from './args.ts'
 import { decodeAt, originalSize } from './decode.ts'
 import { findGt, loadGtZip, sha256Hex, type GtImage } from './gt.ts'
-import { centreError, duplicateRate, matchPoints, perClusterCountError, prf, reviewShare, rng, sample, spread, underSplitSuspects, type Pt } from './metrics.ts'
+import { centreError, duplicateRate, matchPoints, perClusterCountError, prf, reviewShare, rng, sample, spread, underSplitStrict, underSplitSuspects, type Pt } from './metrics.ts'
 import { renderOverlay } from './overlay.ts'
 
 const args = parseArgs(process.argv.slice(2))
@@ -222,8 +222,12 @@ interface MethodRecord {
   review: { share: number; regions: number; largestRegion: number }
   /** Clusters with area ≥ 1.8 × (placed colonies) × typical colony area (possible under-splits). */
   underSplit: number
+  /** Clusters whose area holds ≥ one more prior-sized colony than placed (see underSplitStrict). */
+  underSplitStrict: number
   /** Re-run with sensitivity +0.1 on cached planes (ms), like a slider move. */
   rerunMs?: number
+  /** Returning to the original sensitivity reproduced the first result exactly. */
+  rerunStable?: boolean
   gt?: Record<string, unknown>
 }
 interface ImageRecord {
@@ -280,6 +284,7 @@ for (const it of selected) {
       peakRasterMB: Math.round(r.peakRasterBytes / 1e5) / 10,
       review: roundAll(reviewShare(r.suggestions, r.clusters)),
       underSplit: 0,
+      underSplitStrict: underSplitStrict(r.clusters, r.calibration.prior?.rMedian ?? 25).length,
     }
     const suspects = underSplitSuspects(r.clusters, r.calibration.prior?.rMedian ?? 25)
     mr.underSplit = suspects.length
@@ -288,6 +293,9 @@ for (const it of selected) {
       const t2 = performance.now()
       await run(await buildRequest(it, plan, rng(99), m, Math.min(1, sensitivity + 0.1)))
       mr.rerunMs = Math.round(performance.now() - t2)
+      // and back: the same settings must give exactly the same result (tables never grow)
+      const back = await run(await buildRequest(it, plan, rng(99), m, sensitivity))
+      mr.rerunStable = JSON.stringify(back.suggestions) === JSON.stringify(r.suggestions)
     }
     if (it.gt) mr.gt = gtMetrics(it.gt, req.existing, r)
     rec.methods.push(mr)
@@ -391,7 +399,7 @@ function gtMetrics(gt: GtImage, existing: ExistingAnnotation[], r: DetectResult)
 }
 
 // ---------------------------------------------------------------- report
-const report = { createdAt: new Date().toISOString(), args, methods, sensitivity, maxRssMB: Math.round(process.resourceUsage().maxRSS / 1024), images: records }
+const report = { peakRssNote: 'maxRssMB is the process peak (node + sharp decode + all images)', createdAt: new Date().toISOString(), args, methods, sensitivity, maxRssMB: Math.round(process.resourceUsage().maxRSS / 1024), images: records }
 writeFileSync(join(outDir, 'report.json'), JSON.stringify(report, null, 1))
 writeFileSync(join(outDir, 'report.md'), markdown(records))
 console.log(`\nWrote ${join(outDir, 'report.md')}`)
@@ -399,12 +407,12 @@ console.log(`\nWrote ${join(outDir, 'report.md')}`)
 function markdown(rs: ImageRecord[]): string {
   const L: string[] = []
   L.push(`# Detection evaluation`, '', `Seeds: \`${seedSpec}\`${jitter ? `, jitter ${jitter} px` : ''}; sensitivity ${sensitivity}; methods ${methods.join(', ')}.`, '')
-  L.push(`| image | seeds (usable) | r̃ px | scale | ${methods.map((m) => `${m} n`).join(' | ')} | fitter in review % (regions, largest) | fitter under-split? | ${methods.map((m) => `${m} ms`).join(' | ')} | fitter re-run ms | agreement F1 |`)
+  L.push(`| image | seeds (usable) | r̃ px | scale | ${methods.map((m) => `${m} n`).join(' | ')} | fitter in review % (regions, largest) | fitter under-split? (strict) | ${methods.map((m) => `${m} ms`).join(' | ')} | fitter re-run ms | agreement F1 |`)
   L.push(`|${'---|'.repeat(7 + 2 * methods.length + 1)}`)
   for (const r of rs) {
     const by = (m: DetectMethod) => r.methods.find((x) => x.method === m)
     L.push(
-      `| ${r.name} | ${r.calibration.nTotal} (${r.calibration.nUsable}) | ${r.calibration.prior ? r.calibration.prior.rMedian.toFixed(1) : '–'} | ${r.scale} | ${methods.map((m) => by(m)?.count ?? '–').join(' | ')} | ${fmtReview(by('fitter'))} | ${by('fitter')?.underSplit ?? '–'} | ${methods.map((m) => by(m)?.ms ?? '–').join(' | ')} | ${by('fitter')?.rerunMs ?? '–'} | ${Object.entries(r.agreement).map(([k, v]) => `${k} ${v}`).join(', ')} |`,
+      `| ${r.name} | ${r.calibration.nTotal} (${r.calibration.nUsable}) | ${r.calibration.prior ? r.calibration.prior.rMedian.toFixed(1) : '–'} | ${r.scale} | ${methods.map((m) => by(m)?.count ?? '–').join(' | ')} | ${fmtReview(by('fitter'))} | ${by('fitter')?.underSplit ?? '–'} (${by('fitter')?.underSplitStrict ?? '–'}) | ${methods.map((m) => by(m)?.ms ?? '–').join(' | ')} | ${by('fitter')?.rerunMs ?? '–'} | ${Object.entries(r.agreement).map(([k, v]) => `${k} ${v}`).join(', ')} |`,
     )
   }
   if (rs.some((r) => r.methods.some((m) => m.gt))) {

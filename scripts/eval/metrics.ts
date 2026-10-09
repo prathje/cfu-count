@@ -212,3 +212,14 @@ export function underSplitSuspects<T extends AuditCluster>(clusters: T[], rMedia
   const a0 = Math.PI * rMedian * rMedian
   return clusters.filter((c) => c.status !== 'too-large' && c.area >= factor * Math.max(1, c.chosenK + c.fixedIds.length) * a0)
 }
+
+/**
+ * Stricter under-split audit: clusters whose foreground area alone would hold
+ * at least one more prior-sized colony than was placed (area ≥ (K + fixed + 1)
+ * × π r̃²). Overlap only lowers a cluster's area, so these are hard to explain
+ * without an extra colony (or oversized ones). Not ground truth.
+ */
+export function underSplitStrict<T extends AuditCluster>(clusters: T[], rMedian: number): T[] {
+  const a0 = Math.PI * rMedian * rMedian
+  return clusters.filter((c) => c.status !== 'too-large' && c.area >= (c.chosenK + c.fixedIds.length + 1) * a0)
+}
