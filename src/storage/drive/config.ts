@@ -5,7 +5,7 @@
  *   VITE_GOOGLE_CLIENT_ID     OAuth 2.0 Web client ID
  *   VITE_GOOGLE_API_KEY       browser API key (restricted), used by Google Picker
  *   VITE_GOOGLE_APP_ID        Cloud project NUMBER, passed to Picker.setAppId
- *   VITE_GOOGLE_DRIVE_SCOPE   optional: "file" (default) | "readonly" | "full"
+ *   VITE_GOOGLE_DRIVE_SCOPE   optional: "full" (default; whole-folder access) | "readonly" | "file"
  */
 
 export const SCOPE_DRIVE_FILE = 'https://www.googleapis.com/auth/drive.file'
@@ -57,8 +57,10 @@ export function readDriveConfig(env: DriveEnv = import.meta.env as DriveEnv): Dr
     console.warn(`Google Drive disabled: missing ${missing.join(', ')} (see docs/google-drive-setup.md).`)
     return null
   }
-  const raw = (env.VITE_GOOGLE_DRIVE_SCOPE?.trim() || 'file') as DriveScopeMode
-  const scopeMode: DriveScopeMode = raw === 'readonly' || raw === 'full' ? raw : 'file'
-  if (raw !== scopeMode) console.warn(`Unknown VITE_GOOGLE_DRIVE_SCOPE "${raw}", using "file".`)
+  // Default is full `drive`: the product treats the whole Drive folder as the project,
+  // including images the app did not create and files written by other users' sessions.
+  const raw = (env.VITE_GOOGLE_DRIVE_SCOPE?.trim() || 'full') as DriveScopeMode
+  const scopeMode: DriveScopeMode = raw === 'readonly' || raw === 'file' ? raw : 'full'
+  if (raw !== scopeMode) console.warn(`Unknown VITE_GOOGLE_DRIVE_SCOPE "${raw}", using "full".`)
   return { clientId, apiKey, appId, scopeMode, scopes: scopesFor(scopeMode) }
 }

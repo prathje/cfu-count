@@ -14,7 +14,7 @@ as "not configured".
 | OAuth 2.0 Web client ID | `VITE_GOOGLE_CLIENT_ID` | **Public.** It ships in the JavaScript bundle. |
 | Browser API key (restricted) | `VITE_GOOGLE_API_KEY` | **Public.** It ships in the bundle; protected by referrer and API restrictions. |
 | Cloud project number (Picker "app ID") | `VITE_GOOGLE_APP_ID` | **Public.** |
-| Scope mode (optional) | `VITE_GOOGLE_DRIVE_SCOPE` | Public. `file` (default), `readonly` or `full`. |
+| Scope mode (optional) | `VITE_GOOGLE_DRIVE_SCOPE` | Public. `full` (default), `readonly` or `file`. |
 
 No client secret, service account or private key is used. If a Google console page
 offers to download a client secret, you don't need it; never commit one.
@@ -49,14 +49,17 @@ offers to download a client secret, you don't need it; never commit one.
    - While in **Testing**, add each person under **Test users**. Only they can sign
      in, and Google caps the number of test users (100).
 3. **Data access** → **Add or remove scopes** → add
-   `https://www.googleapis.com/auth/drive.file` ("See, edit, create and delete only
-   the specific Google Drive files you use with this app"). It is a non-sensitive
-   scope.
-   - Only if you opt into a broader mode (see "Scope choice" below), also add
-     `.../auth/drive.readonly` or `.../auth/drive`. Both are **restricted**.
+   `https://www.googleapis.com/auth/drive` ("See, edit, create and delete all of your
+   Google Drive files"). The app uses it by default so the **whole selected folder** is
+   the project, including photos the app did not upload. It is a **restricted** scope.
+   - If you opt into a narrower mode (see "Scope choice" below), add
+     `.../auth/drive.readonly` + `.../auth/drive.file`, or only `.../auth/drive.file`.
 4. **Publishing**: when ready for users outside the test list, **Publish app** (moves
-   to "In production"). With only `drive.file`, Google asks for at most light brand
-   verification. Restricted scopes require restricted-scope verification first; see
+   to "In production"). The default `drive` scope is restricted: public use requires
+   restricted-scope verification (and possibly a security assessment) first. Testing mode
+   with named test users, or an Internal app in a Google Workspace organisation, works
+   without verification. With only `drive.file`, Google asks for at most light brand
+   verification; see
    `docs/research/google-drive.md`.
 
 ## 4. Create the OAuth client
@@ -98,8 +101,8 @@ Create `.env.local` in the repository root. `*.local` is already in `.gitignore`
 VITE_GOOGLE_CLIENT_ID=1234567890-abc123.apps.googleusercontent.com
 VITE_GOOGLE_API_KEY=AIzaSy...
 VITE_GOOGLE_APP_ID=1234567890
-# Optional: file (default) | readonly | full
-# VITE_GOOGLE_DRIVE_SCOPE=file
+# Optional: full (default) | readonly | file
+# VITE_GOOGLE_DRIVE_SCOPE=full
 ```
 
 Restart `npm run dev` after editing (Vite reads env files at startup) and open
@@ -136,13 +139,13 @@ secrets; secrets also work, but nothing here is secret):
 
 | Mode | Requested scopes | Opening an existing folder of photos | Google review |
 | --- | --- | --- | --- |
-| `file` (default) | `drive.file` | The user picks the folder, then selects the images in it once (multi-select). Files the app saved are reopened without further prompts. | none / light brand verification |
+| `file` | `drive.file` | The user picks the folder, then selects the images in it once (multi-select). Files the app saved are reopened without further prompts. | none / light brand verification |
 | `readonly` | `drive.file` + `drive.readonly` | All images in the folder and `images/` are found automatically | restricted-scope verification for public use |
-| `full` | `drive` | same as `readonly` | restricted-scope verification for public use |
+| `full` (default) | `drive` | All images in the folder are found automatically; the app can also write into folders and files created by other users/sessions | restricted-scope verification for public use |
 
-`drive.file` is the least-privilege option and the recommended default. Use `readonly`
-for an Internal (Workspace) app or a Testing-mode app with named users, where
-verification does not apply. Details and sources: `docs/research/google-drive.md`.
+The product treats the entire Drive folder as the project, so `full` is the default.
+`drive.file` remains available as a least-privilege fallback (with an extra picker step)
+if restricted-scope verification is not feasible for a public deployment. Details and sources: `docs/research/google-drive.md`.
 
 ## Troubleshooting
 

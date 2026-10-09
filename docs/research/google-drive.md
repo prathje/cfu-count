@@ -105,14 +105,13 @@ apply), or for Internal apps in a Workspace organisation.
 Sources: [About auth (Drive)](https://developers.google.com/workspace/drive/api/guides/about-auth),
 [Restricted scope verification](https://developers.google.com/identity/protocols/oauth2/production-readiness/restricted-scope-verification).
 
-**Decision:** default to `drive.file`. A build can opt in with
-`VITE_GOOGLE_DRIVE_SCOPE=readonly`, which requests `drive.file drive.readonly` (read
-everything, write only the app's own outputs), or `full` (`drive`). With a broader
-scope the same code finds folder images automatically, because `pullFolder` treats
-every visible image in the folder root and `images/` as part of the project; the
-grant Picker steps are then simply never needed. Choose this for a lab-internal
-deployment (Workspace "Internal" app, or Testing with named users) where
-verification does not apply.
+**Decision (product owner, 2026-10-09):** default to full `drive`, because the whole
+Drive folder is the project: every image in the folder root and `images/` is found
+automatically (`pullFolder`), and the app can update files created by collaborators'
+sessions in a shared folder. This is a restricted scope: use Testing mode with named
+users or an Internal Workspace app, or complete restricted-scope verification before a
+public launch. `VITE_GOOGLE_DRIVE_SCOPE=readonly` (`drive.file drive.readonly`) or
+`file` (`drive.file`, with the grant Picker steps) remain as fallbacks.
 
 ### 5. Token model (Google Identity Services)
 
