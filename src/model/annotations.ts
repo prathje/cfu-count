@@ -192,15 +192,31 @@ export function checkOps(ops: readonly AnnotationOp[], groups: readonly Annotati
 }
 
 /**
- * Check a detection-run record against the image it is stored with and the
+ * Is a detection-run record valid for these image bytes? Returns a problem
+ * description or null. Used when a run is stored (accept, recorded rejections)
+ * and when redo restores one: a run only describes the bytes it analysed.
+ */
+export function checkRunImage(run: DetectionRun, image: { fingerprint: string; sourceMismatch?: unknown }): string | null {
+  if (run.imageFingerprint !== image.fingerprint) return `Detection run ${run.runId} was computed on a different image (fingerprint mismatch).`
+  if (image.sourceMismatch) return `Detection run ${run.runId} was computed on image bytes that have since changed.`
+  return null
+}
+
+/**
+ * Check a NEW detection-run record against the image it is stored with and the
  * project's groups. Returns a problem description or null.
+ *
+ * The group check applies only when a run is created. Stored runs are an audit
+ * trail: deleting an annotation group keeps them, so `targetGroupId` may name a
+ * group that no longer exists (readers must accept that; docs/schema.md).
  */
 export function checkDetectionRun(
   run: DetectionRun,
-  image: { fingerprint: string },
+  image: { fingerprint: string; sourceMismatch?: unknown },
   groups: readonly AnnotationGroup[],
 ): string | null {
-  if (run.imageFingerprint !== image.fingerprint) return `Detection run ${run.runId} was computed on a different image (fingerprint mismatch).`
+  const problem = checkRunImage(run, image)
+  if (problem) return problem
   if (!groups.some((g) => g.id === run.targetGroupId)) return `Detection run ${run.runId} targets an unknown annotation group.`
   return null
 }

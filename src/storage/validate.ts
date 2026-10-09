@@ -202,6 +202,10 @@ function validateSeed(v: unknown, path: string): void {
   oneOf(o, 'quality', ['ok', 'touching', 'edge', 'glare', 'weak'] as const, path)
 }
 
+/**
+ * A stored detection run is an audit record. `targetGroupId` is only checked to be a
+ * string: it may name an annotation group that was deleted since (the run is kept).
+ */
 function validateDetectionRun(v: unknown, path: string): DetectionRun {
   const o = obj(v, path)
   for (const k of ['runId', 'method', 'version', 'createdAt', 'imageFingerprint', 'targetGroupId']) str(o, k, path)

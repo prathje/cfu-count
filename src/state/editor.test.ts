@@ -259,6 +259,32 @@ describe('editor', () => {
     expect(editor.annotations.current()[0]).toMatchObject({ origin: 'automated', geometry: { r: 4 } })
   })
 
+  it('redo refuses to restore a detection run whose image bytes changed meanwhile', async () => {
+    const { editor, session, notices } = await setup()
+    const groupId = editor.groups.active()!.id
+    const run = { runId: 'run1', method: 'test', version: '0', createdAt: '', imageFingerprint: 'fp-i1', analysisScale: 1, targetGroupId: groupId, seeds: [], prior: {}, settings: {} }
+    editor.annotations.applyBatch('i1', [{ kind: 'add', annotation: automated('auto1', groupId) }], { label: 'Accept 1 suggestion', detectionRun: run })
+    editor.annotations.undo()
+    const updated = project()
+    updated.images[0].sourceMismatch = { detectedAt: '', message: 'Replaced' }
+    session().emitUpdated(updated)
+    expect(editor.annotations.redo()).toBe(false)
+    expect(notices.at(-1)?.message).toMatch(/image changed/)
+    expect(editor.state.docs['i1'].detectionRuns).toEqual([])
+    expect(editor.annotations.total()).toBe(0)
+  })
+
+  it('deleting a group keeps detection runs that target it (audit trail)', async () => {
+    const { editor } = await setup()
+    const groupId = editor.groups.active()!.id
+    editor.groups.create('Other')
+    const run = { runId: 'run1', method: 'test', version: '0', createdAt: '', imageFingerprint: 'fp-i1', analysisScale: 1, targetGroupId: groupId, seeds: [], prior: {}, settings: {} }
+    editor.annotations.applyBatch('i1', [{ kind: 'add', annotation: automated('auto1', groupId) }], { label: 'Accept', detectionRun: run })
+    expect(editor.groups.remove(groupId)).toBe(true)
+    expect(editor.state.docs['i1'].detectionRuns.map((r) => r.targetGroupId)).toEqual([groupId])
+    expect(await editor.projects.flush()).toBe(true)
+  })
+
   it('reassigning images keeps annotations; deleting an image group ungroups images', async () => {
     const { editor } = await setup()
     editor.annotations.add(5, 5)

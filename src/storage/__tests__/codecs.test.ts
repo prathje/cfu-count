@@ -134,6 +134,19 @@ describe('archive round trip', () => {
     await expect(decodeArchive(badZip)).rejects.toThrow(/quality/)
   })
 
+  it('accepts detection runs whose target group was deleted (audit trail) in archives and the CSV', async () => {
+    const p = project()
+    const d = doc(p, 'i1', [annotation('a1', 'g1')])
+    d.detectionRuns = [
+      { runId: 'r-gone', method: 'm', version: '1', createdAt: '', imageFingerprint: p.images[0].fingerprint, analysisScale: 1, targetGroupId: 'deleted-group', seeds: [], prior: {}, settings: {}, negatives: [{ x: 1, y: 1 }] },
+    ]
+    expect(validateImageAnnotations(structuredClone(d)).detectionRuns[0].targetGroupId).toBe('deleted-group')
+    const docs = new Map([['i1', d]])
+    const out = await decodeArchive(await encodeArchive({ project: p, annotations: docs, images: new Map() }))
+    expect(out.annotations.get('i1')!.detectionRuns).toEqual(d.detectionRuns)
+    expect(parseCsv(buildSummaryCsv(p, docs))).toHaveLength(1 + 4)
+  })
+
   it('rejects archives without project.json or with a newer schema', async () => {
     await expect(decodeArchive(zipSync({ 'readme.txt': strToU8('hi') }))).rejects.toThrow(/project.json/)
     const newer = { ...project(), schemaVersion: 2 }

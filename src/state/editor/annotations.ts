@@ -9,6 +9,7 @@ import type { Annotation, AnnotationGroup, DetectionRun, ID } from '../../model/
 import {
   applyOps,
   checkDetectionRun,
+  checkRunImage,
   checkOps,
   confirmedCount,
   confirmedCountsByGroup,
@@ -199,6 +200,19 @@ export function createAnnotations(ctx: EditorContext, groups: GroupCommands): An
     const h = unwrap(state.history[imageId]) ?? emptyHistory()
     const groupList = unwrap(state.project.annotationGroups)
     const plan = direction === 'undo' ? planUndo(h, groupList) : planRedo(h, groupList)
+    // Redo re-stores the run record: it must still describe these image bytes.
+    const run = plan.ok && direction === 'redo' ? plan.entry.detectionRun : undefined
+    const image = run ? state.project.images.find((i) => i.id === imageId) : undefined
+    const runProblem = run && image ? checkRunImage(run, image) : null
+    if (runProblem) {
+      notify({
+        tone: 'warning',
+        key: 'blocked',
+        message: `Can’t redo “${plan.ok ? plan.entry.label : ''}”: the image changed`,
+        detail: `${runProblem} Run Find similar again on the current image.`,
+      })
+      return false
+    }
     if (!plan.ok) {
       if (plan.reason === 'blocked') {
         const { message, detail } = historyBlockMessage(plan.block, direction, plan.entry.label)
