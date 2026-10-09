@@ -10,7 +10,7 @@
  * foreground in the second pass, so dense streaks do not bias it.
  */
 import { toLab, saturationMask, type LabPlanes } from './image/color.ts'
-import { normalizedBlur } from './image/filters.ts'
+import { blurWeight, normalizedBlur } from './image/filters.ts'
 import { makePlane, type Mask, type Plane, type RgbaImage } from './image/plane.ts'
 import { mad, median, selectValues } from './image/threshold.ts'
 import { computeRoi, type RoiResult } from './roi.ts'
@@ -49,9 +49,11 @@ export type LabBackground = [Plane, Plane, Plane]
 
 /** Masked Gaussian background of each Lab channel. `weight` 1 = background evidence. */
 export function labBackground(lab: LabPlanes, weight: Uint8Array, sigma: number): LabBackground {
+  // the blurred weights are the same for L, a and b
+  const den = blurWeight(weight, lab.L.width, lab.L.height, sigma)
   const fb = (p: Plane) => {
     const vals = selectValues(p, weight, 50_000)
-    return normalizedBlur(p, weight, sigma, vals.length ? median(vals) : 0)
+    return normalizedBlur(p, weight, sigma, vals.length ? median(vals) : 0, den)
   }
   return [fb(lab.L), fb(lab.a), fb(lab.b)]
 }

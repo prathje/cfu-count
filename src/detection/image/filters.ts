@@ -99,15 +99,21 @@ export function boxBlur(src: Plane, r: number): Plane {
       acc += s[row + add] - s[row + sub]
     }
   }
+  // vertical pass row by row (one running sum per column): same arithmetic as a per-column
+  // loop, but memory is read sequentially, which matters on multi-megapixel planes
   const o = out.data
-  for (let x = 0; x < w; x++) {
-    let acc = 0
-    for (let k = -r; k <= r; k++) acc += tmp[Math.min(Math.max(k, 0), h - 1) * w + x]
-    for (let y = 0; y < h; y++) {
-      o[y * w + x] = acc * norm
-      const add = Math.min(y + r + 1, h - 1)
-      const sub = Math.max(y - r, 0)
-      acc += tmp[add * w + x] - tmp[sub * w + x]
+  const acc = new Float64Array(w)
+  for (let k = -r; k <= r; k++) {
+    const row = Math.min(Math.max(k, 0), h - 1) * w
+    for (let x = 0; x < w; x++) acc[x] += tmp[row + x]
+  }
+  for (let y = 0; y < h; y++) {
+    const row = y * w
+    const add = Math.min(y + r + 1, h - 1) * w
+    const sub = Math.max(y - r, 0) * w
+    for (let x = 0; x < w; x++) {
+      o[row + x] = acc[x] * norm
+      acc[x] += tmp[add + x] - tmp[sub + x]
     }
   }
   return out
@@ -119,20 +125,22 @@ export function boxBlur(src: Plane, r: number): Plane {
  * `fallback`. Used to estimate background while ignoring colonies and the
  * area outside the plate.
  */
-export function normalizedBlur(src: Plane, weight: Uint8Array | Float32Array, sigma: number, fallback = 0): Plane {
+export function normalizedBlur(src: Plane, weight: Uint8Array | Float32Array, sigma: number, fallback = 0, blurredWeight?: Plane): Plane {
   const n = src.width * src.height
   const num = makePlane(src.width, src.height)
-  const den = makePlane(src.width, src.height)
-  for (let i = 0; i < n; i++) {
-    const wt = weight[i]
-    num.data[i] = src.data[i] * wt
-    den.data[i] = wt
-  }
+  for (let i = 0; i < n; i++) num.data[i] = src.data[i] * weight[i]
   const bn = gaussianBlur(num, sigma)
-  const bd = gaussianBlur(den, sigma)
+  const bd = blurredWeight ?? blurWeight(weight, src.width, src.height, sigma)
   const out = makePlane(src.width, src.height)
   for (let i = 0; i < n; i++) out.data[i] = bd.data[i] > 1e-4 ? bn.data[i] / bd.data[i] : fallback
   return out
+}
+
+/** gaussianBlur of a weight mask (the denominator of normalizedBlur; share it across planes with the same weights). */
+export function blurWeight(weight: Uint8Array | Float32Array, width: number, height: number, sigma: number): Plane {
+  const den = makePlane(width, height)
+  for (let i = 0; i < den.data.length; i++) den.data[i] = weight[i]
+  return gaussianBlur(den, sigma)
 }
 
 /** Median over a (2r+1)² window (r ≤ 2 intended: 3×3 or 5×5 despeckle). */

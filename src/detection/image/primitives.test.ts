@@ -92,6 +92,21 @@ describe('filters', () => {
     expect(boxBlur(p, 1).data[2]).toBeCloseTo(3)
     expect(boxBlur(p, 1).data[1]).toBeCloseTo(3)
   })
+  it('box blur equals a brute-force clamped window mean in 2-D', () => {
+    const w = 13
+    const h = 9
+    const p = makePlane(w, h)
+    for (let i = 0; i < p.data.length; i++) p.data[i] = ((i * 7919) % 101) / 7
+    const r = 2
+    const b = boxBlur(p, r)
+    const at = (x: number, y: number) => p.data[Math.min(Math.max(y, 0), h - 1) * w + Math.min(Math.max(x, 0), w - 1)]
+    for (let y = 0; y < h; y++)
+      for (let x = 0; x < w; x++) {
+        let acc = 0
+        for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) acc += at(x + dx, y + dy)
+        expect(b.data[y * w + x]).toBeCloseTo(acc / (2 * r + 1) ** 2, 4)
+      }
+  })
   it('normalised blur ignores masked-out pixels', () => {
     const p = makePlane(10, 10, 5)
     const w = new Uint8Array(100).fill(1)
