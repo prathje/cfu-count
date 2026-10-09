@@ -10,6 +10,8 @@ import { createMediaQuery, isApple, MOD } from './media'
 import { DialogHost, ToastRegion } from './primitives'
 import { shortcutSheet, useShortcuts } from './shortcuts'
 import { ShortcutSheet } from './help/ShortcutSheet'
+import { TermsDialog } from './about/TermsDialog'
+import { acceptTerms, hasAcceptedTerms } from './about/terms'
 import { VersionHistoryContainer } from './history/VersionHistoryContainer'
 import type { ViewportHandle } from '../viewport/api'
 import { SidebarContainer } from './sidebar/SidebarContainer'
@@ -26,6 +28,8 @@ export function AppShell() {
   const touchScreen = createMediaQuery('(any-pointer: coarse)')
   const [sidebarOpen, setSidebarOpen] = createSignal(!narrow())
   const [helpOpen, setHelpOpen] = createSignal(false)
+  // Terms of use: blocking on the first visit in this browser, re-openable from Settings.
+  const [terms, setTerms] = createSignal<'first-run' | 'view' | null>(hasAcceptedTerms() ? null : 'first-run')
   const [adjustOpen, setAdjustOpen] = createSignal(false)
   let viewport: ViewportHandle | undefined
   const dragging = createFileDrop((files) => void actions.importFiles(files))
@@ -165,6 +169,7 @@ export function AppShell() {
               touchAnnotates={state.touchAnnotates}
               onTouchAnnotates={editor.view.setTouchAnnotates}
               onShowShortcuts={() => setHelpOpen(true)}
+              onShowTerms={() => setTerms('view')}
             />
           </div>
         }
@@ -238,6 +243,15 @@ export function AppShell() {
       <VersionHistoryContainer />
       <DialogHost dialogs={dialogs} />
       <ShortcutSheet open={helpOpen()} sections={shortcutSheet(MOD)} onClose={() => setHelpOpen(false)} />
+      <TermsDialog
+        open={terms() !== null}
+        mode={terms() ?? 'view'}
+        onAccept={() => {
+          acceptTerms()
+          setTerms(null)
+        }}
+        onClose={() => setTerms(null)}
+      />
     </div>
   )
 }

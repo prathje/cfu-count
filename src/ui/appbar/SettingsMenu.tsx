@@ -2,6 +2,9 @@ import { For, Show } from 'solid-js'
 import type { Cue } from '../../state/feedback'
 import type { CueToggle, SoundSettings, SoundSettingsPatch } from '../../state/soundSettings'
 import { Keyboard, Settings, Volume2 } from '../icons'
+import ExternalLink from 'lucide-solid/icons/external-link'
+import ScrollText from 'lucide-solid/icons/scroll-text'
+import { LICENSE_URL, REPO_URL } from '../about/terms'
 import { IconButton, MenuItem, MenuSection, Popover, Slider, Switch, createPopoverState } from '../primitives'
 
 /** Device settings popover (app bar gear): sound feedback, touch input, shortcuts. */
@@ -19,6 +22,8 @@ export interface SettingsMenuProps {
   touchAnnotates: boolean
   onTouchAnnotates(on: boolean): void
   onShowShortcuts(): void
+  /** Re-open the terms of use. */
+  onShowTerms(): void
 }
 
 interface CueRow {
@@ -131,6 +136,35 @@ export function SettingsMenu(props: SettingsMenuProps) {
             onClick={() => {
               pop.close()
               props.onShowShortcuts()
+            }}
+          />
+        </MenuSection>
+
+        <MenuSection>
+          <MenuItem
+            icon={ExternalLink}
+            label="Source code on GitHub"
+            description="prathje/cfu-count"
+            onClick={() => {
+              pop.close()
+              window.open(REPO_URL, '_blank', 'noopener,noreferrer')
+            }}
+          />
+          <MenuItem
+            icon={ScrollText}
+            label="Terms of use"
+            description="Provided as is · MIT License"
+            onClick={() => {
+              pop.close()
+              props.onShowTerms()
+            }}
+          />
+          <MenuItem
+            icon={ExternalLink}
+            label="MIT License"
+            onClick={() => {
+              pop.close()
+              window.open(LICENSE_URL, '_blank', 'noopener,noreferrer')
             }}
           />
         </MenuSection>

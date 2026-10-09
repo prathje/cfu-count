@@ -10,7 +10,10 @@ review the suggestions before any of them are counted.
 There is no server. Images never leave the browser except when you save them to
 your own Google Drive.
 
-Live: <https://prathje.github.io/cfu-count/>
+Live: <https://prathje.github.io/cfu-count/> · Source: <https://github.com/prathje/cfu-count>
+
+> **Early-stage software, provided as is without any warranty.** Loss of data is
+> likely: download your project (project menu → *Download project (.zip)*) regularly.
 
 ## Development
 
@@ -65,3 +68,8 @@ Pushing to `main` deploys to GitHub Pages (`.github/workflows/deploy.yml`).
 - [docs/research/automated-counting.md](docs/research/automated-counting.md): detection approaches
 - [docs/research/detection-results.md](docs/research/detection-results.md): detector results on test plates
 - [colony-counter-build-brief.md](colony-counter-build-brief.md): product brief and acceptance criteria
+
+## License
+
+[MIT](LICENSE) © 2026 Patrick Rathje. The software is provided “as is”, without
+warranty of any kind; see the license and the in-app terms of use.
