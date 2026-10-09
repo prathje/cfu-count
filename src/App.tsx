@@ -1,4 +1,4 @@
-import { createResource, onCleanup, onMount, Show } from 'solid-js'
+import { createEffect, createResource, on, onCleanup, onMount, Show } from 'solid-js'
 import { createEditor } from './state/editor'
 import { createAssist } from './state/assist'
 import { createDetectorClient } from './detection/client'
@@ -26,6 +26,8 @@ function AppRoot(props: { choice: RepositoryChoice }) {
   const assist = createAssist({ editor, notify: toaster.push, createClient: () => createDetectorClient() })
   onCleanup(assist.dispose)
   const thumbnails = createThumbnailCache(() => (editor.state.project ? editor.images.blob : null))
+  // Thumbnails of Drive images fail while Drive is disconnected: retry once it connects.
+  createEffect(on(() => editor.drive.state().state, (s) => s === 'connected' && thumbnails.retryFailed(), { defer: true }))
   const actions = createProjectActions(editor, dialogs, toaster.push)
   const services: AppServices = { editor, assist, toaster, dialogs, thumbnails, actions, isDemo }
 

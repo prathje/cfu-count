@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { resolveShortcut, shortcutSheet, SHORTCUTS, type KeyLike } from './shortcuts'
+import { compareKeyAction, resolveShortcut, shortcutSheet, SHORTCUTS, type KeyLike } from './shortcuts'
 
 const k = (key: string, mods: Partial<KeyLike> = {}): KeyLike => ({
   key,
@@ -61,5 +61,17 @@ describe('shortcutSheet', () => {
     const documented = SHORTCUTS.filter((s) => s.display.length > 0).length
     expect(rows.length).toBe(documented)
     expect(sheet.map((s) => s.section)).toEqual(['Tools', 'Annotation groups', 'Edit', 'Assisted counting', 'View', 'Images', 'Help'])
+  })
+})
+
+describe('compareKeyAction', () => {
+  const ev = (type: string, key = '\\', mods: { metaKey?: boolean; ctrlKey?: boolean } = {}) => ({ type, key, metaKey: false, ctrlKey: false, ...mods })
+  it('starts on keydown only when allowed, and ends on any keyup of the key', () => {
+    expect(compareKeyAction(ev('keydown'), true)).toBe('start')
+    expect(compareKeyAction(ev('keydown'), false)).toBeNull()
+    expect(compareKeyAction(ev('keydown', '\\', { metaKey: true }), true)).toBeNull()
+    // e.g. the key is released after switching to an image without adjustments
+    expect(compareKeyAction(ev('keyup'), false)).toBe('end')
+    expect(compareKeyAction(ev('keyup', 'x'), true)).toBeNull()
   })
 })

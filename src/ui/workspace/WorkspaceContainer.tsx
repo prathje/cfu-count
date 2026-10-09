@@ -11,7 +11,7 @@ import { useApp } from '../context'
 import { bitmapError, bitmapSizeMismatch, createCurrentBitmap, readyImage, type BlobSource } from '../images'
 import { createElementHeight, createElementWidth, createMediaQuery, MOD } from '../media'
 import { CANVAS_GUARD_ATTR, Popover } from '../primitives'
-import { COMPARE_KEY, FIND_SIMILAR_KEY, isTypingTarget } from '../shortcuts'
+import { COMPARE_KEY, FIND_SIMILAR_KEY, compareKeyAction, isTypingTarget } from '../shortcuts'
 import { AdjustPanel } from './AdjustPanel'
 import { FloatingToolbar, toolbarModeFor } from '../toolbar/FloatingToolbar'
 import { groupTallies, interactionHint, nearDuplicateMessage, sizeMismatchMessage, TOUCH_NAVIGATES_DETAIL, TOUCH_NAVIGATES_MESSAGE } from './hints'
@@ -87,12 +87,16 @@ export function WorkspaceContainer(props: WorkspaceContainerProps) {
   }
   // Hold "\\" to show the original (keyup ends it; so do blur and hiding the tab).
   const onCompareKey = (e: KeyboardEvent) => {
-    if (e.key !== COMPARE_KEY || e.metaKey || e.ctrlKey || isTypingTarget(e.target) || document.querySelector('dialog[open]')) return
-    if (!images.current() || isDefaultDisplay(display())) return
+    const canStart = !isTypingTarget(e.target) && !document.querySelector('dialog[open]') && !!images.current() && !isDefaultDisplay(display())
+    const action = compareKeyAction(e, canStart)
+    if (action === 'end') return setComparing(false)
+    if (action !== 'start') return
     e.preventDefault()
-    setComparing(e.type === 'keydown')
+    setComparing(true)
   }
   const endCompare = () => setComparing(false)
+  // A new image starts unadjusted-to-the-eye: never carry a held compare over.
+  createEffect(on(() => state.currentImageId, endCompare, { defer: true }))
   window.addEventListener('keydown', onCompareKey)
   window.addEventListener('keyup', onCompareKey)
   window.addEventListener('blur', endCompare)

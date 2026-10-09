@@ -45,6 +45,18 @@ export interface ShortcutBinding {
 const TOOL_LABEL: Record<Tool, string> = { add: 'Add colonies', erase: 'Erase colonies', pan: 'Pan' }
 /** Hold to show the unadjusted image (KeyboardEvent.key). */
 export const COMPARE_KEY = '\\'
+/**
+ * What a key event means for "hold to compare with the original" (pure): start on
+ * keydown when allowed, end on ANY keyup of the key. The keyup never depends on the
+ * current image, so switching to an unadjusted image while the key is held cannot
+ * leave comparing stuck on.
+ */
+export function compareKeyAction(e: { type: string; key: string; metaKey: boolean; ctrlKey: boolean }, canStart: boolean): 'start' | 'end' | null {
+  if (e.key !== COMPARE_KEY) return null
+  if (e.type === 'keyup') return 'end'
+  if (e.type !== 'keydown' || e.metaKey || e.ctrlKey || !canStart) return null
+  return 'start'
+}
 /** Opens/closes assisted counting (shown in the toolbar tooltip too). */
 export const FIND_SIMILAR_KEY = 'f'
 const DIGITS = ['1', '2', '3', '4', '5', '6', '7', '8', '9']

@@ -6,7 +6,7 @@
  * markers. Object URLs are revoked when images are removed or the cache is
  * cleared (project switch).
  */
-import { createEffect, createMemo, createSignal, onCleanup, type Accessor } from 'solid-js'
+import { createEffect, createMemo, createSignal, onCleanup, untrack, type Accessor } from 'solid-js'
 import type { ID } from '../model/types'
 import { decodeImage, type DecodedImage } from '../storage/images'
 
@@ -19,9 +19,11 @@ const THUMB_SIZE = 96
 export interface ThumbnailCache {
   /** Reactive URL for an image (undefined while generating / on failure). */
   url(imageId: ID): string | undefined
-  /** Whether generating the thumbnail failed. */
+  /** Whether generating the thumbnail failed (a later request or retryFailed tries again). */
   failed(imageId: ID): boolean
   request(imageId: ID): void
+  /** Try every failed thumbnail again (e.g. after connecting Google Drive). */
+  retryFailed(): void
   forget(imageId: ID): void
   clear(): void
 }
@@ -33,50 +35,76 @@ export function createThumbnailCache(source: Accessor<BlobSource | null>): Thumb
   let queue = Promise.resolve()
   let generation = 0
 
-  async function make(imageId: ID, gen: number) {
-    const src = source()
-    if (!src) return
+  function setUrl(imageId: ID, url: string) {
+    // A re-request (forget + request while a job was queued) must not leak the earlier URL.
+    const old = untrack(urls)[imageId]
+    if (old && old !== url) URL.revokeObjectURL(old)
+    setUrls((u) => ({ ...u, [imageId]: url }))
+  }
+
+  async function render(decoded: DecodedImage): Promise<Blob | null> {
+    const scale = THUMB_SIZE / Math.min(decoded.width, decoded.height)
+    const w = Math.max(1, Math.round(decoded.width * scale))
+    const h = Math.max(1, Math.round(decoded.height * scale))
+    const canvas = document.createElement('canvas')
+    canvas.width = w
+    canvas.height = h
     try {
-      const decoded = await decodeImage(await src(imageId))
-      const scale = THUMB_SIZE / Math.min(decoded.width, decoded.height)
-      const w = Math.max(1, Math.round(decoded.width * scale))
-      const h = Math.max(1, Math.round(decoded.height * scale))
-      const canvas = document.createElement('canvas')
-      canvas.width = w
-      canvas.height = h
-      const ctx = canvas.getContext('2d')!
+      const ctx = canvas.getContext('2d')
+      if (!ctx) throw new Error('Canvas 2D unavailable')
       ctx.imageSmoothingQuality = 'high'
       ctx.drawImage(decoded.source, 0, 0, w, h)
-      decoded.close()
-      const blob = await new Promise<Blob | null>((r) => canvas.toBlob(r, 'image/jpeg', 0.8))
+    } finally {
+      decoded.close() // release the full-size bitmap even when drawing fails
+    }
+    return new Promise<Blob | null>((r) => canvas.toBlob(r, 'image/jpeg', 0.8))
+  }
+
+  async function make(imageId: ID, gen: number) {
+    const src = source()
+    if (gen !== generation || !requested.has(imageId)) return
+    if (!src) {
+      requested.delete(imageId) // no project open: let a later request try again
+      return
+    }
+    try {
+      const blob = await render(await decodeImage(await src(imageId)))
       if (!blob || gen !== generation || !requested.has(imageId)) return
-      const url = URL.createObjectURL(blob)
-      setUrls((u) => ({ ...u, [imageId]: url }))
+      setUrl(imageId, URL.createObjectURL(blob))
     } catch (err) {
       console.warn('Thumbnail failed', imageId, err)
-      if (gen === generation) setFailures((f) => ({ ...f, [imageId]: true }))
+      if (gen !== generation) return
+      // Forget the request so a later request (or retryFailed) tries again.
+      requested.delete(imageId)
+      setFailures((f) => ({ ...f, [imageId]: true }))
     }
+  }
+
+  function request(id: ID) {
+    if (requested.has(id)) return
+    requested.add(id)
+    if (untrack(failures)[id]) setFailures(({ [id]: _, ...rest }) => rest)
+    const gen = generation
+    queue = queue.then(() => make(id, gen))
   }
 
   return {
     url: (id) => urls()[id],
     failed: (id) => !!failures()[id],
-    request(id) {
-      if (requested.has(id)) return
-      requested.add(id)
-      const gen = generation
-      queue = queue.then(() => make(id, gen))
+    request,
+    retryFailed() {
+      for (const id of Object.keys(untrack(failures))) request(id)
     },
     forget(id) {
       requested.delete(id)
-      const url = urls()[id]
+      const url = untrack(urls)[id]
       if (url) URL.revokeObjectURL(url)
       setUrls(({ [id]: _, ...rest }) => rest)
     },
     clear() {
       generation++
       requested.clear()
-      for (const url of Object.values(urls())) URL.revokeObjectURL(url)
+      for (const url of Object.values(untrack(urls))) URL.revokeObjectURL(url)
       setUrls({})
       setFailures({})
     },
