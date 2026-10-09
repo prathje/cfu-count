@@ -518,3 +518,12 @@ Each annotation gets `origin: 'automated'` (immutable), `reviewStatus: 'accepted
 ## 8. Model changes
 
 None. `DetectionRun`, `DetectionSeed`, `AnnotationGeometry`, `DetectorProvenance` and `Annotation.geometry` in `src/model/types.ts` were sufficient. Method-specific data goes in `run.prior`, `run.settings` and `run.diagnostics`. `src/detection` imports model types only.
+
+## Reference counts from the product owner (2026-10-09)
+
+Manual counts reported by the product owner for checking the detector. These are approximate region totals, not per-colony ground truth. Regions are described loosely; the region tool's "Compare with detector" will make them precise once the manual marks are in a project.
+
+| Image | Region | Manual count | Notes |
+|---|---|---|---|
+| capture001250 | upper-left streak/area | 136 | counted manually |
+| capture001247 | upper-left | ~170 | image not yet in `test_images/` |
