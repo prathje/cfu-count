@@ -70,7 +70,7 @@ export interface DetectSettings {
   kMax: number
   /**
    * Fitter: a group is flagged for review when its RELATIVE objective gap (evidence
-   * per contested colony, see ClusterResult.relativeGap) is below this (default 0.1).
+   * per contested colony, see ClusterResult.relativeGap) is below this (default 0.03).
    * A runner-up of "no colony" (K = 0) never makes a review region.
    */
   reviewGap: number
@@ -167,8 +167,15 @@ export interface ClusterResult {
    */
   relativeGap?: number | null
   status: ClusterStatus
-  /** For review clusters: the runner-up explanation (new colonies only), so the UI can offer "2 or 3?". */
-  alternative?: { k: number; colonies: { x: number; y: number; r: number }[] }
+  /**
+   * For review clusters: the runner-up explanation (new colonies only), so the UI can offer "2 or 3?".
+   * `colonies` is the full alternative set (kept for compatibility). `removed` are indices into this
+   * cluster's suggestions (in the order they appear in DetectResult.suggestions) that the alternative
+   * drops; `added` are the alternative's circles with no counterpart among them. Matching: same
+   * colony when centres are within 0.5·max(r) and radii within ±35 %. The detector always fills
+   * `added`/`removed`; they are optional only so older consumers and fixtures stay valid.
+   */
+  alternative?: { k: number; colonies: { x: number; y: number; r: number }[]; added?: { x: number; y: number; r: number }[]; removed?: number[] }
 }
 
 export interface SeedReport extends DetectionSeed {

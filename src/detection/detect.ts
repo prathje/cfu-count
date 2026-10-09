@@ -20,7 +20,7 @@ import {
   type PreparedImage,
 } from './features.ts'
 import { nearFixed, sensitivityParams, maskThreshold, type AnalysisPrior, type FixedColony, type MethodContext } from './methods/common.ts'
-import { runFitter, type FitterState } from './methods/fitter.ts'
+import { diffSets, runFitter, type FitterState } from './methods/fitter.ts'
 import { priorRadii, runLog } from './methods/log.ts'
 import { runWatershed, type MethodOutput } from './methods/watershed.ts'
 import type {
@@ -47,7 +47,7 @@ export const DEFAULT_SETTINGS: DetectSettings = {
   priorWidth: 1,
   edgeMarginFrac: 0.025,
   kMax: 400,
-  reviewGap: 0.1,
+  reviewGap: 0.03,
   sMin: 0.25,
   minUsableSeeds: 3,
 }
@@ -134,7 +134,7 @@ export async function detect(input: DetectInput, onProgress?: ProgressFn, signal
   r.clusters = r.clusters.map((c) => ({
     ...c,
     bbox: [c.bbox[0] + o.x, c.bbox[1] + o.y, c.bbox[2], c.bbox[3]],
-    ...(c.alternative ? { alternative: { k: c.alternative.k, colonies: c.alternative.colonies.map(back) } } : {}),
+    ...(c.alternative ? { alternative: { ...c.alternative, colonies: c.alternative.colonies.map(back), ...(c.alternative.added ? { added: c.alternative.added.map(back) } : {}) } } : {}),
   }))
   r.calibration = { ...r.calibration, seeds: r.calibration.seeds.map(backSeed) }
   r.roi = { ...r.roi, outline: r.roi.outline.map(back) }
@@ -297,7 +297,8 @@ function reconcileClusters(clusters: ClusterResult[], kept: Suggestion[], keep: 
         out.objectiveGap = null
         out.status = 'ok'
       } else {
-        out.alternative = { k: colonies.length, colonies }
+        const primary = kept.filter((s) => s.clusterId === c.clusterId)
+        out.alternative = { k: colonies.length, colonies, ...diffSets(primary, colonies, (q) => q) }
         out.runnerUpK = colonies.length
       }
     }

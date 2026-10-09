@@ -730,6 +730,12 @@ export interface ClusterSolution {
   groups: GroupFit[]
   /** Patch raster: group index per foreground pixel, −1 elsewhere. */
   groupOf: Int32Array
+  /**
+   * Add a configuration with `k` colonies to group `gi`'s table (no-op if present).
+   * Used by re-runs whose best K falls on the edge of the swept range: only that
+   * group is fitted, not the whole cluster. Keeps the cluster's fit state alive.
+   */
+  extend: (gi: number, k: number) => void
 }
 
 const MAX_GROUP = 3
@@ -823,6 +829,7 @@ function sweepGroups(fit: ClusterFit, mask: Mask, params: ClusterFitParams, boun
   }
   const nGroups = Math.max(1, roots.size)
   const groups: GroupFit[] = []
+  const extenders: ((k: number) => void)[] = []
   for (let g = 0; g < nGroups; g++) {
     const members = all.filter((_, k) => diskGroup[k] === g)
     const pix: number[] = []
@@ -849,37 +856,48 @@ function sweepGroups(fit: ClusterFit, mask: Mask, params: ClusterFitParams, boun
     const kLo = clearSingle ? 0 : Math.max(0, Math.min(k0, ka) - 1)
     const kHi = clearSingle ? 1 : Math.min(MAX_SWEEP_K, Math.max(k0, ka, open.length >= 0.3 * fit.a0 ? 1 : 0) + 1)
     const configs: GroupConfig[] = []
-    const record = (disks: readonly Circle3[], k: number) => {
-      const count = disks.reduce((a, d) => a + countTerm(d.r, prior.rMed, weights.areaCount), 0)
-      const base = fit.J() - weights.lambda * count - weights.beta * priorSum(disks, prior.logR, prior.s, weights.huber, weights.oversize, weights.undersize)
-      const prev = configs.find((c) => c.k === k)
-      const cand: GroupConfig = { k, disks: disks.map(({ x, y, r }) => ({ x, y, r })), base, count }
-      if (!prev) configs.push(cand)
-      else if (configScore(cand, weights, prior.logR, prior.s) < configScore(prev, weights, prior.logR, prior.s)) configs[configs.indexOf(prev)] = cand
-    }
+    const gf: GroupFit = { configs, fixedIds: fixedHere.map((f) => f.id!).filter(Boolean), bbox: [minX, minY, maxX, maxY], area: pix.length, kRange: [kLo, kHi] }
     // the greedy solution for k0
-    record(free, k0)
+    recordInto(fit, configs, free, k0, params)
     for (const d of free) fit.remove(d)
-    for (let k = kLo; k <= kHi; k++) {
-      if (k === 0) {
-        record([], 0)
-        continue
-      }
-      if (k === k0 && clearSingle) continue
+    const tryK = (k: number) => {
+      if (k === 0) return recordInto(fit, configs, [], 0, params)
       const init = kmeansInit(open.length ? open : pix, w, dt, k, prior, rMin, params.rMaxFit)
       let placed = init.map((c) => fit.add(c.x, c.y, c.r))
       for (let pass = 0; pass < 2; pass++) placed = placed.map((d) => fit.refine(d, bounds, rMin))
-      record(placed, k)
+      recordInto(fit, configs, placed, k, params)
       for (const d of placed) fit.remove(d)
     }
+    for (let k = kLo; k <= kHi; k++) if (!(k === k0 && clearSingle)) tryK(k)
     configs.sort((a, b) => a.k - b.k)
     // leave the best configuration in place so later groups are fitted against it
     const best = configs.reduce((a, b) => (configScore(b, weights, prior.logR, prior.s) < configScore(a, weights, prior.logR, prior.s) ? b : a))
-    for (const d of best.disks) fit.add(d.x, d.y, d.r)
-    groups.push({ configs, fixedIds: fixedHere.map((f) => f.id!).filter(Boolean), bbox: [minX, minY, maxX, maxY], area: pix.length, kRange: [kLo, kHi] })
+    let placedBest = best.disks.map((d) => fit.add(d.x, d.y, d.r))
+    groups.push(gf)
+    extenders.push((k: number) => {
+      // extend this group's table by one K, against the same state the table was built in
+      if (configs.some((c) => c.k === k) || k < 0 || k > MAX_SWEEP_K) return
+      for (const d of placedBest) fit.remove(d)
+      tryK(k)
+      configs.sort((a, b) => a.k - b.k)
+      gf.kRange = [Math.min(gf.kRange[0], k), Math.max(gf.kRange[1], k)]
+      placedBest = best.disks.map((d) => fit.add(d.x, d.y, d.r))
+    })
   }
-  return { groups, groupOf }
+  return { groups, groupOf, extend: (gi, k) => extenders[gi]?.(k) }
 }
+
+/** Record a configuration (keeps the better one per K under the table weights). */
+function recordInto(fit: ClusterFit, configs: GroupConfig[], disks: readonly Circle3[], k: number, params: ClusterFitParams): void {
+  const { prior, weights } = params
+  const count = disks.reduce((a, d) => a + countTerm(d.r, prior.rMed, weights.areaCount), 0)
+  const base = fit.J() - weights.lambda * count - weights.beta * priorSum(disks, prior.logR, prior.s, weights.huber, weights.oversize, weights.undersize)
+  const prev = configs.find((c) => c.k === k)
+  const cand: GroupConfig = { k, disks: disks.map(({ x, y, r }) => ({ x, y, r })), base, count }
+  if (!prev) configs.push(cand)
+  else if (configScore(cand, weights, prior.logR, prior.s) < configScore(prev, weights, prior.logR, prior.s)) configs[configs.indexOf(prev)] = cand
+}
+
 
 /** Farthest-point seeding on deep pixels, then a few Lloyd iterations; radii from the assigned areas. */
 function kmeansInit(pix: number[], w: number, dt: Plane, k: number, prior: AnalysisPrior, rMin: number, rMax: number): Circle3[] {
@@ -967,6 +985,30 @@ export function contestedArea(a: readonly Circle3[], b: readonly Circle3[], rMed
   return area
 }
 
+/**
+ * Primary vs alternative as a diff: indices of primary disks the alternative drops, and the
+ * alternative's disks without a counterpart (centres within 0.5·max(r), radii within ±35 %).
+ */
+export function diffSets(primary: readonly Circle3[], alt: readonly Circle3[], toOrig: (c: Circle3) => Circle3): { added: Circle3[]; removed: number[] } {
+  const usedAlt = new Uint8Array(alt.length)
+  const removed: number[] = []
+  primary.forEach((p, i) => {
+    let best = -1
+    let bd = Infinity
+    alt.forEach((a, j) => {
+      if (usedAlt[j]) return
+      const d = Math.hypot(p.x - a.x, p.y - a.y)
+      if (d <= 0.5 * Math.max(p.r, a.r) && Math.abs(Math.log(p.r / a.r)) <= 0.3 && d < bd) {
+        bd = d
+        best = j
+      }
+    })
+    if (best >= 0) usedAlt[best] = 1
+    else removed.push(i)
+  })
+  return { added: alt.filter((_, j) => !usedAlt[j]).map(toOrig), removed }
+}
+
 /** Pick the best and runner-up configuration of a group for the given weights and prior spread. */
 export function decideGroup(g: GroupFit, wts: ScoreWeights, logR: number, s: number, rMed = Math.exp(logR)): GroupDecision {
   const scored = g.configs.map((c) => ({ c, j: configScore(c, wts, logR, s) })).sort((a, b) => a.j - b.j)
@@ -1004,8 +1046,6 @@ export interface FitterState {
     tooLarge: boolean
     fixedIds: string[]
     sol: ClusterSolution | null
-    /** Inputs kept so one cluster can be refitted when its table is incomplete. */
-    refit: () => ClusterSolution
   }[]
   /** Cluster labels of the mask (analysis px). */
   labels: Int32Array
@@ -1085,7 +1125,6 @@ async function buildFitterState(ctx: MethodContext, seedPts: { x: number; y: num
       tooLarge,
       fixedIds: fixedHere.map((f) => f.id),
       sol: tooLarge ? null : refit(),
-      refit: () => refit(),
     })
   }
   return { key, clusters, labels: cl.labels, width: mask.width, logCandidateThreshold: logThreshold, baseWeights }
@@ -1145,12 +1184,19 @@ export async function runFitter(ctx: MethodContext, seedPts: { x: number; y: num
       for (let i = 0; i < st.labels.length; i++) if (st.labels[i] === c.label) labels[i] = nextId - 1
       continue
     }
-    let decisions = c.sol.groups.map((g) => decideGroup(g, wts, prior.logR, s, prior.rMed))
-    if (decisions.some((d) => d.incomplete) && (wts.lambda !== st.baseWeights.lambda || settings.priorWidth !== 1)) {
-      // the stored table cannot answer this setting: refit the cluster under the new weights
-      c.sol = c.refit()
-      decisions = c.sol.groups.map((g) => decideGroup(g, wts, prior.logR, s, prior.rMed))
-      counts.refitted++
+    const sol = c.sol
+    let decisions = sol.groups.map((g) => decideGroup(g, wts, prior.logR, s, prior.rMed))
+    // a best K on the open edge of a group's table: extend THAT group by one K (repeat, bounded)
+    for (let round = 0; round < 3; round++) {
+      const todo = decisions.map((d, gi) => (d.incomplete ? gi : -1)).filter((gi) => gi >= 0)
+      if (!todo.length) break
+      for (const gi of todo) {
+        const g = sol.groups[gi]
+        const k = decisions[gi].best.k
+        sol.extend(gi, k === g.kRange[1] ? k + 1 : k - 1)
+        decisions[gi] = decideGroup(g, wts, prior.logR, s, prior.rMed)
+        counts.refitted++
+      }
     }
     const groupIds = c.sol.groups.map(() => nextId++)
     c.sol.groups.forEach((g, gi) => {
@@ -1175,7 +1221,7 @@ export async function runFitter(ctx: MethodContext, seedPts: { x: number; y: num
         relativeGap: d.relativeGap === null ? null : round3(d.relativeGap),
         status: review ? 'review' : 'ok',
       }
-      if (review && d.runnerUp) result.alternative = { k: d.runnerUp.k, colonies: d.runnerUp.disks.map(toOrig) }
+      if (review && d.runnerUp) result.alternative = { k: d.runnerUp.k, colonies: d.runnerUp.disks.map(toOrig), ...diffSets(d.best.disks, d.runnerUp.disks, toOrig) }
       clustersOut.push(result)
     })
     // group label raster (analysis px)
@@ -1195,7 +1241,7 @@ export async function runFitter(ctx: MethodContext, seedPts: { x: number; y: num
       priorS: round3(s),
       logCandidateThreshold: st.logCandidateThreshold,
       reusedFit: reused,
-      clustersRefitted: counts.refitted,
+      groupsExtended: counts.refitted,
       groupsOk: counts.ok,
       groupsReview: counts.review,
       clustersTooLarge: counts.tooLarge,

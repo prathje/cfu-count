@@ -5,7 +5,7 @@
  * detect() with four isolated seeds.
  */
 import { describe, expect, it } from 'vitest'
-import { detect } from './index.ts'
+import { DEFAULT_SETTINGS, detect } from './index.ts'
 import type { DetectInput, DetectMethod, RgbaImage } from './types.ts'
 
 interface Disk {
@@ -123,7 +123,7 @@ describe('a clear triple is decided with margin', () => {
     const ids = new Set(r.suggestions.map((s) => s.clusterId))
     const cls = r.clusters.filter((c) => ids.has(c.clusterId))
     expect(cls.reduce((a, c) => a + c.chosenK, 0)).toBe(3)
-    for (const c of cls) expect(c.relativeGap ?? Infinity).toBeGreaterThan(0.3)
+    for (const c of cls) expect(c.relativeGap ?? Infinity).toBeGreaterThan(5 * DEFAULT_SETTINGS.reviewGap)
   })
 })
 
@@ -139,5 +139,21 @@ describe('a single colony stays one', () => {
   it.each(['fitter', 'watershed'] as const)('%s', async (method) => {
     const r = await detect(input([{ x: 130, y: 130, r: R * 1.2 }], method))
     expect(r.suggestions.length).toBe(1)
+  })
+})
+
+describe('review alternatives as a diff', () => {
+  it('lists the circles the alternative adds and the primary ones it removes', async () => {
+    // a 40 %-overlap triangle is the most ambiguous fixture; force review to see an alternative
+    const inp = input(layout('triangle', 2 * R * 0.6), 'fitter')
+    inp.settings = { ...inp.settings, reviewGap: 10 }
+    const r = await detect(inp)
+    const rc = r.clusters.find((c) => c.status === 'review' && c.alternative)!
+    expect(rc).toBeTruthy()
+    const alt = rc.alternative!
+    const primary = r.suggestions.filter((s) => s.clusterId === rc.clusterId)
+    // kept primary circles + added = the full alternative set
+    expect(primary.length - alt.removed!.length + alt.added!.length).toBe(alt.colonies.length)
+    expect(alt.k).toBe(alt.colonies.length)
   })
 })
