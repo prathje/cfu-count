@@ -127,7 +127,7 @@
   pointer-events: none;
 }
 .cfu-viewport__region-dim {
-  fill: rgba(10, 14, 20, 0.32);
+  fill: rgba(10, 14, 20, 0.38);
   stroke: none;
 }
 .cfu-viewport__region-halo {
