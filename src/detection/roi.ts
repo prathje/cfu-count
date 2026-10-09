@@ -14,8 +14,8 @@ import { traceAllOuterContours, fitCircleKasa, type Pt } from './image/contour.t
 import { distanceTransform } from './image/distance.ts'
 import { resizeArea } from './image/filters.ts'
 import { convexHull, polygonArea, rasterizeCircle, rasterizePolygon, rasterizeRect, simplifyPolyline } from './image/geometry.ts'
-import { makeMask, type Mask, type RgbaImage } from './image/plane.ts'
-import { mad, median } from './image/threshold.ts'
+import { makeMask, type Mask, type Plane, type RgbaImage } from './image/plane.ts'
+import { mad, median, quantile } from './image/threshold.ts'
 import type { Roi, RoiReport } from './types.ts'
 
 export interface RoiResult {
@@ -118,8 +118,10 @@ export function computeRoi(image: RgbaImage, scale: number, userRoi: Roi | undef
   const plate = rasterizePolygon(hullA, w, h)
   const areaA = count(plate)
   const eqDiam = 2 * Math.sqrt(areaA / Math.PI)
-  const marginA = source === 'fallback' ? 0 : edgeMarginFrac * eqDiam
   const dist = distanceTransform(plate)
+  const rim = source === 'fallback' ? 0 : rimWidth(toLuma(image), plate, dist, eqDiam)
+  const marginA = source === 'fallback' ? 0 : Math.max(edgeMarginFrac * eqDiam, rim > 0 ? rim + 0.01 * eqDiam : 0)
+  if (rim > 0.1 * eqDiam) warnings.push('A wide bright or dark band was found along the plate wall and excluded; check the analysed region.')
   const mask = thresholdDistance(dist, marginA)
   const outline = simplifyPolyline([...hullA, hullA[0]], 0.75).slice(0, -1).map((p) => ({ x: p.x / scale, y: p.y / scale }))
   return {
@@ -128,6 +130,36 @@ export function computeRoi(image: RgbaImage, scale: number, userRoi: Roi | undef
     report: { source, outline, shape: source === 'fallback' ? 'other' : classifyShape(hullA), marginPx: marginA / scale, area: count(mask) / (scale * scale) },
     warnings,
   }
+}
+
+/**
+ * Width of the band along the plate wall that does not look like agar. For
+ * each distance d from the outline: the 90th percentile of |luma − agar|/agar
+ * over the ring at d (the wall, meniscus and reflections may cover only part
+ * of the ring, hence a high percentile). Illumination gradients make every
+ * ring deviate somewhat, so the cut-off is relative: rings deviating more than
+ * the interior rings (8–15 % of the diameter in) by 0.12 belong to the rim.
+ * Returns the largest such d + 1 (≤ 15 % of the plate diameter), or 0.
+ */
+export function rimWidth(luma: Plane, plate: Mask, dist: Plane, eqDiam: number): number {
+  const maxD = Math.max(4, Math.floor(0.15 * eqDiam))
+  const inner: number[] = []
+  const rings: number[][] = Array.from({ length: maxD + 1 }, () => [])
+  const step = Math.max(1, Math.floor((plate.width * plate.height) / 400_000))
+  for (let i = 0; i < plate.data.length; i += step) {
+    if (!plate.data[i]) continue
+    const d = dist.data[i]
+    if (d > 0.25 * eqDiam) inner.push(luma.data[i])
+    else if (d <= maxD) rings[Math.floor(d)].push(luma.data[i])
+  }
+  if (inner.length < 50) return 0
+  const agar = median(inner)
+  const p90 = rings.map((ring) => (ring.length < 20 ? NaN : quantile(ring.map((v) => Math.abs(v - agar) / Math.max(agar, 1)), 0.9)))
+  const ref = median(p90.slice(Math.floor(0.08 * eqDiam)).filter(Number.isFinite))
+  if (!Number.isFinite(ref)) return 0
+  let last = 0
+  for (let d = 0; d < Math.floor(0.08 * eqDiam); d++) if (p90[d] > ref + 0.12) last = d + 1
+  return last
 }
 
 /** Pixels whose distance to the background exceeds `r`. */

@@ -19,7 +19,7 @@ import {
   type LabBackground,
   type PreparedImage,
 } from './features.ts'
-import { sensitivityParams, maskThreshold, type AnalysisPrior, type FixedColony, type MethodContext } from './methods/common.ts'
+import { nearFixed, sensitivityParams, maskThreshold, type AnalysisPrior, type FixedColony, type MethodContext } from './methods/common.ts'
 import { runFitter } from './methods/fitter.ts'
 import { priorRadii, runLog } from './methods/log.ts'
 import { runWatershed, type MethodOutput } from './methods/watershed.ts'
@@ -114,12 +114,7 @@ export async function detect(input: DetectInput, onProgress?: ProgressFn, signal
 
   // ---- method
   const t2 = now()
-  const fixed: FixedColony[] = input.existing.map((e) => ({
-    id: e.id,
-    x: e.x * prep.scale,
-    y: e.y * prep.scale,
-    r: (e.r ?? cal.priorA.rMed / prep.scale) * prep.scale,
-  }))
+  const fixed = fixedColonies(input.existing, prep, cal)
   const ctx: MethodContext = {
     prep,
     F: cal.F,
@@ -139,12 +134,15 @@ export async function detect(input: DetectInput, onProgress?: ProgressFn, signal
   else out = await runFitter(ctx, localSeedPts)
   timings.method = now() - t2
 
-  // keep suggestions whose centre lies in the analysed region and inside the image
+  // keep suggestions whose centre lies in the analysed region and inside the image,
+  // and never one on top of an existing colony (any group)
   const roiMask = prep.roi.mask
   const suggestions = out.suggestions.filter((s) => {
     const x = Math.floor(s.x * prep.scale)
     const y = Math.floor(s.y * prep.scale)
-    return x >= 0 && y >= 0 && x < roiMask.width && y < roiMask.height && roiMask.data[y * roiMask.width + x] === 1 && s.x < input.originalWidth && s.y < input.originalHeight
+    if (!(x >= 0 && y >= 0 && x < roiMask.width && y < roiMask.height && roiMask.data[y * roiMask.width + x] === 1)) return false
+    if (!(s.x < input.originalWidth && s.y < input.originalHeight)) return false
+    return !nearFixed(fixed, s.x * prep.scale, s.y * prep.scale, s.r * prep.scale, 0.5)
   })
   timings.total = now() - t0
 
@@ -378,6 +376,28 @@ export function calibrate(prep: PreparedImage, input: Pick<DetectInput, 'seeds' 
   }
   const localSeedPts = measured.filter((q) => q.seed.imageId === input.imageId && q.m).map((q) => ({ x: q.m!.cx, y: q.m!.cy }))
   return { F, noise, priorA, contrastRef, contrastLo, report, localSeedPts }
+}
+
+/**
+ * Existing annotations as fixed colonies (analysis px). A known radius
+ * (Annotation.geometry.r) is used as is; otherwise the colony under the mark
+ * is measured like a seed. The measured centre is used for the loss only when
+ * it is within half a radius of the mark (the annotation itself never moves).
+ */
+function fixedColonies(existing: DetectInput['existing'], prep: PreparedImage, cal: Calibrated): FixedColony[] {
+  const { priorA } = cal
+  const ctx = { F: cal.F, noise: cal.noise, rMax: Math.max(6, 2.5 * priorA.rHi) }
+  return existing.map((e) => {
+    const x = e.x * prep.scale
+    const y = e.y * prep.scale
+    if (e.r !== undefined) return { id: e.id, x, y, r: e.r * prep.scale }
+    if (x < 0 || y < 0 || x >= prep.width || y >= prep.height) return { id: e.id, x, y, r: priorA.rMed }
+    const m = measureSeed(ctx, x, y)
+    if (m.r === null || m.snr < 3) return { id: e.id, x, y, r: priorA.rMed }
+    const r = Math.min(Math.max(m.r, 0.6 * priorA.rMed), 1.6 * priorA.rHi)
+    const near = Math.hypot(m.cx - x, m.cy - y) < 0.5 * r
+    return { id: e.id, x: near ? m.cx : x, y: near ? m.cy : y, r }
+  })
 }
 
 /** Prior in analysis px; falls back to any measured seed radius, then to a plate-relative guess. */
