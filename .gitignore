@@ -28,3 +28,6 @@ dist-ssr
 
 # Local test photographs (not for the repo)
 test_images/
+
+# Detection evaluation outputs (overlays, crops, reports)
+.eval-out/
