@@ -570,6 +570,27 @@ export function Viewport(props: ViewportProps) {
   }
   const prevent = (e: Event) => e.preventDefault()
 
+  // Ghost-finger guard (see GestureMachine.syncTouches). Synced immediately and once
+  // more after the current event batch, because the relative order of pointer and
+  // touch events for the same contact is not specified.
+  let touchSyncTimer: ReturnType<typeof setTimeout> | undefined
+  function syncTouches(e: TouchEvent) {
+    const count = e.touches.length
+    apply(machine.syncTouches(count))
+    clearTimeout(touchSyncTimer)
+    touchSyncTimer = setTimeout(() => apply(machine.syncTouches(count)), 0)
+  }
+  function onTouchStart(e: TouchEvent) {
+    e.preventDefault()
+    syncTouches(e)
+  }
+  function onTouchEnd(e: TouchEvent) {
+    // Only the deferred pass: pointerup for the lifted finger may still be queued.
+    const count = e.touches.length
+    clearTimeout(touchSyncTimer)
+    touchSyncTimer = setTimeout(() => apply(machine.syncTouches(count)), 0)
+  }
+
   function onKeyDown(e: KeyboardEvent) {
     if (e.target !== root || e.metaKey || e.ctrlKey || e.altKey) return
     if (e.key.startsWith('Arrow')) delete root.dataset.pointerFocus // keyboard panning: show where focus is
@@ -629,8 +650,10 @@ export function Viewport(props: ViewportProps) {
     surface.addEventListener('gestureend', onGestureEnd, opts)
     // Non-passive touch listeners that cancel the default: stops iOS double-tap zoom,
     // synthetic click/mouse events and Scribble swallowing Pencil input (WebKit bug 217430).
-    surface.addEventListener('touchstart', prevent, opts)
+    surface.addEventListener('touchstart', onTouchStart, opts)
     surface.addEventListener('touchmove', prevent, opts)
+    surface.addEventListener('touchend', onTouchEnd, opts)
+    surface.addEventListener('touchcancel', onTouchEnd, opts)
     surface.addEventListener('contextmenu', prevent, opts)
     surface.addEventListener('dblclick', prevent, opts)
     if (inputDebugEnabled()) onCleanup(attachInputDebug(surface, root, () => machine.modeKind))
@@ -663,6 +686,7 @@ export function Viewport(props: ViewportProps) {
     onCleanup(() => {
       ro.disconnect()
       mq?.removeEventListener('change', onDpr)
+      clearTimeout(touchSyncTimer)
       window.removeEventListener('keydown', onWindowKeyDown)
       window.removeEventListener('keyup', onWindowKeyUp)
       window.removeEventListener('blur', clearTransient)

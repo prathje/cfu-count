@@ -85,6 +85,8 @@ interface Tracked {
   startX: number
   startY: number
   downTime: number
+  /** Time of the last down/move sample (staleness for syncTouches). */
+  lastTime: number
   ignored: boolean
 }
 
@@ -130,6 +132,27 @@ export class GestureMachine {
   }
 
   /** Forget everything (blur, visibilitychange, image change). Emits no tap. */
+  /**
+   * Reconcile tracked finger contacts with the platform's own count of touches
+   * (TouchEvent.touches.length). iPadOS Safari occasionally drops the pointerup /
+   * pointercancel of a finger (e.g. around system gestures or a second finger
+   * landing at the edge); the stale "ghost" would then pair with the next finger as
+   * a bogus pinch, or make a real second finger look like a third and be ignored,
+   * so zoom appears stuck until something resets the state. When we track more
+   * touches than are physically down, the stalest ones are released (never tapping).
+   */
+  syncTouches(activeTouches: number): GestureEffect[] {
+    const touches = [...this.pointers.values()].filter((p) => p.type === 'touch')
+    let excess = touches.length - Math.max(0, activeTouches)
+    if (excess <= 0) return []
+    touches.sort((a, b) => a.lastTime - b.lastTime)
+    for (const t of touches) {
+      if (excess-- <= 0) break
+      this.release(t.id)
+    }
+    return []
+  }
+
   reset(): GestureEffect[] {
     this.pointers.clear()
     this.mode = { kind: 'idle' }
@@ -146,6 +169,7 @@ export class GestureMachine {
       startX: p.x,
       startY: p.y,
       downTime: p.time,
+      lastTime: p.time,
       ignored: false,
     }
     this.pointers.set(p.id, t)
@@ -222,6 +246,7 @@ export class GestureMachine {
     const prevY = t.y
     t.x = p.x
     t.y = p.y
+    t.lastTime = p.time
     if (t.type === 'pen') this.lastPenTime = p.time
     if (t.ignored) return []
     const m = this.mode
