@@ -12,6 +12,8 @@ the modules, the seams between them and how data flows.
 | `src/model` | Data contract (`types.ts`, schema v1) and pure domain rules: edit policy (`policy.ts`), annotation ops, counts and the one `isConfirmed` (`annotations.ts`), groups (`groups.ts`), image order, documents and the storage-owned merge (`project.ts`), tools and their keys (`tool.ts`). No Solid, no I/O. | nothing |
 | `src/storage` | Persistence behind a framework-free contract (`api.ts`): IndexedDB working copy (`localStore.ts`), codecs (zip, CSV, validation, image decode), Google Drive (`drive/`: HTTP client, auth session, picker, pure sync engine `sync.ts`, per-project orchestration `projectSync.ts`, status + autosave scheduler). | model |
 | `src/state` | The editor: one Solid store split into slices (`editor/`), debounced autosave, undo history, messages, repository choice. Adapts storage's `subscribe` to signals. | model, storage contract |
+| `src/detection` | Colony detector (pure TS) and its module Worker + typed client. Framework-free; imports model types only. | model (types) |
+| `src/state/assist` | Assisted counting ("Find similar"): pure review rules (`review.ts`: suggestion layer, derived pending view, accept plan), seed selection (`seeds.ts`) and the controller (`index.ts`) owning one detector client and the in-memory suggestion store. | model, detection contract, editor |
 | `src/viewport` | Canvas viewport: rendering, gestures, pen/touch policy, spatial index. A pure view: it reports intents (`onAdd`, `onErase`, `onBlocked`) and never edits data. | model |
 | `src/ui` | Containers (`AppShell`, `WorkspaceContainer`, `SidebarContainer`, `createProjectActions`) wire editor slices to presentational components (app bar, sidebar, toolbar, workspace, primitives). CSS lives next to each feature. | state, viewport, model |
 | `src/demo` | In-memory demo repository + sample plates. Loaded with a dynamic import only for `?demoStorage` or when real storage cannot start, so it is a separate chunk. | model, storage codecs |
@@ -66,6 +68,23 @@ main-thread fallback in `adjust-processor.ts`) with the pure LUT/matrix maths in
 `viewport/image-adjust.ts`. Markers are never filtered. The settings live on
 `ImageRecord.display` and are set with `images.setDisplay` (project.json only, not
 undoable, allowed while a group is locked).
+
+**Assisted counting.** `createAssist` (composition root, `AppServices.assist`) keeps
+one suggestion layer per image in memory. Layers are never in annotation documents,
+history, autosave or counts; they are dropped on project switch, when the image's
+bytes change (`sourceMismatch`/fingerprint) or the target group is deleted. What is
+pending is derived from the layer plus the current annotations: a suggestion is
+hidden once any annotation covers it (0.7 r), and a cluster is resolved while
+annotations carrying one of the layer's accept run ids exist, so undo brings the
+suggestions back. Every accept is ONE `annotations.applyBatch(imageId, ops,
+{ label, detectionRun })` with a fresh run id (so undo removes exactly that run).
+The run carries `imageFingerprint`, `seedImageFingerprints` (reference plate) and
+`negatives` (rejected suggestions in scope). The worker client is created on the
+first run, cancelled on image switch, new run and panel close, and its cache is
+cleared on image switch. The viewport gets read-only `suggestions`,
+`reviewClusters` and `onSuggestionTap` (taps on a ring toggle rejection only while
+the review panel is open; elsewhere Add/Erase act on confirmed markers) and
+`ViewportHandle.showRect` for region navigation.
 
 ## Data flow
 

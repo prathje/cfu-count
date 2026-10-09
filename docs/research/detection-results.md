@@ -1,6 +1,6 @@
 # Colony detection: Phase 0 + 1a + 1b results
 
-Status: 2026-10-09. The detectors are implemented in `src/detection/` and the evaluation harness in `scripts/eval/`. Nothing is wired into the UI yet. **There is no ground truth yet.** Every number below is a count, a runtime or an agreement between methods, never an accuracy. Seeds were picked by an AI agent, not by a microbiologist (see §3).
+Status: 2026-10-09. The detectors are implemented in `src/detection/` and the evaluation harness in `scripts/eval/`. The UI integration is done (§7.1). **There is no ground truth yet.** Every number below is a count, a runtime or an agreement between methods, never an accuracy. Seeds were picked by an AI agent, not by a microbiologist (see §3).
 
 Read with: `docs/research/automated-counting.md` (options and the adopted plan) and `colony-fitting-method-brief.md` (the mainline method).
 
@@ -228,6 +228,29 @@ On the cream plates H is stable to ±2–3 %. On plates with dense streaks of co
 - Matching radius choice (0.6 / 1.0 / 2.0 r̃ are all reported).
 
 Please provide fully annotated project zips that include at least one hazy plate (like 1249/1250), one cream plate and one fluorescent plate. Mark every colony, including those in streaks, and note which plates are complete. Partially annotated plates make every unmarked true colony look like a false positive.
+
+## 7.1 As built (2026-10-09)
+
+Implemented in `src/state/assist/` and `src/ui/assist/`, mostly as proposed below. Differences:
+
+- **Entry point**: "Find similar" is a separated trailing toolbar item after Redo (in the More popover on narrow widths), shortcut **F**. It stays clickable when unavailable; the panel names the reason (no image, no group, locked/hidden group, image changed, decoded size mismatch, no examples) and offers the fix.
+- **Seeds**: the active group's manual annotations on this image. With fewer than 3, the panel offers images of the project with ≥ 3 manual examples in the same group (reference plate); local examples are sent too.
+- **Layer lifetime**: kept per image in memory while the project is open (not dropped on image switch, so switching back shows it again). Suggestions are drawn and tappable only while the review panel is open.
+- **Pending state is derived** from the current annotations, so manual marks added after the run hide the suggestion under them and undo of an accept brings suggestions back. Each accept gets its own run id.
+- **Review regions**: navigated with previous/next, which pans/zooms the viewport (`showRect`). The runner-up colonies of the selected region are drawn dotted. Regions with nothing new but an alternative read "One more?".
+- **Not built**: lasso accept, user-drawn ROI, drawing the analysed outline, seed rings.
+
+Browser runtimes (headless Chrome 2026, Apple M3 Max, 6016×4016 JPEG, wall clock from the click including blob read and decode in the worker; detector time from `timingsMs.total`):
+
+| plate | seeds | method | wall | detector | suggestions |
+|---|---|---|---|---|---|
+| 1280 | 6 local | fitter | 3.9 s | — | 202 (141 in 24 review regions) |
+| 1280 | 8 local + 99 accepted fixed | fitter | 3.7 s | 2.0 s | 111 |
+| 1280 | 8 local | blob / watershed | 4.9 s / 2.6 s | — | 130 / 91 |
+| 1281 | 8 from 1280 (cross-plate) | fitter | 4.7 s | 1.8 s | 1 |
+| 1250 | 8 from 1280 (cross-plate) | fitter | 5.8 s | 2.8 s | 361 (streaks as "153 or 154?" regions) |
+
+A slider change re-runs in about the same time as the first run (≈ 4 s incl. the 450 ms debounce): the fit dominates, so the plane cache saves little. The review-flag rate observed in §4.1 is visible in the UI: on cream plates most suggestions sit in review regions, and whole streaks become one region. That needs GT-based tuning of `reviewGap` before "Accept all OK" is useful on crowded plates. No real iPad was tested.
 
 ## 7. Proposed UI integration (later phase, after the UX work)
 
