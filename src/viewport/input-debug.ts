@@ -27,6 +27,7 @@ const EVENTS = [
 
 /** Attach the overlay to `host`, observing `surface`. Returns a cleanup function. */
 export function attachInputDebug(surface: HTMLElement, host: HTMLElement, mode: () => string): () => void {
+  // `mode` should include the tracked pointer count, e.g. "pinch/2".
   const panel = document.createElement('pre')
   panel.className = 'cfu-viewport__debug'
   host.appendChild(panel)

@@ -517,7 +517,12 @@ export function Viewport(props: ViewportProps) {
   const onPointerMove = (e: PointerEvent) => apply(machine.move(sample(e)))
   const onPointerUp = (e: PointerEvent) => apply(machine.up(sample(e)))
   const onPointerCancel = (e: PointerEvent) => apply(machine.cancel(e.pointerId))
-  const onLostCapture = (e: PointerEvent) => apply(machine.cancel(e.pointerId))
+  // Fingers: Safari can report lostpointercapture for a touch that is still down
+  // (breaking an ongoing pinch). Finger lifetimes are tracked by pointerup /
+  // pointercancel plus the TouchEvent count reconciliation instead.
+  const onLostCapture = (e: PointerEvent) => {
+    if (e.pointerType !== 'touch') apply(machine.cancel(e.pointerId))
+  }
   const onPointerLeave = (e: PointerEvent) => apply(machine.leave(e.pointerId))
 
   function onWheel(e: WheelEvent) {
@@ -656,7 +661,7 @@ export function Viewport(props: ViewportProps) {
     surface.addEventListener('touchcancel', onTouchEnd, opts)
     surface.addEventListener('contextmenu', prevent, opts)
     surface.addEventListener('dblclick', prevent, opts)
-    if (inputDebugEnabled()) onCleanup(attachInputDebug(surface, root, () => machine.modeKind))
+    if (inputDebugEnabled()) onCleanup(attachInputDebug(surface, root, () => `${machine.modeKind}/${machine.activePointerCount}`))
     root.addEventListener('selectstart', prevent, opts)
     root.addEventListener('dragstart', prevent, opts)
     root.addEventListener('keydown', onKeyDown)
