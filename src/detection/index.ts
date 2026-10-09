@@ -13,4 +13,6 @@
 export { detect, calibrate, DetectorCache, DetectionCancelled, DEFAULT_SETTINGS, DETECTOR_VERSION } from './detect.ts'
 export { chooseAnalysisScale, type ScaleChoice, type ScaleRequest } from './scale.ts'
 export { suggestionsToAnnotations, type AcceptOptions } from './accept.ts'
+export { createDetectorClient, DetectorError, type DetectorClient, type WorkerLike } from './client.ts'
+export type { DetectRequest, ImageSource, RemoteSeed, ToWorker, FromWorker } from './protocol.ts'
 export type * from './types.ts'
