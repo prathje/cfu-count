@@ -57,6 +57,8 @@ export interface ReviewPanelProps {
   onRun(): void
   onCancel(): void
   onClose(): void
+  /** The search is restricted to a drawn region; offers to search the whole plate. */
+  region?: { onWholePlate(): void } | null
   ref?(el: HTMLElement): void
 }
 
@@ -120,6 +122,17 @@ export function ReviewPanel(props: ReviewPanelProps) {
         </Show>
         . Suggestions are <strong>not counted</strong> until you review and accept them.
       </p>
+
+      <Show when={props.region}>
+        {(r) => (
+          <div class="review-panel__region" role="status">
+            <span>Searching inside the selected region only.</span>
+            <Button size="sm" variant="ghost" disabled={props.phase === 'running'} onClick={() => r().onWholePlate()}>
+              Whole plate
+            </Button>
+          </div>
+        )}
+      </Show>
 
       <Show when={props.block}>
         {(b) => (

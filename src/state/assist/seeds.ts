@@ -11,6 +11,7 @@ import type { Annotation, AnnotationGroup, ID, ImageAnnotations, ImageRecord } f
 import { editBlock } from '../../model/policy'
 import type { DetectRequest, ExistingAnnotation, RemoteSeed } from '../../detection'
 import type { ReviewSettings } from './review'
+import type { RegionPolygon } from '../../model/region'
 
 /** Below this many examples the result is tentative and a reference plate is offered. */
 export const MIN_SEEDS = 3
@@ -109,6 +110,8 @@ export interface RequestInput {
   reference?: { image: ImageRecord; annotations: readonly Annotation[] }
   settings: ReviewSettings
   runId: ID
+  /** Restrict the search to a drawn region (image px); seeds may lie anywhere. */
+  roi?: RegionPolygon | null
 }
 
 /**
@@ -149,5 +152,6 @@ export function buildRequest(i: RequestInput): RequestWithoutBytes {
     ...(remoteSeeds.length && i.reference!.image.fingerprint ? { remoteFingerprints: { [i.reference!.image.id]: i.reference!.image.fingerprint } } : {}),
     settings: { method: i.settings.method, sensitivity: i.settings.sensitivity, priorWidth: i.settings.priorWidth },
     runId: i.runId,
+    ...(i.roi && i.roi.length >= 3 ? { roi: { kind: 'polygon' as const, points: i.roi.map((p) => ({ x: p.x, y: p.y })) } } : {}),
   }
 }

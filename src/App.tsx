@@ -1,6 +1,7 @@
 import { createEffect, createResource, on, onCleanup, onMount, Show } from 'solid-js'
 import { createEditor } from './state/editor'
 import { createAssist } from './state/assist'
+import { createRegion } from './state/region'
 import { createDetectorClient } from './detection/client'
 import { chooseRepository, type RepositoryChoice } from './state/repository'
 import { AppContext, type AppServices } from './ui/context'
@@ -40,6 +41,9 @@ function AppRoot(props: { choice: RepositoryChoice }) {
   // One detector client (Worker) per app session, created on the first run.
   const assist = createAssist({ editor, notify: toaster.push, feedback, createClient: () => createDetectorClient() })
   onCleanup(assist.dispose)
+  // Region selection (Region tool): shares the assist controller's detector worker.
+  const region = createRegion({ editor, assist, notify: toaster.push, feedback, beforeDestructive: (label) => editor.versions.beforeDestructive(label) })
+  onCleanup(region.dispose)
   const thumbnails = createThumbnailCache(() => (editor.state.project ? editor.images.blob : null))
   // Thumbnails of Drive images fail while Drive is disconnected: retry once it connects.
   createEffect(on(() => editor.drive.state().state, (s) => s === 'connected' && thumbnails.retryFailed(), { defer: true }))
@@ -47,6 +51,7 @@ function AppRoot(props: { choice: RepositoryChoice }) {
   const services: AppServices = {
     editor,
     assist,
+    region,
     toaster,
     dialogs,
     thumbnails,

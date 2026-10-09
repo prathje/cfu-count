@@ -14,6 +14,7 @@
 import { batch, createEffect, createMemo, createRoot, createSignal, on, untrack, type Accessor } from 'solid-js'
 import { unwrap } from 'solid-js/store'
 import type { AnnotationGroup, ID } from '../../model/types'
+import type { RegionPolygon } from '../../model/region'
 import { editBlock } from '../../model/policy'
 import { newId as defaultNewId, now as defaultNow } from '../../model/ids'
 import type { DetectorClient, DetectProgress } from '../../detection'
@@ -75,8 +76,20 @@ export interface Assist {
   /** The review panel is open (suggestions are drawn and tappable only then). */
   open: Accessor<boolean>
   setOpen(open: boolean): void
-  /** Open the panel; starts a run right away when this image has enough examples and nothing to show yet. */
-  start(): void
+  /**
+   * Open the panel; starts a run right away when this image has enough examples
+   * and nothing to show yet. `roi` restricts the search on this image to a drawn
+   * region (a new run starts when it differs from the shown result's region);
+   * `roi: null` searches the whole plate again. Omitted: keep the image's choice.
+   */
+  start(opts?: { roi?: RegionPolygon | null }): void
+  /** Region the current image's search is restricted to (null = whole plate). */
+  roi: Accessor<RegionPolygon | null>
+  /**
+   * The shared detector client (one Worker, created on first use). The region
+   * comparison uses it too; starting a detect cancels the one in flight.
+   */
+  detector(): DetectorClient
   /** Why Find similar is unavailable on the current image, or null. */
   block: Accessor<FindBlock | null>
   /** Manual examples of the active group on this image. */
@@ -141,8 +154,11 @@ export function createAssist(deps: AssistDeps): Assist {
     const [settings, setSettingsSignal] = createSignal<ReviewSettings>({ ...DEFAULT_REVIEW_SETTINGS })
     const [sizeMismatch, setSizeMismatch] = createSignal(false)
     const [explicitSource, setExplicitSource] = createSignal<ReadonlyMap<ID, SeedSource>>(new Map())
+    const [roiByImage, setRoiByImage] = createSignal<ReadonlyMap<ID, RegionPolygon>>(new Map())
+    const roi = createMemo<RegionPolygon | null>(() => (state.currentImageId ? roiByImage().get(state.currentImageId) ?? null : null))
 
     let client: DetectorClient | null = null
+    const detector = () => (client ??= deps.createClient())
     let abort: AbortController | null = null
     let token = 0
     let timer: ReturnType<typeof setTimeout> | undefined
@@ -215,6 +231,7 @@ export function createAssist(deps: AssistDeps): Assist {
         reference: ref ? { image: unwrap(ref), annotations: unwrap(state.docs[ref.id]?.annotations) ?? [] } : undefined,
         settings: s,
         runId: newId(),
+        roi: untrack(roi),
       })
       if (source.kind === 'this-image') delete request.remoteSeeds
       const nSeeds = request.seeds.length + (request.remoteSeeds?.length ?? 0)
@@ -238,8 +255,7 @@ export function createAssist(deps: AssistDeps): Assist {
         const blob = await images.blob(image.id)
         const remote = ref ? { [ref.id]: await images.blob(ref.id) } : undefined
         if (mine !== token) return
-        client ??= deps.createClient()
-        const result = await client.detect(
+        const result = await detector().detect(
           { ...request, source: { kind: 'blob', blob }, ...(remote ? { remoteSources: remote } : {}) },
           { signal: ac.signal, onProgress: (p) => mine === token && setProgress(p) },
         )
@@ -304,10 +320,27 @@ export function createAssist(deps: AssistDeps): Assist {
       setOpenSignal(next)
     }
 
-    function start() {
+    function start(opts?: { roi?: RegionPolygon | null }) {
+      const id = state.currentImageId
+      let changed = false
+      if (id && opts && opts.roi !== undefined) {
+        const next = opts.roi && opts.roi.length >= 3 ? opts.roi.map((p) => ({ x: p.x, y: p.y })) : null
+        const shown = layer()?.result.run.roi
+        const shownPts = shown?.kind === 'polygon' ? shown.points : null
+        changed = JSON.stringify(next) !== JSON.stringify(shownPts)
+        setRoiByImage((m) => {
+          const n = new Map(m)
+          if (next) n.set(id, next)
+          else n.delete(id)
+          return n
+        })
+      }
       setOpenSignal(true)
-      if (layer() || phase() === 'running' || block()) return
-      if (seedSource().kind === 'this-image' && localSeeds() >= MIN_SEEDS) void runNow()
+      if (block() || (phase() === 'running' && !changed)) return
+      if (layer() && !changed) return
+      // a region search also runs with fewer local examples (a reference plate may lend them)
+      if (changed && layer()) return void runNow()
+      if (seedSource().kind === 'this-image' ? localSeeds() >= MIN_SEEDS : changed) void runNow()
     }
 
     // ------------------------------------------------------------ review
@@ -447,6 +480,7 @@ export function createAssist(deps: AssistDeps): Assist {
           batch(() => {
             setStore(emptyStore())
             setExplicitSource(new Map())
+            setRoiByImage(new Map())
             setOpenSignal(false)
             setPhase('idle')
             setError(null)
@@ -477,6 +511,8 @@ export function createAssist(deps: AssistDeps): Assist {
       open,
       setOpen,
       start,
+      roi,
+      detector,
       block,
       localSeeds,
       candidates,

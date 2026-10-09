@@ -7,6 +7,7 @@
 import { createContext, useContext } from 'solid-js'
 import type { Editor } from '../state/editor'
 import type { Assist } from '../state/assist'
+import type { RegionController } from '../state/region'
 import type { ThumbnailCache } from './images'
 import type { DialogController, Toaster } from './primitives'
 import type { ProjectActions } from './projectActions'
@@ -18,6 +19,8 @@ export interface AppServices {
   editor: Editor
   /** Assisted counting ("Find similar"): one detector worker and the in-memory suggestions. */
   assist: Assist
+  /** Region selection (Region tool): per-image polygon, clear / find similar / compare in region. */
+  region: RegionController
   toaster: Toaster
   dialogs: DialogController
   thumbnails: ThumbnailCache

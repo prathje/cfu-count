@@ -350,3 +350,15 @@
     background: var(--c-hover);
   }
 }
+
+.review-panel__region {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 4px 4px 10px;
+  border-radius: var(--r-md);
+  background: var(--c-accent-soft);
+  color: var(--c-accent-text);
+  font-size: var(--fs-sm);
+}

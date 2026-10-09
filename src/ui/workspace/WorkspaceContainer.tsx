@@ -6,6 +6,12 @@ import { isConfirmed, labelNumber } from '../../model/annotations'
 import type { AddInfo, BlockedReason, ReviewClusterMark, SuggestionMark, ViewportHandle } from '../../viewport/api'
 import { MIN_SEEDS, displayMarks, stageLabel, type AcceptScope, type ReviewChoice } from '../../state/assist'
 import { ReviewPanel, type ReviewSummary } from '../assist/ReviewPanel'
+import { RegionBar } from '../region/RegionBar'
+import { CLEAR_CONFIRM_ABOVE, comparisonExport } from '../../state/region'
+import { editBlock } from '../../model/policy'
+import { editBlockMessage } from '../../state/messages'
+import type { Tool } from '../../model/tool'
+import { downloadBlob, safeFilename } from '../download'
 import { Viewport } from '../../viewport/Viewport'
 import { useApp } from '../context'
 import { bitmapError, bitmapSizeMismatch, createCurrentBitmap, readyImage, type BlobSource } from '../images'
@@ -36,7 +42,7 @@ export interface WorkspaceContainerProps {
 let touchNavigatesExplained = false
 
 export function WorkspaceContainer(props: WorkspaceContainerProps) {
-  const { editor, actions, toaster, assist } = useApp()
+  const { editor, actions, toaster, assist, region, dialogs } = useApp()
   const { state, annotations, groups, images, view } = editor
   const [stage, setStage] = createSignal<HTMLElement>()
   const stageWidth = createElementWidth(stage)
@@ -72,6 +78,63 @@ export function WorkspaceContainer(props: WorkspaceContainerProps) {
   const baseHint = () => interactionHint({ tool: state.tool, activeGroup: groups.active(), coarse: coarse(), touchAnnotates: state.touchAnnotates })
   const hint = () => (suggestionMarks().length ? `${coarse() ? 'Tap' : 'Click'} a dashed ring to reject or restore it · ${baseHint()}` : baseHint())
   const driveConnected = () => editor.drive.state().state === 'connected'
+
+  // ------------------------------------------------ region selection (Region tool + region bar)
+  let toolBeforeRegion: Tool = 'add'
+  function setRegionTool(on: boolean) {
+    if (on && state.tool !== 'region') {
+      toolBeforeRegion = state.tool
+      view.setTool('region')
+    } else if (!on && state.tool === 'region') view.setTool(toolBeforeRegion)
+  }
+  // The bar is open while the Region tool is selected or the image has a region. On
+  // narrow stages it gives way to the review panel (both live at the bottom).
+  const regionBarOpen = () => (state.tool === 'region' || !!region.current()) && !(assist.open() && stageWidth() < 780)
+  const regionGroup = () => {
+    const g = groups.active()
+    return g ? { name: g.name, color: g.color, render: g.render } : null
+  }
+  async function clearInRegion() {
+    const plan = region.clearPlan()
+    const g = groups.active()
+    if (plan && g && !editBlock(g) && plan.ops.length > CLEAR_CONFIRM_ABOVE) {
+      const n = plan.ops.length
+      const ok = await dialogs.confirm({
+        title: `Clear ${n.toLocaleString()} marks in the region?`,
+        body: `Removes the ${n.toLocaleString()} “${plan.groupName}” marks inside the region (${plan.manual.toLocaleString()} manual, ${plan.automated.toLocaleString()} automated). Other groups and marks outside the region stay. It is one step: Undo brings them all back.`,
+        confirmLabel: `Clear ${n.toLocaleString()}`,
+        danger: true,
+      })
+      if (!ok) return
+    }
+    await region.clearInRegion(plan)
+  }
+  function exportComparison() {
+    const c = region.comparison()
+    const image = images.current()
+    if (!c || !image) return
+    const groupName = groups.list().find((g) => g.id === c.groupId)?.name ?? 'group'
+    const json = comparisonExport(c, { projectName: state.project?.name ?? '', image, groupName })
+    downloadBlob(new Blob([JSON.stringify(json, null, 1)], { type: 'application/json' }), `${safeFilename(image.name.replace(/\.[^.]+$/, ''))}-region-comparison.json`)
+  }
+  const regionCompareView = () => {
+    const c = region.comparison()
+    if (!c) return null
+    const s = c.summary
+    return {
+      manual: s.manual,
+      detected: s.detected,
+      matched: s.matched,
+      missed: s.missed.length,
+      extra: s.extra.length,
+      precision: s.precision,
+      recall: s.recall,
+      examples: c.plan.seeds.length,
+      examplesMode: c.plan.mode,
+      stale: region.comparisonStale(),
+      visible: region.compareVisible(),
+    }
+  }
 
   // ------------------------------------------------ display adjustments (view setting)
   const [adjustAnchor, setAdjustAnchor] = createSignal<HTMLElement>()
@@ -333,6 +396,7 @@ export function WorkspaceContainer(props: WorkspaceContainerProps) {
                     shortcut: FIND_SIMILAR_KEY.toUpperCase(),
                     onClick: toggleAssist,
                   }}
+                  region={{ active: state.tool === 'region', onClick: () => setRegionTool(state.tool !== 'region') }}
                 />
               </div>
               <Viewport
@@ -356,6 +420,11 @@ export function WorkspaceContainer(props: WorkspaceContainerProps) {
                   const m = suggestionMarks()[i]
                   if (m && m.index >= 0) assist.toggleReject(m.index)
                 } : undefined}
+                region={region.current()}
+                regionShape={region.shape()}
+                onRegion={region.set}
+                onRegionTooSmall={() => toaster.push({ tone: 'info', key: 'region', message: 'That region is too small', detail: 'Drag a larger loop around the colonies.' })}
+                compareMarks={region.compareMarks()}
                 onAdd={onAdd}
                 onErase={annotations.erase}
                 onBlocked={onBlocked}
@@ -456,8 +525,48 @@ export function WorkspaceContainer(props: WorkspaceContainerProps) {
                   onPick={startPick}
                 />
               </Popover>
+              <Show when={regionBarOpen()}>
+                <RegionBar
+                  sheet={sheet()}
+                  drawing={state.tool === 'region'}
+                  shape={region.shape()}
+                  onShape={region.setShape}
+                  coarse={coarse()}
+                  group={regionGroup()}
+                  tally={(() => {
+                    const t = region.tally()
+                    return t ? { group: t.groupConfirmed, all: t.allConfirmed, clearable: t.group.total } : null
+                  })()}
+                  editBlocked={(() => {
+                    const g = groups.active()
+                    const b = editBlock(g)
+                    return b ? editBlockMessage(b, g) : null
+                  })()}
+                  onClear={() => void clearInRegion()}
+                  onFindSimilar={region.findSimilar}
+                  onRedraw={() => setRegionTool(true)}
+                  onClose={() => {
+                    region.clear()
+                    setRegionTool(false)
+                  }}
+                  compare={{
+                    running: region.comparePhase() === 'running',
+                    progress: region.compareProgress() ? { label: stageLabel(region.compareProgress()), fraction: region.compareProgress()!.fraction } : null,
+                    error: region.compareError(),
+                    counts: region.compareCounts() ?? { inside: 0, outside: 0 },
+                    seedMode: region.compareSeedMode(),
+                    onSeedMode: region.setCompareSeedMode,
+                    result: regionCompareView(),
+                    onRun: () => void region.compare(),
+                    onCancel: region.cancelCompare,
+                    onToggleVisible: () => region.setCompareVisible(!region.compareVisible()),
+                    onExport: exportComparison,
+                  }}
+                />
+              </Show>
               <Show when={assist.open()}>
                 <ReviewPanel
+                  region={assist.roi() ? { onWholePlate: () => assist.start({ roi: null }) } : null}
                   ref={setPanelEl}
                   sheet={sheet()}
                   group={assistGroup()}
