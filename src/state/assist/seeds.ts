@@ -140,10 +140,13 @@ export function buildRequest(i: RequestInput): RequestWithoutBytes {
     originalWidth: i.image.width,
     originalHeight: i.image.height,
     imageId: i.image.id,
+    // fingerprints key the worker's decode/plan/fit caches: replaced bytes under the same id never reuse stale fits
+    ...(i.image.fingerprint ? { imageFingerprint: i.image.fingerprint } : {}),
     targetGroupId: i.groupId,
     seeds: local.map((a) => ({ annotationId: a.id, imageId: i.image.id, x: a.x, y: a.y })),
     existing,
     ...(remoteSeeds.length ? { remoteSeeds } : {}),
+    ...(remoteSeeds.length && i.reference!.image.fingerprint ? { remoteFingerprints: { [i.reference!.image.id]: i.reference!.image.fingerprint } } : {}),
     settings: { method: i.settings.method, sensitivity: i.settings.sensitivity, priorWidth: i.settings.priorWidth },
     runId: i.runId,
   }

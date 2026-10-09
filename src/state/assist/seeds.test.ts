@@ -87,6 +87,8 @@ describe('request', () => {
     expect(req.existing.find((e) => e.id === 'auto')).toMatchObject({ r: 12, origin: 'automated' })
     expect(req.remoteSeeds).toHaveLength(4)
     expect(req.remoteSeeds![0]).toMatchObject({ imageId: 'ref', imageWidth: 4000, imageHeight: 3000 })
+    expect(req.imageFingerprint).toBe('fp-i1')
+    expect(req.remoteFingerprints).toEqual({ ref: 'fp-ref' })
     expect(req).toMatchObject({ originalWidth: 6000, originalHeight: 4000, targetGroupId: 'g1', runId: 'run-1', settings: { method: 'fitter', sensitivity: 0.7, priorWidth: 1 } })
   })
 })
