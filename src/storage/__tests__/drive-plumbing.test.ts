@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { createDriveClient } from '../drive/client'
 import { DriveSession, type SessionClock } from '../drive/session'
 import { AutosaveScheduler, deriveStatus, type Timers } from '../drive/autosave'
-import { readDriveConfig, SCOPE_DRIVE_FILE, SCOPE_DRIVE_READONLY } from '../drive/config'
+import { readDriveConfig, SCOPE_DRIVE_FILE, SCOPE_DRIVE_READONLY, SCOPE_DRIVE_FULL } from '../drive/config'
 import { DriveError } from '../errors'
 import { FakeTokenProvider } from './fakes'
 
@@ -209,9 +209,10 @@ describe('readDriveConfig', () => {
     expect(readDriveConfig({ VITE_GOOGLE_CLIENT_ID: 'id' })).toBeNull()
     warn.mockRestore()
   })
-  it('defaults to drive.file and supports the readonly opt-in', () => {
+  it('defaults to full drive and supports narrower opt-ins', () => {
     const env = { VITE_GOOGLE_CLIENT_ID: 'id', VITE_GOOGLE_API_KEY: 'key', VITE_GOOGLE_APP_ID: '123' }
-    expect(readDriveConfig(env)!.scopes).toEqual([SCOPE_DRIVE_FILE])
+    expect(readDriveConfig(env)!.scopes).toEqual([SCOPE_DRIVE_FULL])
+    expect(readDriveConfig({ ...env, VITE_GOOGLE_DRIVE_SCOPE: 'file' })!.scopes).toEqual([SCOPE_DRIVE_FILE])
     expect(readDriveConfig({ ...env, VITE_GOOGLE_DRIVE_SCOPE: 'readonly' })!.scopes).toEqual([SCOPE_DRIVE_FILE, SCOPE_DRIVE_READONLY])
   })
 })
