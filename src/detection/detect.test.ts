@@ -138,7 +138,7 @@ describe('seed calibration', () => {
     expect(Math.hypot(m.cx - 20, m.cy - 20)).toBeLessThan(0.7)
     expect(seedQuality(m).quality).toBe('ok')
   })
-  it('flags a seed touching a neighbour', () => {
+  it('measures a seed touching a neighbour, not the pair', () => {
     const F = makePlane(60, 40)
     for (let y = 0; y < 40; y++)
       for (let x = 0; x < 60; x++) {
@@ -146,7 +146,9 @@ describe('seed calibration', () => {
         F.data[y * 60 + x] = a * 50
       }
     const m = measureSeed({ F, noise: 1, rMax: 18 }, 22, 20)
-    expect(m.blockedFrac).toBeGreaterThan(0)
+    // the contact is a seam at half height: the first boundary in that direction
+    expect(Math.abs(m.r! - 8)).toBeLessThan(1.5)
+    expect(Math.hypot(m.cx - 22, m.cy - 20)).toBeLessThan(1)
   })
   it('builds a robust log-normal prior with a floor', () => {
     const p = radiusPrior([10, 10, 10, 10], 0.2)!

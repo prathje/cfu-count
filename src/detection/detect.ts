@@ -2,7 +2,7 @@
  * The detection pipeline: prepare → ROI → seed calibration → method.
  * Pure TypeScript on typed arrays; runs in a Worker, the main thread or node.
  */
-import { measureSeed, radiusPrior, robustRange, seedQuality, calibrationSummary, coverageWarnings, type SeedMeasurement } from './calibrate.ts'
+import { measureSeed, priorFromSeeds, robustRange, seedQuality, seedWeight, sizeSpreadNote, usableSeedRadii, calibrationSummary, coverageWarnings, type SeedMeasurement } from './calibrate.ts'
 import { toLab } from './image/color.ts'
 import { distanceTransform } from './image/distance.ts'
 import { pointInPolygon } from './image/geometry.ts'
@@ -402,13 +402,11 @@ export function calibrate(prep: PreparedImage, input: Pick<DetectInput, 'seeds' 
     return out
   }
 
-  const usableRadii = (ms: MeasuredSeed[]) => ms.filter((q) => q.m && q.m.r !== null && seedQuality(q.m).quality === 'ok').map((q) => q.m!.r! / q.scale)
-
   // pass 1
   let F = contrastPlane(prep.lab, bg1, axis)
   let noise = noiseSigma(F, roiW)
   let measured = measureAll(F, noise)
-  let prior = radiusPrior(usableRadii(measured), settings.sMin)
+  let prior = priorFromSeeds(measured, settings.sMin)
   let priorA = analysisPrior(prior, measured, scale, prep.plateDiameter, 1)
   // pass 2: exclude bright foreground from the background estimate
   {
@@ -430,7 +428,7 @@ export function calibrate(prep: PreparedImage, input: Pick<DetectInput, 'seeds' 
     noise = noiseSigma(F, weightMask(prep.roi.inner, fg))
     // remeasure local seeds on the better plane (patch seeds unchanged)
     measured = measureAll(F, noise)
-    prior = radiusPrior(usableRadii(measured), settings.sMin)
+    prior = priorFromSeeds(measured, settings.sMin)
     priorA = analysisPrior(prior, measured, scale, prep.plateDiameter, 1)
   }
 
@@ -451,7 +449,7 @@ export function calibrate(prep: PreparedImage, input: Pick<DetectInput, 'seeds' 
       ...(qual.note ? { note: qual.note } : {}),
     }
   })
-  const usable = measured.filter((q) => q.m && q.m.r !== null && seedQuality(q.m).quality === 'ok')
+  const usable = measured.filter((q) => seedWeight(q.m) > 0)
   const contrasts = usable.map((q) => q.m!.contrast)
   const anyContrast = measured.filter((q) => q.m && q.m.snr >= 3).map((q) => q.m!.contrast)
   const contrastRef = contrasts.length ? median(contrasts) : anyContrast.length ? median(anyContrast) : 8 * noise
@@ -476,6 +474,8 @@ export function calibrate(prep: PreparedImage, input: Pick<DetectInput, 'seeds' 
   const nUsable = usable.length
   const base = { nTotal, nUsable, prior }
   const warnings = [...prep.roi.warnings, ...coverageWarnings(base, settings.minUsableSeeds)]
+  const spread = sizeSpreadNote(usableSeedRadii(measured))
+  if (spread) warnings.push(spread)
   if (!prior && priorA.fromFallback === 'touching') warnings.push('Size taken from examples that touch other colonies; it may be overestimated.')
   if (remote.length) warnings.push(`${remote.length} example${remote.length === 1 ? '' : 's'} taken from another plate; sizes assume the same camera setup.`)
   const report: CalibrationReport = {

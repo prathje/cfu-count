@@ -16,6 +16,8 @@
  *                                              in the 1–2 px seams between touching colonies, 1 inside)
  *         + α Σ_i E_i                          edge: exposed disk boundary away from the observed boundary
  *         + β Σ_i huber±((log r_i − μ)/s)      seed-derived size prior (oversize ×2, undersize ×0.5; 'brief': ½ z²)
+ *                                              μ, s per cluster: the seed prior, moved by marks inside the cluster or
+ *                                              by its clean round colonies (calibrate.ts priorsForClusters)
  *         + γ Σ_i A_i                          appearance: disk interior dimmer than the seeds, or ring-like
  *         + λ Σ_i (r_i/r_med)²                 count penalty, proportional to disk area ('brief': λ K)
  *         + ω Σ_pairs overlap                  deep overlaps (centres closer than 0.7 (r_i + r_j))
@@ -44,6 +46,7 @@ import { localMaxima } from '../image/blobs.ts'
 import { makeMask, type Mask, type Plane } from '../image/plane.ts'
 import { watershed } from '../image/watershed.ts'
 import type { ClusterResult, Suggestion } from '../types.ts'
+import { localColonyOptions, measureLocalColonies, priorsForClusters, type LocalColony } from '../calibrate.ts'
 import { bboxToOriginal, clusterId, foregroundMask, sensitivityParams, type AnalysisPrior, type FixedColony, type MethodContext } from './common.ts'
 import type { MethodOutput } from './watershed.ts'
 
@@ -1310,13 +1313,15 @@ export interface FitterState {
     tooLarge: boolean
     fixedIds: string[]
     sol: ClusterSolution | null
+    /** Size prior used for this cluster (the seed prior, or adapted to the colonies measured in it). */
+    prior: AnalysisPrior
   }[]
   /** Cluster labels of the mask (analysis px). */
   labels: Int32Array
   width: number
   baseWeights: FitWeights
   /** Sweep statistics (diagnostics). */
-  sweep: { units: number; configs: number; maxKSwept: number; buildMs: number }
+  sweep: { units: number; configs: number; maxKSwept: number; buildMs: number; adaptedClusters: number; localColonies: number }
 }
 
 /** Reference sensitivity at which the configuration tables are built. */
@@ -1331,27 +1336,58 @@ async function buildFitterState(ctx: MethodContext, key: string): Promise<Fitter
   const mask = foregroundMask(ctx, maskThresholdAt(ctx, TABLE_SENSITIVITY))
   await ctx.checkpoint(0.55)
   const cl = labelComponents(mask, 8)
-  const rMaxFit = Math.max(prior.rHi * 1.3, prior.rMed * 1.8)
-  const pad = Math.ceil(rMaxFit) + 2
-  const a0 = Math.PI * prior.rMed * prior.rMed
-  const params: ClusterFitParams = {
-    prior,
-    weights: baseWeights,
-    contrastRef: ctx.contrastRef,
-    contrastLo: ctx.contrastLo,
-    tau: Math.max(1.5, 0.25 * prior.rMed),
-    rMaxFit,
-    coreLevel: 0.75 * ctx.contrastRef,
+  // per-cluster size priors (calibrate.ts priorsForClusters): manual marks in the cluster, or its
+  // clean round colonies measured at brightness maxima, can move the seed prior for that cluster
+  const local = measureLocalColonies(ctx.F, mask.data, ctx.noise, localColonyOptions(prior, maskThresholdAt(ctx, TABLE_SENSITIVITY)))
+  const localBy = new Map<number, LocalColony[]>()
+  for (const q of local) {
+    const xi = Math.floor(q.x)
+    const yi = Math.floor(q.y)
+    if (xi < 0 || yi < 0 || xi >= mask.width || yi >= mask.height) continue
+    const l = cl.labels[yi * mask.width + xi]
+    if (!l) continue
+    const arr = localBy.get(l)
+    if (arr) arr.push(q)
+    else localBy.set(l, [q])
   }
+  const marksBy = new Map<number, number[]>()
+  for (const f of ctx.fixed) {
+    const xi = Math.floor(f.x)
+    const yi = Math.floor(f.y)
+    if (xi < 0 || yi < 0 || xi >= mask.width || yi >= mask.height) continue
+    const l = cl.labels[yi * mask.width + xi]
+    if (!l) continue
+    const arr = marksBy.get(l)
+    if (arr) arr.push(f.r)
+    else marksBy.set(l, [f.r])
+  }
+  const cPriors = priorsForClusters(
+    prior,
+    cl.stats.map((st) => ({ area: st.area, cols: localBy.get(st.label) ?? [], marks: marksBy.get(st.label) ?? [] })),
+  )
+  await ctx.checkpoint(0.57)
   const clusters: FitterState['clusters'] = []
-  const stats = { units: 0, configs: 0, maxKSwept: 0, buildMs: 0 }
+  const stats = { units: 0, configs: 0, maxKSwept: 0, buildMs: 0, adaptedClusters: 0, localColonies: local.length }
   let lastYield = Date.now()
   const order = cl.stats.slice().sort((a, b) => a.minY - b.minY || a.minX - b.minX)
   for (let ci = 0; ci < order.length; ci++) {
     const st = order[ci]
     if (Date.now() - lastYield > 40) {
-      await ctx.checkpoint(0.55 + 0.43 * (ci / order.length))
+      await ctx.checkpoint(0.57 + 0.41 * (ci / order.length))
       lastYield = Date.now()
+    }
+    const { adapted, ...cprior } = cPriors[st.label - 1]
+    if (adapted) stats.adaptedClusters++
+    const rMaxFit = Math.max(cprior.rHi * 1.3, cprior.rMed * 1.8)
+    const pad = Math.ceil(rMaxFit) + 2
+    const params: ClusterFitParams = {
+      prior: cprior,
+      weights: baseWeights,
+      contrastRef: ctx.contrastRef,
+      contrastLo: ctx.contrastLo,
+      tau: Math.max(1.5, 0.25 * cprior.rMed),
+      rMaxFit,
+      coreLevel: 0.75 * ctx.contrastRef,
     }
     const x0 = Math.max(0, st.minX - pad)
     const y0 = Math.max(0, st.minY - pad)
@@ -1366,7 +1402,8 @@ async function buildFitterState(ctx: MethodContext, key: string): Promise<Fitter
         return xi >= 0 && yi >= 0 && xi < mask.width && yi < mask.height && cl.labels[yi * mask.width + xi] === st.label
       })
       .map((f) => ({ ...f, x: f.x - x0, y: f.y - y0 }))
-    const tooLarge = st.area > settings.kMax * a0
+    // compute guard on the seed prior (a smaller local prior must not turn a streak into 'too large')
+    const tooLarge = st.area > settings.kMax * Math.PI * prior.rMed * prior.rMed
     let sol: ClusterSolution | null = null
     if (!tooLarge) {
       const pm = makeMask(pw, ph)
@@ -1385,7 +1422,7 @@ async function buildFitterState(ctx: MethodContext, key: string): Promise<Fitter
         stats.maxKSwept = Math.max(stats.maxKSwept, g.kRange[1])
       }
     }
-    clusters.push({ label: st.label, stats: st, x0, y0, pw, tooLarge, fixedIds: fixedHere.map((f) => f.id), sol })
+    clusters.push({ label: st.label, stats: st, x0, y0, pw, tooLarge, fixedIds: fixedHere.map((f) => f.id), sol, prior: cprior })
   }
   stats.buildMs = Date.now() - t0
   return { key, clusters, labels: cl.labels, width: mask.width, baseWeights, sweep: stats }
@@ -1411,10 +1448,9 @@ export async function runFitter(ctx: MethodContext, cached?: { key: string; get:
   // scoring for THIS run: λ from the sensitivity, s from the prior width. The tables are
   // read-only here, so the same settings always give the same result.
   const wts = { ...st.baseWeights, lambda: sensitivityParams(settings.sensitivity).lambda, ...(settings.fitWeights?.lambda !== undefined ? { lambda: settings.fitWeights.lambda } : {}) }
-  const s = prior.s * settings.priorWidth
   // the slider neighbourhood used for the review flag: sensitivity ± δ (λ moves 0.2 δ), size tolerance × (1 ± 2δ)
   const dl = 0.2 * settings.reviewStability
-  const perturbed: [ScoreWeights, number][] = [
+  const perturbedAt = (s: number): [ScoreWeights, number][] => [
     [{ ...wts, lambda: Math.max(0, wts.lambda - dl) }, s],
     [{ ...wts, lambda: wts.lambda + dl }, s],
     [wts, s * (1 + 2 * settings.reviewStability)],
@@ -1436,11 +1472,14 @@ export async function runFitter(ctx: MethodContext, cached?: { key: string; get:
       continue
     }
     const sol = c.sol
+    const cp = c.prior
+    const s = cp.s * settings.priorWidth
+    const perturbed = perturbedAt(s)
     const groupIds = sol.groups.map(() => nextId++)
     sol.groups.forEach((g, gi) => {
-      let d = decideGroup(g, wts, prior.logR, s, prior.rMed)
+      let d = decideGroup(g, wts, cp.logR, s, cp.rMed)
       // stability: the K chosen under slightly different slider positions
-      const kAt = (w: ScoreWeights, sp: number) => decideGroup(g, w, prior.logR, sp, prior.rMed).best.k
+      const kAt = (w: ScoreWeights, sp: number) => decideGroup(g, w, cp.logR, sp, cp.rMed).best.k
       const flips = new Set<number>()
       for (const [w, sp] of perturbed) {
         const k = kAt(w, sp)
@@ -1451,11 +1490,11 @@ export async function runFitter(ctx: MethodContext, cached?: { key: string; get:
       if (d.best.k === 0 && g.fixedIds.length === 0 && flips.size) {
         const kMore = Math.min(...[...flips].filter((k) => k > 0))
         if (Number.isFinite(kMore)) {
-          const score = (q: GroupConfig) => configScore(q, wts, prior.logR, s)
+          const score = (q: GroupConfig) => configScore(q, wts, cp.logR, s)
           const pick = g.configs.filter((q) => q.k === kMore).reduce((a, b) => (score(b) < score(a) ? b : a))
           // gap stays "J(runner-up) − J(chosen)", here slightly negative: the colonies were chosen for recall
           const gap = score(d.best) - score(pick)
-          d = { best: pick, runnerUp: d.best, gap, relativeGap: gap / Math.max(0.25, contestedArea(pick.disks, [], prior.rMed)) }
+          d = { best: pick, runnerUp: d.best, gap, relativeGap: gap / Math.max(0.25, contestedArea(pick.disks, [], cp.rMed)) }
           flips.clear()
         }
       }
@@ -1497,9 +1536,11 @@ export async function runFitter(ctx: MethodContext, cached?: { key: string; get:
     clusters: clustersOut,
     diagnostics: {
       weights: wts,
-      priorS: round3(s),
+      priorS: round3(prior.s * settings.priorWidth),
       reusedFit: reused,
       sweep: st.sweep,
+      /** Clusters whose size prior was adapted to the colonies measured in them (original px). */
+      adaptedPriors: st.clusters.filter((c) => c.prior.logR !== prior.logR).map((c) => ({ bbox: bboxToOriginal(c.stats.minX, c.stats.minY, c.stats.maxX, c.stats.maxY, scale).map(Math.round), rMed: round3(c.prior.rMed / scale), s: round3(c.prior.s) })),
       groupsOk: counts.ok,
       groupsReview: counts.review,
       clustersTooLarge: counts.tooLarge,
