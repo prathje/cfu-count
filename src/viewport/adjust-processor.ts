@@ -36,6 +36,7 @@ export function createAdjustProcessor(): AdjustProcessor {
   let worker: Worker | null = null
   let useWorker = typeof Worker !== 'undefined' && typeof OffscreenCanvas !== 'undefined' && typeof createImageBitmap === 'function'
   let seq = 0
+  let disposed = false
   const pending = new Map<number, { resolve(r: WorkerReply): void; reject(e: unknown): void }>()
 
   function getWorker(): Worker | null {
@@ -110,7 +111,8 @@ export function createAdjustProcessor(): AdjustProcessor {
           const reply = await viaWorker(w, source, rect, (id, bitmap) => ({ id, type: 'adjust', bitmap, matrix, lut }))
           if ('bitmap' in reply) return reply.bitmap
           useWorker = false // e.g. no OffscreenCanvas 2D inside workers
-        } catch {
+        } catch (err) {
+          if (disposed) throw err // torn down: no main-thread fallback work
           useWorker = false
         }
       }
@@ -123,7 +125,8 @@ export function createAdjustProcessor(): AdjustProcessor {
           const reply = await viaWorker(w, source, whole(source), (id, bitmap) => ({ id, type: 'histogram', bitmap, matrix }))
           if ('hist' in reply) return reply.hist
           useWorker = false
-        } catch {
+        } catch (err) {
+          if (disposed) throw err
           useWorker = false
         }
       }
@@ -133,6 +136,7 @@ export function createAdjustProcessor(): AdjustProcessor {
     },
     mode: () => (useWorker ? 'worker' : 'main'),
     dispose() {
+      disposed = true
       worker?.terminate()
       worker = null
       for (const p of pending.values()) p.reject(new Error('disposed'))
