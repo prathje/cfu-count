@@ -14,6 +14,7 @@ the modules, the seams between them and how data flows.
 | `src/state` | The editor: one Solid store split into slices (`editor/`), debounced autosave, undo history, messages, repository choice. Adapts storage's `subscribe` to signals. | model, storage contract |
 | `src/detection` | Colony detector (pure TS) and its module Worker + typed client. Framework-free; imports model types only. | model (types) |
 | `src/state/assist` | Assisted counting ("Find similar"): pure review rules (`review.ts`: suggestion layer, derived pending view, accept plan), seed selection (`seeds.ts`) and the controller (`index.ts`) owning one detector client and the in-memory suggestion store. | model, detection contract, editor |
+| `src/state/region` | Region selection (Region tool): the controller (`index.ts`) keeping one in-memory polygon per image, counts inside it, clear in region, find similar in region (through assist) and the detector comparison (`compare.ts`, pure: seed choice, request, matching via `detection/match.ts`, export JSON). Pure geometry is `model/region.ts`. | model, detection contract, editor, assist |
 | `src/viewport` | Canvas viewport: rendering, gestures, pen/touch policy, spatial index. A pure view: it reports intents (`onAdd`, `onErase`, `onBlocked`) and never edits data. | model |
 | `src/ui` | Containers (`AppShell`, `WorkspaceContainer`, `SidebarContainer`, `VersionHistoryContainer`, `createProjectActions`) wire editor slices to presentational components (app bar, sidebar, toolbar, workspace, primitives). CSS lives next to each feature. | state, viewport, model |
 | `src/demo` | In-memory demo repository + sample plates. Loaded with a dynamic import only for `?demoStorage` or when real storage cannot start, so it is a separate chunk. | model, storage codecs |
@@ -146,6 +147,38 @@ cleared on image switch. The viewport gets read-only `suggestions`,
 `reviewClusters` and `onSuggestionTap` (taps on a ring toggle rejection only while
 the review panel is open; elsewhere Add/Erase act on confirmed markers) and
 `ViewportHandle.showRect` for region navigation.
+
+**Region selection.** The Region tool (`Tool = 'region'`, key R; a trailing toolbar
+item after Find similar, in More / the tool switcher when narrow) draws a selection.
+The viewport's gesture machine has a `lasso` mode: a drag by the primary mouse
+button, the Pencil or ONE finger (also with touch annotation off; fingers still only
+navigate while a pen was used in the last 10 s) emits `lassoStart`/`lassoMove`/
+`lassoEnd`; a second finger, a pen landing, `pointercancel` or Escape emit
+`lassoCancel` (the second finger then pinches). A press without movement stays a tap
+(suggestion rings). The viewport closes and simplifies the path with
+`model/region.ts` `finishRegion` (RDP at 1.5 screen px, ≤ 400 points, clamped, image
+px; Shift or the bar's Rectangle option draws a rectangle; regions under 16 screen px
+are refused via `onRegionTooSmall`) and reports `onRegion(polygon)`. It never calls
+`onAdd`/`onErase`. `region` (dashed outline, outside dimmed, SVG overlay) and
+`compareMarks` (canvas) are read-only props. `createRegion` (`AppServices.region`)
+keeps regions in memory only (never saved, never in undo history; dropped on project
+switch or reload). "Clear N in region" removes the active group's annotations whose
+centre is inside as ONE `applyBatch` after `editor.versions.beforeDestructive` (a
+failed version does not block it: it is one undo step on one image); locked/hidden
+groups are refused through `annotations.explainGroupBlock` (feedback `refused`).
+"Find similar in region" calls `assist.start({ roi })`; the request carries
+`roi: {kind:'polygon'}`, which the run record (and so accepted batches) keeps. The
+comparison uses the assist controller's detector client (`assist.detector()`): only
+one detection runs at a time, so starting a comparison closes the review panel and a
+Find similar run cancels a comparison.
+
+**Polygon ROI in the detector.** `detection/roi.ts` still finds the plate; with a
+polygon the analysed mask is the plate interior inside the polygon grown by a context
+band (4 % of the plate diameter), so clusters cut by the edge are fitted whole, and
+`detect()` keeps suggestions whose centre lies inside the polygon. Existing
+annotations anywhere on the image stay fixed colonies, so nothing marked outside is
+suggested again at the edge. Calibration (seed measurement, noise) uses the plate
+interior (`RoiResult.inner`), so examples outside the region work.
 
 **Edit feedback (sound cues).** The editor and the assist controller take an
 optional `feedback` port (`state/feedback.ts`) and report what happened to the

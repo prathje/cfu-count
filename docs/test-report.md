@@ -248,6 +248,36 @@ Use plates with clear colonies. Test on desktop and on the iPad.
 12. **Timing and memory on iPad.** Record the time from the click to suggestions on a
     24 MP plate, and whether the tab survives three runs in a row.
 
+### 5.4 Region tool (iPad, Pencil, touch)
+
+1. **Placement.** Region sits after Find similar (landscape) or in the tool switcher
+   (narrow split view / phone). Items 1–9 keep their order. R selects it on a keyboard.
+2. **Finger lasso.** With Touch annotates off, drag one finger around colonies: a
+   yellow path follows the finger; on lift a dashed outline remains, the outside dims
+   and the bar shows "N in “group” · M total". No marker is added.
+3. **Second finger.** Start a loop with one finger, then put a second finger down and
+   pinch: the path disappears, the view zooms, the previous region stays.
+4. **Pencil.** Draw a loop with the Pencil while resting the palm: one region, no marks.
+   After using the Pencil, a finger drag pans instead of drawing (palm rule, 10 s).
+5. **Rectangle.** Choose Rectangle in the bar and drag: a rectangle region.
+6. **Too small.** A short flick shows "That region is too small"; nothing changes.
+7. **Clear.** With > 20 marks inside, Clear asks first (manual/automated split). After
+   clearing, one Undo brings all of them back; Redo removes them again. Version
+   history lists "Before clearing “group” in the selected region".
+8. **Locked / hidden.** Lock the group, tap Clear: the standard explanation with
+   Unlock, the error sound, nothing removed. Same for hidden with Show group.
+9. **Find similar in region.** The review panel says "Searching inside the selected
+   region only"; suggestions appear only inside the outline. Whole plate re-runs.
+10. **Compare.** With the region marked by hand, Compare: numbers (manual, detected,
+    matched, missed, extra), orange rings on missed marks, dashed cyan rings on extra
+    detections. Export comparison downloads a JSON file (Safari: Files / Downloads).
+11. **Phone.** On a phone the bar is a bottom sheet; it gives way to the review panel.
+
+Headless Chrome (2026-10-09, commit df0a749): the steps above except Pencil, Version
+history listing and the Safari download were exercised through Chrome's mouse and
+CDP touch pipeline on 1440×900, 1024×768 (touch) and 390×844 (touch) with no
+console errors. Real iPad hardware: not tested.
+
 ## 6. Final review findings (2026-10-09)
 
 **Fixed, each with a regression test:**

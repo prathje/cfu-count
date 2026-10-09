@@ -527,3 +527,49 @@ Manual counts reported by the product owner for checking the detector. These are
 |---|---|---|---|
 | capture001250 | upper-left streak/area | 136 | counted manually |
 | capture001247 | upper-left | ~170 | image not yet in `test_images/` |
+
+## Region tool: Find similar in region and "Compare with detector" (2026-10-09)
+
+The Region tool (see `docs/architecture.md`, "Region selection") restricts a run to a
+drawn polygon (`DetectionRun.roi = {kind:'polygon', points}`) and adds a ground-truth
+check that turns the owner's manual counts into measurements:
+
+1. Mark the colonies of a region by hand (or open a project where they are marked).
+2. Draw a region around them (Region tool, R) and press **Compare**.
+3. The detector runs on the region **without** those marks as fixed colonies. Examples:
+   either up to 8 spread-out marks from the region (farthest-point sampling; at most
+   half of the marks), or, when at least 3 exist, the group's manual marks outside the
+   region. Examples are fixed colonies and are never scored (as in `scripts/eval`).
+   Automated marks of the group inside the region stay fixed and are not scored.
+4. Detector suggestions (near-duplicates removed, the detector's chosen option in
+   review regions) are matched one-to-one to the scored marks within the typical colony
+   radius (the seed prior's r_median): `matchPoints` from `src/detection/match.ts`,
+   the same function and the d = 1.0 × r_typical radius as `gtMetrics` in
+   `scripts/eval/run.ts`.
+5. The bar shows manual / detected / matched / missed / extra with recall and
+   precision; missed marks get an orange ring, extra detections a dashed cyan ring.
+   **Export comparison** writes `<image>-region-comparison.json`
+   (`kind: "cfu-count/region-comparison"`, version 1): region polygon and bbox,
+   examples, detector method/version/settings/calibration, counts, and every missed,
+   extra and matched position. Nothing in this workflow changes annotations.
+
+Please send exported comparisons with the plate name; with several of them the tuning
+in §S can be checked against real per-colony counts instead of agreement between
+methods.
+
+### First run on capture001250 (headless Chrome, commit df0a749)
+
+- Region: a 10-point lasso around the upper-left streak, bbox x 2120–3060, y 420–1960
+  (940 × 1540 px), the area the owner counted (136 colonies).
+- **Find similar in region**, examples = the 7 agent seeds (all outside the region, on
+  the large isolated colonies of the lower half): **66 suggestions** (6 in one
+  "6 or 7?" review region) vs the owner's **136**, in 2.6 s including decode. This is
+  the seed-size bias described in §4.2/§S: the seeds have r ≈ 49 px, the streak
+  colonies are smaller, so several streak colonies get one circle.
+- **Compare** could not use the owner's marks (they are not in a project yet). As a
+  pipeline check the region was "marked" by script with 74 synthetic marks (detector
+  centres ±6 px), so these numbers are NOT an accuracy: 8 examples from the region,
+  66 scored, 102 detected, 66 matched, 0 missed, 36 extra (match radius 40.8 px).
+  With examples taken from the streak itself the detector proposed more, smaller
+  circles than the reference set, which is the direction the owner's 136 points to.
+- capture001247 (~170 in the upper left) was not run.
