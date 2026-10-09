@@ -1,0 +1,7 @@
+{
+ "note": "Seeds INSIDE the dense upper-left streaks (NOT ground truth): 1247 picked by the supervisor, 1250 by the seed-calibration agent, on small colonies with visible seams. Used by scripts/eval/streak-check.ts.",
+ "images": {
+  "capture001247.jpg": { "seeds": [{ "x": 2567, "y": 1140 }, { "x": 2533, "y": 1260 }, { "x": 2467, "y": 1300 }, { "x": 2667, "y": 900 }, { "x": 2707, "y": 960 }, { "x": 2293, "y": 1493 }] },
+  "capture001250.jpg.jpeg": { "seeds": [{ "x": 2857, "y": 477 }, { "x": 3003, "y": 603 }, { "x": 2783, "y": 577 }, { "x": 2597, "y": 1097 }, { "x": 2323, "y": 1383 }, { "x": 2410, "y": 1190 }, { "x": 2383, "y": 1630 }] }
+ }
+}

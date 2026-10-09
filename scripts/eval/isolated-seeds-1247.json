@@ -1,0 +1,6 @@
+{
+ "note": "Seeds on large isolated colonies in the LOWER half of 1247, picked by the supervisor (NOT ground truth). Used by scripts/eval/streak-check.ts.",
+ "images": {
+  "capture001247.jpg": { "seeds": [{ "x": 2800, "y": 2080 }, { "x": 2080, "y": 2980 }, { "x": 2040, "y": 3100 }, { "x": 4260, "y": 2120 }, { "x": 4108, "y": 2268 }, { "x": 3620, "y": 2960 }] }
+ }
+}

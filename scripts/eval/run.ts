@@ -24,6 +24,8 @@
  *   --max-pixels <n>      explicit analysis pixel cap (default none, as in the app)
  *   --suspect-crops       write crops of possible under-split clusters (fitter)
  *   --out <dir>           output directory (default .eval-out/<timestamp>)
+ *   --count-box x,y,w,h   also count suggestions + seeds inside this original-px box (repeatable via ';')
+ *                         and write a zoomed fitter overlay of it
  *
  * Runs through the real worker handler (src/detection/worker-core.ts) with a
  * sharp decoder, so the analysis plan, plate crop, caches and re-run path are
@@ -58,6 +60,8 @@ const targetR = Number(args['target-r'] ?? 8)
 const rerun = !!args.rerun
 const objective = args.objective ? (String(args.objective) as 'tuned' | 'brief') : undefined
 const maxPixels = args['max-pixels'] ? Number(args['max-pixels']) : undefined
+/** --count-box x,y,w,h[;x,y,w,h]: region counts (suggestions + seeds inside), e.g. to compare with a manual region count */
+const countBoxes: [number, number, number, number][] = args['count-box'] ? String(args['count-box']).split(';').map((b) => b.split(',').map(Number) as [number, number, number, number]) : []
 /** --weights beta=1,huber=2 (fitter tuning) */
 const fitWeights = args.weights ? Object.fromEntries(String(args.weights).split(',').map((kv) => [kv.split('=')[0], Number(kv.split('=')[1])])) : undefined
 mkdirSync(outDir, { recursive: true })
@@ -229,6 +233,10 @@ interface MethodRecord {
   /** Returning to the original sensitivity reproduced the first result exactly. */
   rerunStable?: boolean
   gt?: Record<string, unknown>
+  /** Fitter clusters whose size prior was adapted to local measurements (original px). */
+  adaptedPriors?: unknown
+  /** Per --count-box: suggestions inside, seeds inside, and their sum. */
+  boxes?: { box: [number, number, number, number]; suggestions: number; seeds: number; total: number; review: number }[]
 }
 interface ImageRecord {
   name: string
@@ -285,6 +293,7 @@ for (const it of selected) {
       review: roundAll(reviewShare(r.suggestions, r.clusters)),
       underSplit: 0,
       underSplitStrict: underSplitStrict(r.clusters, r.calibration.prior?.rMedian ?? 25).length,
+      adaptedPriors: (r.run.diagnostics?.method as { adaptedPriors?: unknown } | undefined)?.adaptedPriors,
     }
     const suspects = underSplitSuspects(r.clusters, r.calibration.prior?.rMedian ?? 25)
     mr.underSplit = suspects.length
@@ -298,6 +307,16 @@ for (const it of selected) {
       mr.rerunStable = JSON.stringify(back.suggestions) === JSON.stringify(r.suggestions)
     }
     if (it.gt) mr.gt = gtMetrics(it.gt, req.existing, r)
+    if (countBoxes.length) {
+      const inBox = (b: number[], p: Pt) => p.x >= b[0] && p.y >= b[1] && p.x < b[0] + b[2] && p.y < b[1] + b[3]
+      mr.boxes = countBoxes.map((b) => {
+        const sug = r.suggestions.filter((s) => inBox(b, s))
+        const seeds = req.existing.filter((e) => inBox(b, e)).length
+        return { box: b, suggestions: sug.length, seeds, total: sug.length + seeds, review: sug.filter((s) => s.status === 'review').length }
+      })
+      if (overlays && m === 'fitter')
+        for (const [k, b] of countBoxes.entries()) await renderOverlay(it.bytes, size, r, join(outDir, `${stem(it.name)}-${m}-box${k}.jpg`), { crop: b, longSide: 1400, title: `${mr.boxes[k].total} in box (${mr.boxes[k].seeds} seeds)` })
+    }
     rec.methods.push(mr)
     if (args['suspect-crops'] && m === 'fitter') {
       for (const [k, c] of suspects.slice(0, 12).entries()) {
@@ -358,7 +377,7 @@ for (const it of selected) {
     rec.resample = out
   }
   records.push(rec)
-  const line = rec.methods.map((m) => `${m.method}=${m.count} (${m.ms} ms${m.rerunMs !== undefined ? `, re-run ${m.rerunMs}` : ''}; review ${Math.round(m.review.share * 100)} %)`).join('  ')
+  const line = rec.methods.map((m) => `${m.method}=${m.count} (${m.ms} ms${m.rerunMs !== undefined ? `, re-run ${m.rerunMs}` : ''}; review ${Math.round(m.review.share * 100)} %${m.boxes ? `; in box ${m.boxes.map((b) => b.total).join('/')}` : ''})`).join('  ')
   console.log(`${it.name}: ${rec.calibration.summary}; scale ${rec.scale}; ${line}`)
 }
 
