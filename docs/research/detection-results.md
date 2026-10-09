@@ -6,6 +6,93 @@ Read with: `docs/research/automated-counting.md` (options and the adopted plan) 
 
 > **Section S (2026-10-09, third phase: a true per-cluster K sweep) supersedes §0 where they conflict**, and §0 supersedes §1–§8. Superseded statements in §0 are marked *(superseded by §S)*.
 
+> **Section SC (2026-10-09, seed calibration in dense streaks) supersedes the seed-radius description in §S, §0 and §2 where they conflict.**
+
+## SC. Seed calibration in dense streaks (2026-10-09)
+
+Supervisor report on capture001247 (6016 × 4016; owner: ~170 colonies in the upper-left streak, ~30 large colonies in the lower half): with seeds on the large isolated colonies the fitter placed circles about twice too large across the streaks (111 for the whole plate). With 6 seeds on small colonies inside the streak the calibration said "6 manual examples; 0 usable": every seed was flagged *touching* with a radius of 164–209 px (true ≈ 25–40 px), the prior was null and the fitter fell back to 18 suggestions. Marking a few colonies in the streak is what users do on crowded plates, so this case has to work. Still no ground truth: the owner's numbers are approximate region totals.
+
+### SC.1 Root cause
+
+`measureSeed` searched each of 24 sectors for the half-level crossing between the seed's peak and the background. Inside a streak the brightness never falls to half until the streak's outer edge, so the radius ran to the cluster boundary. Sectors that fell and rose again were marked as touching but still counted, and any seed with ≥ 30 % such sectors was 'touching' and excluded from the prior. A seam between two touching colonies (a 5–25 % dip on these blurry photos) was never treated as a boundary.
+
+### SC.2 Fix (`src/detection/calibrate.ts`)
+
+1. **First boundary along 32 rays.** Each ray (three sub-rays, ~1 px smoothing) stops at the first of: an *edge* (the profile falls below half-way between the ray's running maximum and the background) or a *seam* (it drops ≥ max(8 % of the ray's contrast, 4 σ) below the running maximum and rises again by ≥ max(3 %, 2 σ)); the seam position is the valley minimum. Rays with no boundary, or with one outside 0.6–1.6 × the median ray radius (they ran into a neighbour without a valley), are left out. The radius is the median of the remaining rays.
+2. **Re-centring on the colony.** A Kåsa circle through the inlier boundary points, refitted with every boundary point near it, moves the centre (up to three times) as long as the circle contains the click and is at most twice the current radius. A click 14 px off the centre of an r = 18 colony now converges to the centre (previously the shift limit stopped it).
+3. **Touching seeds are usable.** 'touching' = ≥ 30 % of rays seam-bounded or without boundary. With a radius, ≥ 1/3 of the rays as inliers, ≤ 50 % without boundary, SNR ≥ 4 and CV ≤ 0.35 the seed feeds the prior at weight 0.6 (`TOUCHING_WEIGHT`; weighted median and MAD). 'edge', 'glare' and 'weak' are unchanged. The prior is null only if no seed has a usable radius.
+4. **Size spread in plain words.** If usable seeds differ by ≥ 1.8× the report adds "Examples vary in size (radius X–Y px), so the allowed size range is wide. If there are two kinds of colonies, mark a few of each." (the MAD in log radius already widens s).
+5. **Resolution.** Calibration runs on the preliminary image (long side 2048, scale 0.34 here, streak colonies ≈ 10 px radius) and again on the final crop, where the typical seed colony is 8 px. Seams of 1–3 px at full resolution are partly averaged away at 0.25 but the 5–25 % dips on these photos survive; separate full-resolution patches around each seed were not needed for 1247/1250 and were not added (they would mean an extra decode per seed in the browser). With the correct streak radii the analysis scale rises from 0.114 (run A) / 0.34 (run B, no prior) to 0.249.
+
+### SC.3 Size heterogeneity: per-cluster priors (`priorsForClusters`, used by the fitter)
+
+With seeds only inside the streak (r ≈ 32 px), the ~30 large isolated colonies of 1247 (r ≈ 55–100 px) were each split into a "flower" of about 7 circles (total 579). The fitter now uses a size prior per connected cluster, in this order:
+
+1. **Marks inside the cluster** (seeds and existing annotations, radius measured like a seed): the prior moves towards their median, either way.
+2. **Mainly clean, near-perfectly round isolated colonies**, measured automatically at brightness maxima (CV of ray radii ≤ 0.06, at least 30 % of the cluster's measurements): the prior can only grow. A clump of 4 colonies overlapping by 30–40 % without seams measures as one round colony with CV ≈ 0.10, so the threshold keeps the 45 split fixtures exact; a streak also contains a few round lobes, hence the 30 % share.
+3. **Crowded clusters (≥ 2 typical colonies) without marks** use the marks of all crowded clusters, so marks in one streak set the size of the other.
+4. Otherwise the seed prior.
+
+The shift is d · n / (n + 0.5) for a log-size difference d and evidence n (3 per mark or round colony, capped at 8), faded in by a smoothstep between |d| = s/2 and s, and s is widened to ≥ |d|/2. The table sizes and the "too large" guard keep the seed prior.
+
+**Tried and rejected: shrinking the prior from automatic measurements.** Measuring every brightness maximum like a seed and moving crowded clusters towards a low quantile of those radii brought 1250 (agent seeds on the lower colonies) to 128–135 against the owner's 136. On the plates whose seeds are representative it shrank the prior as well: cream plates +25–55 % (1280: one extra circle on a chain of four), the empty plate 1284 0 → 15, and on the fluorescent plates the streak became "too large" (348 → 10). The ratio of the automatic crowded-colony radius to the seed prior was 0.87 (median) on 1247, where the owner's count implies about 0.5, and 0.72–0.77 on the cream plates, where §S found the result right. The measurements are biased both ways (blurry streaks: merged lobes, too large; crisp touching colonies: seam radius, too small), so they carry no usable signal for "smaller than the seeds". Only marks can say that.
+
+### SC.4 Before / after (fitter, tuned, sensitivity 0.5, worker path)
+
+Region = suggestions + seeds inside the box. 1247 box: x 1960–2980, y 500–1900 (the supervisor's reading). 1250 box: x 2050–3150, y 350–2050 (my reading of "upper-left streak/area"; it contains the whole upper-left streak and nothing else, and matches the region tool's lasso bbox x 2120–3060, y 420–1960). Check script: `node scripts/eval/streak-check.ts` (seed files `scripts/eval/streak-seeds.json`, `scripts/eval/isolated-seeds-1247.json`; images stay local).
+
+| case | usable seeds before → after | streak seed radii after (px) | region count before → after (owner) | plate suggestions before → after | review after |
+|---|---|---|---|---|---|
+| 1247, 6 seeds inside the streak | 0 → 6 of 6 (164–209 px, all 'touching') | 26, 28, 52, 34, 32, 52 | 8 → **204** (~170, +20 %) | 18 → 445 | 10 % |
+| 1247, 6 seeds on lower isolated colonies | 5 → 5 of 6 | – | 44 → 46 (~170, −73 %) | 111 → 116 | 6 % |
+| 1250, 7 agent seeds (lower isolated colonies) | 6 → 7 of 7 | – | 68 → 77 (136, −43 %) | 145 → 181 | 8 % |
+| 1250, 7 seeds inside the upper-left streak | 2 → 6 of 7 | 37, 37, 35, 65, 67, 40, 32 | 122 → **127** (136, −7 %) | 327 → 299 | 7 % |
+
+By eye (zoomed overlays): with streak seeds, 1247's streak circles are now ~30 px instead of ~2× the colonies, but inside the parts of the streak without visible seams they form a regular carpet rather than following lobes (the count there is area / typical colony area); the lower large colonies get one circle each (before the per-cluster priors: 7 each). On 1250 with streak seeds the second streak, which has no seeds, gets the same size; a few medium colonies in the lower half are still split in two.
+
+21-plate run (agent seeds, `--rerun`; B = commit 947f2c4, A = this change; same machine, sequential runs):
+
+| plate | B n | A n | review B → A | usable seeds B → A | r̃ px B → A | first run ms B → A | re-run ms B → A | stable | adapted clusters |
+|---|---|---|---|---|---|---|---|---|---|
+| 1249 | 200 | 181 | 11 → 8 % | 5 → 7 | 43.6 → 45.9 | 3153 → 3043 | 28 → 25 | yes | 2 |
+| 1250 | 145 | 181 | 14 → 8 % | 6 → 7 | 56.1 → 49.1 | 2724 → 2963 | 21 → 21 | yes | 4 |
+| 1268 | 265 | 264 | 3 → 5 % | 7 → 7 | 25.8 → 25.7 | 3038 → 3300 | 54 → 54 | yes | 0 |
+| 1269 | 265 | 266 | 6 → 6 % | 7 → 7 | 25.6 → 25.5 | 3177 → 3271 | 53 → 56 | yes | 0 |
+| 1278 | 256 | 257 | 6 → 7 % | 7 → 7 | 23.4 → 23.1 | 3359 → 3588 | 65 → 63 | yes | 0 |
+| 1279 | 259 | 260 | 5 → 8 % | 7 → 7 | 24.5 → 24.4 | 3305 → 3385 | 60 → 60 | yes | 2 |
+| 1280 | 243 | 245 | 11 → 13 % | 7 → 7 | 28.9 → 28.9 | 3126 → 3102 | 50 → 43 | yes | 0 |
+| 1281 (1 colony) | 1 | 1 | 0 → 0 % | 7 → 7 | 28.6 → 28.9 | 1846 → 1770 | 44 → 43 | yes | 0 |
+| 1282 | 288 | 284 | 9 → 9 % | 7 → 7 | 28.0 → 28.0 | 3214 → 3342 | 45 → 45 | yes | 0 |
+| 1283 (empty) | 0 | 0 | – | 7 → 7 | 28.6 → 28.9 | 1725 → 1734 | 45 → 43 | yes | 0 |
+| 1284 (empty) | 0 | 0 | – | 7 → 7 | 28.6 → 28.9 | 1769 → 1740 | 46 → 43 | yes | 0 |
+| 1285 (empty) | 0 | 0 | – | 7 → 7 | 28.6 → 28.9 | 1762 → 1782 | 43 → 43 | yes | 0 |
+| 1287 | 167 | 166 | 8 → 6 % | 7 → 7 | 27.9 → 28.1 | 2454 → 2511 | 47 → 46 | yes | 0 |
+| 1290 | 285 | 284 | 7 → 8 % | 7 → 7 | 26.3 → 26.3 | 3247 → 3349 | 51 → 51 | yes | 0 |
+| 1291 | 259 | 260 | 7 → 11 % | 7 → 7 | 26.2 → 26.2 | 3012 → 3072 | 51 → 53 | yes | 0 |
+| 1292 (fluor.) | 348 | 334 | 6 → 12 % | 7 → 7 | 19.8 → 19.9 | 4849 → 4898 | 84 → 82 | yes | 2 |
+| 1293 (fluor.) | 392 | 385 | 13 → 8 % | 8 → 8 | 18.9 → 18.9 | 5590 → 5569 | 95 → 95 | yes | 4 |
+| 1294 (fluor.) | 401 | 377 | 6 → 7 % | 7 → 7 | 19.7 → 20.0 | 5663 → 5593 | 90 → 83 | yes | 4 |
+| 1295 (fluor.) | 284 | 266 | 9 → 9 % | 7 → 7 | 19.7 → 20.0 | 4698 → 4665 | 85 → 85 | yes | 1 |
+| 1296 (fluor.) | 393 | 364 | 12 → 10 % | 7 → 7 | 19.7 → 20.0 | 5401 → 5291 | 84 → 81 | yes | 12 |
+| 1297 (fluor.) | 294 | 267 | 8 → 4 % | 7 → 7 | 19.7 → 20.0 | 4827 → 4745 | 86 → 82 | yes | 7 |
+| **total** | **4,745** | **4,642** | | | | | | **21 / 21** | |
+
+- Cream plates (1268–1291) and the empty plates are unchanged within ±4. The empty plates stay at 0.
+- The fluorescent plates lose 7–29 suggestions each. In the overlays I checked (1295, 1296) these are large single colonies that B split into "flowers" of 5–9 circles (one colony on 1295: 9 circles → 1; a chain on 1296: 33 → 19 in a 420 × 530 px box, each circle now on one colony). That is the size-heterogeneity fix working on plates whose seeds are small.
+- 1249/1250: two touching seeds are now usable. On 1250 the prior falls from 56 to 49 px and the count rises 145 → 181, but the upper-left streak (77) is still far below the owner's 136: the seeds are large isolated colonies and nothing tells the detector that the streak's colonies are smaller (SC.3). With 7 seeds in the streak it is 127.
+- Synthetic fixtures (`scripts/eval/fixtures.ts`): 45/45 exact, 0 in review, for both `tuned` and `brief`. Slider re-runs reproduce exactly on all 21 plates.
+- Cost: one extra measurement per brightness maximum for the round-colony evidence (0.1–0.4 s in isolation); first runs stay within −7 … +9 % of B, re-runs unchanged.
+
+Regression tests (`src/detection/calibrate.test.ts`): seeds inside hex-packed streaks of r = 8 disks at 2.0, 1.85 and 1.7 r spacing (deep, shallow and very shallow seams) measure within ±20 % and stay usable; a click 10–14 px off the centre of an r = 18 colony re-centres; a seamless merged neighbour does not inflate the radius; weighted prior and the size-spread note; per-cluster priors (marks move it both ways, a second unmarked streak follows the marks, round colonies only grow it, a clump with CV 0.1 and a streak with a few round lobes do not); and two end-to-end `detect()` plates with a 40-colony streak and four large colonies: streak seeds → streak within ±20 % and one circle per large colony; seeds of both kinds → the same.
+
+### SC.5 Remaining issues
+
+- **Seeds only on large isolated colonies still under-count streaks** (1247: 46 of ~170, 1250: 77 of 136). The fix is to mark a few colonies inside the streak; the calibration report should say so in the UI when examples are all isolated and the plate has large crowded areas (not done: it needs a reliable "streak colonies look smaller" signal, which SC.3 shows the automatic measurements are not).
+- **Streak seeds over-count 1247 by ~20 %** (204 vs ~170). Where a streak shows no seams the fitter tiles it at the prior size; the count follows the prior (weighted median 32 px, the one isolated small seed counts most). Scaling by area, a 33 px prior (equal seed weights) would give about 190; I did not tune this on one plate.
+- **One streak seed per plate stays unusable** when its rays run into merged neighbours on more than half the directions (1250: 1 of 7).
+- The 1250 region is my reading of the owner's description; the region tool's Compare with the owner's marks will give a real per-colony check.
+
+
 ## S. True per-cluster K sweep (2026-10-09)
 
 The product owner asked for a real sweep over K per cluster instead of the greedy fit with small K comparisons, and for slider re-runs that cannot depend on history. Still no ground truth: every number below is a count, a review share, a runtime or a fixture result on the same 21 plates and agent-picked seeds as §0.
@@ -526,7 +613,7 @@ Manual counts reported by the product owner for checking the detector. These are
 | Image | Region | Manual count | Notes |
 |---|---|---|---|
 | capture001250 | upper-left streak/area | 136 | counted manually |
-| capture001247 | upper-left | ~170 | image not yet in `test_images/` |
+| capture001247 | upper-left streak (x 1960–2980, y 500–1900) | ~170 | in `test_images/` since §SC; see §SC.4 |
 
 ## Region tool: Find similar in region and "Compare with detector" (2026-10-09)
 
