@@ -88,6 +88,7 @@ export function createProjectActions(editor: Editor, dialogs: Dialogs, notify: N
       confirmLabel: anywayLabel,
       cancelLabel: 'Don’t change anything',
       danger: true,
+      focusCancel: true,
     })
     return anyway ? outcome : null
   }
@@ -221,6 +222,7 @@ export function createProjectActions(editor: Editor, dialogs: Dialogs, notify: N
           confirmLabel: `Clear ${plural(all.total, 'annotation')}`,
           cancelLabel: 'Keep them',
           danger: true,
+          focusCancel: true,
         })
         if (!sure) return
       }

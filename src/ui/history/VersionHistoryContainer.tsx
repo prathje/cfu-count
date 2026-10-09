@@ -1,5 +1,4 @@
 import { createEffect, createMemo, createResource, createSignal, on } from 'solid-js'
-import { unwrap } from 'solid-js/store'
 import type { ID } from '../../model/types'
 import type { VersionInfo } from '../../storage/api'
 import { useApp } from '../context'
@@ -41,14 +40,14 @@ export function VersionHistoryContainer() {
   const rows = createMemo(() => {
     const snap = snapshot.latest
     if (!snap || !state.project || snapshot.loading) return null
-    return imageRows(snap, unwrap(state.project), unwrap(state.docs))
+    return imageRows(snap, state.project, state.docs) // store proxies: recomputed when annotations change
   })
 
   async function restore(v: VersionInfo) {
     const r = rows()
     const ok = await dialogs.confirm({
       title: `Restore the version from ${versionDateTime(v)}?`,
-      body: `“${v.label}”. ${r ? restoreSummary(r) + ' ' : ''}The project as it is now is saved as a version first, so you can undo this. Undo history of each image starts over.`,
+      body: `${r ? restoreSummary(r) + ' ' : ''}The project as it is now is saved as a version first, so you can undo this. Undo history of each image starts over.`,
       confirmLabel: 'Restore this version',
     })
     if (!ok) return

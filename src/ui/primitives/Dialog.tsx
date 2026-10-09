@@ -8,6 +8,8 @@ export interface ConfirmOptions {
   confirmLabel: string
   cancelLabel?: string
   danger?: boolean
+  /** Focus the cancel button instead of the confirm button (a second, deliberate step). */
+  focusCancel?: boolean
 }
 
 /** Options for a single-field text prompt. */
@@ -167,12 +169,16 @@ export function DialogHost(props: { dialogs: DialogController }) {
               )}
             </Show>
             <div class="dialog__actions">
-              <Button variant="ghost" onClick={() => props.dialogs.settle(null)}>
+              <Button
+                variant="ghost"
+                onClick={() => props.dialogs.settle(null)}
+                data-autofocus={pending().kind === 'confirm' && (pending().opts as ConfirmOptions).focusCancel ? true : undefined}
+              >
                 {(pending().kind === 'confirm' && (pending().opts as ConfirmOptions).cancelLabel) || 'Cancel'}
               </Button>
               <Button
                 type="submit"
-                data-autofocus
+                data-autofocus={pending().kind === 'confirm' && (pending().opts as ConfirmOptions).focusCancel ? undefined : true}
                 variant={pending().kind !== 'prompt' && (pending().opts as ConfirmOptions).danger ? 'danger' : 'primary'}
                 disabled={pending().kind === 'prompt' && !value().trim()}
               >
