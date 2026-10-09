@@ -218,8 +218,16 @@ function validateDetectionRun(v: unknown, path: string): DetectionRun {
   }
   if (o.roi !== undefined) {
     const r = obj(o.roi, `${path}.roi`)
-    const kind = oneOf(r, 'kind', ['circle', 'rect'] as const, `${path}.roi`)
-    for (const k of kind === 'circle' ? ['cx', 'cy', 'r'] : ['x', 'y', 'w', 'h']) num(r, k, `${path}.roi`)
+    const kind = oneOf(r, 'kind', ['circle', 'rect', 'polygon'] as const, `${path}.roi`)
+    if (kind === 'polygon') {
+      const pts = arr(r, 'points', `${path}.roi`)
+      if (pts.length < 3) fail(`${path}.roi.points`, 'needs at least 3 points')
+      pts.forEach((pt, i) => {
+        const q = obj(pt, `${path}.roi.points[${i}]`)
+        num(q, 'x', `${path}.roi.points[${i}]`)
+        num(q, 'y', `${path}.roi.points[${i}]`)
+      })
+    } else for (const k of kind === 'circle' ? ['cx', 'cy', 'r'] : ['x', 'y', 'w', 'h']) num(r, k, `${path}.roi`)
   }
   if (o.negatives !== undefined) {
     arr(o, 'negatives', path).forEach((n, i) => {

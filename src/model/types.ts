@@ -230,8 +230,15 @@ export interface DetectionRun {
   /** Analysis resolution relative to the original image (e.g. 0.5). */
   analysisScale: number
   targetGroupId: ID
-  /** Region analysed, in original-image coordinates; absent = whole image. */
-  roi?: { kind: 'circle'; cx: number; cy: number; r: number } | { kind: 'rect'; x: number; y: number; w: number; h: number }
+  /**
+   * Region analysed, in original-image coordinates; absent = whole image. A
+   * `polygon` is a user-drawn selection (closed, ≥ 3 points): the detector searched
+   * the auto-detected plate inside it and kept colonies whose centre lies inside.
+   */
+  roi?:
+    | { kind: 'circle'; cx: number; cy: number; r: number }
+    | { kind: 'rect'; x: number; y: number; w: number; h: number }
+    | { kind: 'polygon'; points: { x: number; y: number }[] }
   seeds: DetectionSeed[]
   /** Learned priors (e.g. log-radius mu/s, appearance ranges); method-specific. */
   prior: Record<string, unknown>

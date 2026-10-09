@@ -166,6 +166,20 @@ describe('archive round trip', () => {
     await expect(decodeArchive(badZip)).rejects.toThrow(/quality/)
   })
 
+  it('validates polygon ROIs (user-drawn regions)', () => {
+    const p = project()
+    const d = doc(p, 'i1', [annotation('a1', 'g1')])
+    const run = { runId: 'r1', method: 'm', version: '1', createdAt: '', imageFingerprint: p.images[0].fingerprint, analysisScale: 1, targetGroupId: 'g1', seeds: [], prior: {}, settings: {} }
+    d.detectionRuns = [{ ...run, roi: { kind: 'polygon', points: [{ x: 1, y: 2 }, { x: 30, y: 2 }, { x: 15, y: 40 }] } }]
+    expect(validateImageAnnotations(structuredClone(d)).detectionRuns[0].roi).toEqual(d.detectionRuns[0].roi)
+    const short = structuredClone(d)
+    short.detectionRuns[0].roi = { kind: 'polygon', points: [{ x: 1, y: 2 }, { x: 3, y: 4 }] }
+    expect(() => validateImageAnnotations(short)).toThrow(/at least 3/)
+    const bad = structuredClone(d) as unknown as { detectionRuns: { roi: { points: unknown[] } }[] }
+    bad.detectionRuns[0].roi.points[1] = { x: 'a', y: 2 }
+    expect(() => validateImageAnnotations(bad)).toThrow(/points\[1\]/)
+  })
+
   it('accepts detection runs whose target group was deleted (audit trail) in archives and the CSV', async () => {
     const p = project()
     const d = doc(p, 'i1', [annotation('a1', 'g1')])

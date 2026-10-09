@@ -249,7 +249,7 @@ that (validation checks only that it is a string).
 | `seedImageFingerprints` | `{imageId: sha256}`? | for seeds taken from other plates |
 | `analysisScale` | number | analysis resolution relative to the original, e.g. `0.5` |
 | `targetGroupId` | string | may name a deleted group (see above) |
-| `roi` | `{kind:"circle",cx,cy,r}` \| `{kind:"rect",x,y,w,h}`? | image coordinates; absent = whole image |
+| `roi` | `{kind:"circle",cx,cy,r}` \| `{kind:"rect",x,y,w,h}` \| `{kind:"polygon",points:{x,y}[]}`? | image coordinates; absent = whole image. `polygon` (≥ 3 points, closed implicitly) is a region the user drew with the Region tool: the detector searched the auto-detected plate inside it and kept only colonies whose centre lies inside |
 | `seeds` | `{annotationId, imageId, x, y, radiusPx (number\|null), quality}[]` | `quality`: `ok`, `touching`, `edge`, `glare`, `weak`; coordinates copied for reproducibility |
 | `prior`, `settings` | object | method-specific |
 | `negatives` | `{x, y}[]`? | rejected suggestions kept as negative examples (never a filter) |
