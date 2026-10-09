@@ -357,6 +357,18 @@ describe('editor', () => {
     expect(editor.state.project!.id).toBe('p2')
   })
 
+  it('explains a file that is not a project archive in plain language', async () => {
+    const { editor, notices, repo } = await setup()
+    ;(repo.importArchive as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('invalid zip data'))
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect(await editor.projects.importArchive(new File(['z'], 'photo.zip'))).toBe(false)
+    expect(notices.at(-1)?.message).toBe('This file isn’t a CFU Count project')
+    expect(notices.at(-1)?.detail).toMatch(/Download project/)
+    expect(notices.at(-1)?.detail).not.toMatch(/invalid zip/)
+    expect(warn).toHaveBeenCalled()
+    warn.mockRestore()
+  })
+
   it('also guards import of a .zip and take-remote', async () => {
     const { editor, control, confirms, session } = await setup()
     editor.annotations.add(1, 1)

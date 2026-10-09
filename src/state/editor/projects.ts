@@ -1,6 +1,7 @@
 /** Project lifecycle: list, open, create, import/export, rename, delete, flush. */
 import type { ID } from '../../model/types'
 import type { ProjectSession } from '../../storage/api'
+import { isNotProjectArchive } from '../../storage/errors'
 import { prefs } from '../prefs'
 import type { EditorContext } from './context'
 
@@ -49,7 +50,7 @@ export function createProjects(ctx: EditorContext): ProjectCommands {
   }
 
   /** Replace the open project with the session `fn` produces (after guarding unsaved edits). */
-  async function switchTo(action: string, label: string, failMessage: string, fn: () => Promise<ProjectSession>): Promise<boolean> {
+  async function switchTo(action: string, label: string, failMessage: string, fn: () => Promise<ProjectSession | null>): Promise<boolean> {
     if (!(await ctx.guardUnsaved(action))) return false
     const session = await ctx.run(label, fn, failMessage, { blocking: true })
     if (!session) return false
@@ -74,7 +75,22 @@ export function createProjects(ctx: EditorContext): ProjectCommands {
     create: (name) =>
       switchTo('Creating a project', 'Creating project…', 'Couldn’t create project', () => repo.create(name.trim() || 'Untitled project')),
     importArchive: (file) =>
-      switchTo('Importing a project', 'Importing project…', 'Couldn’t import that project file', () => repo.importArchive(file)),
+      switchTo('Importing a project', 'Importing project…', 'Couldn’t import that project file', async () => {
+        try {
+          return await repo.importArchive(file)
+        } catch (err) {
+          if (!isNotProjectArchive(err)) throw err
+          // Not a project archive: plain-language notice; the technical reason goes to the console.
+          console.warn(`Archive import rejected (${file.name}):`, err)
+          notify({
+            tone: 'error',
+            key: 'import-archive',
+            message: 'This file isn’t a CFU Count project',
+            detail: `Choose a .zip made with Download project. (${file.name})`,
+          })
+          return null
+        }
+      }),
     rename(name) {
       const trimmed = name.trim()
       const project = state.project

@@ -138,6 +138,8 @@ describe('archive round trip', () => {
     const newer = { ...project(), schemaVersion: 2 }
     await expect(decodeArchive(zipSync({ 'project.json': strToU8(JSON.stringify(newer)) }))).rejects.toThrow(/newer version/)
     await expect(decodeArchive(new Uint8Array([1, 2, 3]))).rejects.toBeInstanceOf(SchemaError)
+    // Larger non-zip data makes fflate throw synchronously; still a SchemaError, never a raw codec message.
+    await expect(decodeArchive(strToU8('not a zip at all '.repeat(40)))).rejects.toBeInstanceOf(SchemaError)
   })
 
   it('rejects invalid annotation documents', async () => {

@@ -78,3 +78,8 @@ export function toLocalError(e: unknown, action: string): LocalStorageError {
     cause: e,
   })
 }
+
+/** True when an archive import failed because the file is not a (valid) project archive, as opposed to a storage failure. */
+export function isNotProjectArchive(e: unknown): boolean {
+  return e instanceof SchemaError || /invalid zip|zip data|central directory/i.test(errorMessage(e))
+}

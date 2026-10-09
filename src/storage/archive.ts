@@ -51,19 +51,24 @@ export async function encodeArchive(c: ArchiveContents): Promise<Uint8Array> {
 
 export async function decodeArchive(bytes: Uint8Array): Promise<DecodedArchive> {
   let total = 0
-  const entries = await new Promise<Record<string, Uint8Array>>((resolve, reject) =>
-    unzip(
-      bytes,
-      {
-        filter: (f) => {
-          total += f.originalSize
-          if (total > MAX_ARCHIVE_UNCOMPRESSED) return false
-          return f.name === 'project.json' || /^(annotations|images)\/[^/]+$/.test(f.name)
+  const notZip = () => new SchemaError('The file is not a valid .zip archive.')
+  const entries = await new Promise<Record<string, Uint8Array>>((resolve, reject) => {
+    try {
+      unzip(
+        bytes,
+        {
+          filter: (f) => {
+            total += f.originalSize
+            if (total > MAX_ARCHIVE_UNCOMPRESSED) return false
+            return f.name === 'project.json' || /^(annotations|images)\/[^/]+$/.test(f.name)
+          },
         },
-      },
-      (err, data) => (err ? reject(new SchemaError('The file is not a valid .zip archive.')) : resolve(data)),
-    ),
-  )
+        (err, data) => (err ? reject(notZip()) : resolve(data)),
+      )
+    } catch {
+      reject(notZip()) // fflate throws synchronously for data without a zip directory
+    }
+  })
   if (total > MAX_ARCHIVE_UNCOMPRESSED) throw new SchemaError('The archive is too large to import.')
   const pj = entries['project.json']
   if (!pj) throw new SchemaError('The archive does not contain project.json — is it a colony counter project export?')
