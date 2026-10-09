@@ -11,6 +11,12 @@ export interface DbSchema {
   name: string
   version: number
   upgrade(db: IDBDatabase, oldVersion: number, tx: IDBTransaction): void
+  /**
+   * Called when the connection is closed underneath us: another tab requested a
+   * version change (we close so it is not blocked) or the browser closed it.
+   * The owner must drop the handle and reopen lazily.
+   */
+  onClose?(): void
 }
 
 export function openDatabase(factory: IDBFactory, schema: DbSchema): Promise<IDBDatabase> {
@@ -27,8 +33,12 @@ export function openDatabase(factory: IDBFactory, schema: DbSchema): Promise<IDB
     }
     req.onsuccess = () => {
       const db = req.result
-      // Another tab upgraded the schema: close so it is not blocked.
-      db.onversionchange = () => db.close()
+      // Another tab upgraded the schema: close so it is not blocked, and let the owner reopen later.
+      db.onversionchange = () => {
+        db.close()
+        schema.onClose?.()
+      }
+      db.onclose = () => schema.onClose?.()
       resolve(db)
     }
     req.onerror = () => reject(req.error)

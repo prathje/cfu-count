@@ -88,6 +88,27 @@ describe('Drive HTTP client', () => {
     expect(calls[1].url).toContain('uploadType=media')
   })
 
+  it('does not duplicate a create whose response was lost: looks it up by its create tag first', async () => {
+    const { c, calls } = client([
+      new TypeError('Failed to fetch'), // POST reached Drive, response lost
+      jsonResponse(200, { files: [{ id: 'created', name: 'project.json', mimeType: 'application/json' }] }),
+    ])
+    const f = await c.create({ name: 'project.json', parents: ['F'], mimeType: 'application/json', appProperties: { cfuKey: 'project' } }, new Blob(['{}']))
+    expect(f.id).toBe('created')
+    expect(calls).toHaveLength(2)
+    expect(calls[1].init.method).toBe('GET')
+    const body = await (calls[0].init.body as Blob).text()
+    const tag = /"cfuCreateId":"([^"]+)"/.exec(body)![1]
+    expect(decodeURIComponent(calls[1].url.replace(/\+/g, ' '))).toContain(`value='${tag}'`)
+  })
+
+  it('retries a create after a 5xx only when the lookup finds nothing', async () => {
+    const { c, calls } = client([apiError(503, 'backendError'), jsonResponse(200, { files: [] }), jsonResponse(200, { id: 'once' })])
+    const f = await c.create({ name: 'a', parents: ['F'], mimeType: 'text/plain' }, new Blob(['x']))
+    expect(f.id).toBe('once')
+    expect(calls.map((x) => x.init.method)).toEqual(['POST', 'GET', 'POST'])
+  })
+
   it('pages through folder listings', async () => {
     const { c, calls } = client([
       jsonResponse(200, { files: [{ id: '1' }], nextPageToken: 'n' }),

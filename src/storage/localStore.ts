@@ -64,6 +64,10 @@ export class LocalStore {
             db.createObjectStore('sync', { keyPath: 'projectId' })
           }
         },
+        // Closed by a version change in another tab (or by the browser): reopen on next use.
+        onClose: () => {
+          this.dbPromise = null
+        },
       }).catch((e) => {
         this.dbPromise = null // allow a later retry
         throw toLocalError(e, 'open browser storage')

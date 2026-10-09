@@ -5,6 +5,11 @@
  * Retries: 429, 5xx, 403 rate-limit reasons and network failures, with
  * exponential backoff + jitter (honouring Retry-After). 401 marks the session
  * expired. Error messages never include the access token.
+ *
+ * Creates are not idempotent: a POST that failed with a network error or 5xx may
+ * still have created the file. Every create is therefore tagged with a one-off
+ * `appProperties.cfuCreateId`; before retrying an ambiguous failure the client
+ * looks the file up by that tag and returns it instead of creating a duplicate.
  */
 import { DriveError } from '../errors'
 
@@ -64,6 +69,15 @@ export interface HttpClientOptions {
   random?: () => number
 }
 
+/** appProperties key holding a one-off token per create call (see file header). */
+export const CREATE_ID = 'cfuCreateId'
+
+const newCreateId = (): string =>
+  typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`
+
+/** Drive query string literal. */
+const quote = (s: string): string => `'${s.replace(/['\\]/g, '\\$&')}'`
+
 const RETRYABLE_403 = new Set(['rateLimitExceeded', 'userRateLimitExceeded', 'sharingRateLimitExceeded'])
 
 export function createDriveClient(opts: HttpClientOptions): DriveClient {
@@ -72,18 +86,33 @@ export function createDriveClient(opts: HttpClientOptions): DriveClient {
   const maxRetries = opts.maxRetries ?? 4
   const random = opts.random ?? Math.random
 
-  async function request(method: string, url: string, init: { body?: BodyInit; headers?: Record<string, string> } = {}, what = 'Drive request'): Promise<Response> {
+  interface RequestInit2 {
+    body?: BodyInit
+    headers?: Record<string, string>
+    /**
+     * For non-idempotent requests: called before retrying a failure that may have
+     * been applied server-side (network error, 5xx). A non-undefined result is
+     * returned instead of retrying.
+     */
+    recover?: () => Promise<DriveFile | undefined>
+  }
+
+  async function request(method: string, url: string, init: RequestInit2 = {}, what = 'Drive request'): Promise<Response | DriveFile> {
     for (let attempt = 0; ; attempt++) {
       const token = opts.getToken()
       let res: Response
+      let ambiguous = false
       try {
         res = await doFetch(url, { method, body: init.body, headers: { ...init.headers, Authorization: `Bearer ${token}` } })
       } catch (e) {
-        if (attempt < maxRetries) {
-          await sleep(backoff(attempt))
-          continue
+        if (attempt >= maxRetries) {
+          throw new DriveError('network', `${what} failed: no connection to Google Drive. Your work is kept in this browser.`, { cause: e })
         }
-        throw new DriveError('network', `${what} failed: no connection to Google Drive. Your work is kept in this browser.`, { cause: e })
+        await sleep(backoff(attempt))
+        ambiguous = true
+        const found = init.recover && (await init.recover())
+        if (found) return found
+        continue
       }
       if (res.ok) return res
       const { message, reason } = await readError(res)
@@ -91,9 +120,36 @@ export function createDriveClient(opts: HttpClientOptions): DriveClient {
       if (retryable && attempt < maxRetries) {
         const retryAfter = Number(res.headers.get('Retry-After'))
         await sleep(Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : backoff(attempt))
+        ambiguous = res.status >= 500
+        const found = ambiguous && init.recover ? await init.recover() : undefined
+        if (found) return found
         continue
       }
       throw toDriveError(res.status, reason, message, what, opts.onUnauthorized)
+    }
+  }
+
+  /** request() for calls that always answer with a Drive File resource. */
+  async function fileRequest(method: string, url: string, init: RequestInit2, what: string): Promise<DriveFile> {
+    const r = await request(method, url, init, what)
+    return r instanceof Response ? json<DriveFile>(r) : r
+  }
+
+  async function responseRequest(method: string, url: string, init: RequestInit2 = {}, what?: string): Promise<Response> {
+    return (await request(method, url, init, what)) as Response
+  }
+
+  /** Find a file created with a given cfuCreateId under `parent` (best effort). */
+  async function findCreated(parent: string | undefined, createId: string): Promise<DriveFile | undefined> {
+    if (!parent) return undefined
+    const q = `${quote(parent)} in parents and trashed = false and appProperties has { key='${CREATE_ID}' and value=${quote(createId)} }`
+    const params = new URLSearchParams({ q, fields: `files(${FILE_FIELDS})`, pageSize: '10', supportsAllDrives: 'true', includeItemsFromAllDrives: 'true', corpora: 'allDrives' })
+    try {
+      const res = await responseRequest('GET', `${API}/files?${params}`, {}, 'Checking an interrupted upload')
+      const body = await json<{ files?: DriveFile[] }>(res)
+      return body.files?.[0]
+    } catch {
+      return undefined // lookup failed: fall back to retrying the create
     }
   }
 
@@ -113,18 +169,17 @@ export function createDriveClient(opts: HttpClientOptions): DriveClient {
 
   return {
     async about() {
-      const res = await request('GET', `${API}/about?fields=user(emailAddress,displayName)`, {}, 'Reading account')
+      const res = await responseRequest('GET', `${API}/about?fields=user(emailAddress,displayName)`, {}, 'Reading account')
       const body = await json<{ user?: { emailAddress?: string; displayName?: string } }>(res)
       return { email: body.user?.emailAddress, name: body.user?.displayName }
     },
 
     async getFile(fileId) {
-      const res = await request('GET', `${API}/files/${encodeURIComponent(fileId)}?fields=${FILE_FIELDS}&${common}`, {}, 'Reading file info')
-      return json<DriveFile>(res)
+      return fileRequest('GET', `${API}/files/${encodeURIComponent(fileId)}?fields=${FILE_FIELDS}&${common}`, {}, 'Reading file info')
     },
 
     async listChildren(folderId) {
-      const q = `'${folderId.replace(/['\\]/g, '\\$&')}' in parents and trashed = false`
+      const q = `${quote(folderId)} in parents and trashed = false`
       const out: DriveFile[] = []
       let pageToken: string | undefined
       do {
@@ -137,7 +192,7 @@ export function createDriveClient(opts: HttpClientOptions): DriveClient {
           corpora: 'allDrives',
         })
         if (pageToken) params.set('pageToken', pageToken)
-        const res = await request('GET', `${API}/files?${params}`, {}, 'Listing folder')
+        const res = await responseRequest('GET', `${API}/files?${params}`, {}, 'Listing folder')
         const body = await json<{ files?: DriveFile[]; nextPageToken?: string }>(res)
         out.push(...(body.files ?? []))
         pageToken = body.nextPageToken
@@ -146,29 +201,31 @@ export function createDriveClient(opts: HttpClientOptions): DriveClient {
     },
 
     async download(fileId) {
-      const res = await request('GET', `${API}/files/${encodeURIComponent(fileId)}?alt=media&${common}`, {}, 'Downloading file')
+      const res = await responseRequest('GET', `${API}/files/${encodeURIComponent(fileId)}?alt=media&${common}`, {}, 'Downloading file')
       return res.blob()
     },
 
-    async create(meta, body) {
+    async create(baseMeta, body) {
       const fields = `fields=${FILE_FIELDS}&${common}`
+      const createId = newCreateId()
+      const meta: NewFileMetadata = { ...baseMeta, appProperties: { ...baseMeta.appProperties, [CREATE_ID]: createId } }
+      const recover = () => findCreated(meta.parents[0], createId)
       if (!body) {
-        const res = await request('POST', `${API}/files?${fields}`, { body: JSON.stringify(meta), headers: { 'Content-Type': 'application/json; charset=UTF-8' } }, 'Creating folder')
-        return json<DriveFile>(res)
+        return fileRequest('POST', `${API}/files?${fields}`, { body: JSON.stringify(meta), headers: { 'Content-Type': 'application/json; charset=UTF-8' }, recover }, 'Creating folder')
       }
       if (body.size <= MULTIPART_LIMIT) {
+        // A fresh multipart body per attempt is not needed: Blobs are re-readable.
         const { blob, contentType } = multipartBody(meta, body, meta.mimeType)
-        const res = await request('POST', `${UPLOAD}/files?uploadType=multipart&${fields}`, { body: blob, headers: { 'Content-Type': contentType } }, `Uploading ${meta.name}`)
-        return json<DriveFile>(res)
+        return fileRequest('POST', `${UPLOAD}/files?uploadType=multipart&${fields}`, { body: blob, headers: { 'Content-Type': contentType }, recover }, `Uploading ${meta.name}`)
       }
-      const init = await request('POST', `${UPLOAD}/files?uploadType=resumable&${fields}`, {
+      // Starting a resumable session creates nothing, so it may be retried blindly.
+      const init = await responseRequest('POST', `${UPLOAD}/files?uploadType=resumable&${fields}`, {
         body: JSON.stringify(meta),
         headers: { 'Content-Type': 'application/json; charset=UTF-8', 'X-Upload-Content-Type': meta.mimeType },
       }, `Uploading ${meta.name}`)
       const session = init.headers.get('Location')
       if (!session) throw new DriveError('invalid', 'Google Drive did not start the upload session.')
-      const res = await request('PUT', session, { body, headers: { 'Content-Type': meta.mimeType } }, `Uploading ${meta.name}`)
-      return json<DriveFile>(res)
+      return fileRequest('PUT', session, { body, headers: { 'Content-Type': meta.mimeType }, recover }, `Uploading ${meta.name}`)
     },
 
     async updateContent(fileId, body, appProperties) {
@@ -176,11 +233,9 @@ export function createDriveClient(opts: HttpClientOptions): DriveClient {
       const mime = body.type || 'application/octet-stream'
       if (appProperties) {
         const { blob, contentType } = multipartBody({ appProperties }, body, mime)
-        const res = await request('PATCH', `${url}&uploadType=multipart`, { body: blob, headers: { 'Content-Type': contentType } }, 'Updating file')
-        return json<DriveFile>(res)
+        return fileRequest('PATCH', `${url}&uploadType=multipart`, { body: blob, headers: { 'Content-Type': contentType } }, 'Updating file')
       }
-      const res = await request('PATCH', `${url}&uploadType=media`, { body, headers: { 'Content-Type': mime } }, 'Updating file')
-      return json<DriveFile>(res)
+      return fileRequest('PATCH', `${url}&uploadType=media`, { body, headers: { 'Content-Type': mime } }, 'Updating file')
     },
   }
 }

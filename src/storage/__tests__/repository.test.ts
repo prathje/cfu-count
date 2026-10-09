@@ -141,6 +141,22 @@ describe('repository: local working copy', () => {
   })
 })
 
+describe('LocalStore connection lifecycle', () => {
+  it('reopens lazily after another tab forces the connection closed (versionchange)', async () => {
+    const factory = new IDBFactory()
+    const store = new LocalStore(factory, 'lifecycle-test')
+    expect(await store.listProjects()).toEqual([])
+    // Deleting the database fires versionchange on our open connection; we must close and forget it.
+    await new Promise<void>((resolve, reject) => {
+      const req = factory.deleteDatabase('lifecycle-test')
+      req.onsuccess = () => resolve()
+      req.onerror = () => reject(req.error)
+      req.onblocked = () => reject(new Error('blocked: connection was not closed'))
+    })
+    expect(await store.listProjects()).toEqual([])
+  })
+})
+
 describe('repository: Google Drive', () => {
   let drive: FakeDrive
   let a: Device
