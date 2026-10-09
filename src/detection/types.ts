@@ -33,6 +33,8 @@ export interface SeedPatch {
   /** Original-image coordinates (of the seed's image) of the patch's top-left corner. */
   originX: number
   originY: number
+  /** Fingerprint of the reference image's bytes (cache key: same size, different bytes must not reuse a calibration). */
+  sourceFingerprint?: string
 }
 
 /** One calibration example: a manual annotation of the target group. */

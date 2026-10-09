@@ -110,6 +110,29 @@ describe('detector worker + client', () => {
     expect(r.suggestions.length).toBe(5)
     client.dispose()
   })
+  it('a changed reference fingerprint is never served from the calibration cache', async () => {
+    const log: string[] = []
+    const client = createDetectorClient(fakeWorker(fakeDecoder(log)))
+    const remote = (fp: string) =>
+      request({
+        seeds: [],
+        existing: [],
+        remoteSeeds: disks.slice(0, 3).map((d, i) => ({ annotationId: `r${i}`, imageId: 'ref', x: d.x, y: d.y, imageWidth: 600, imageHeight: 520 })),
+        remoteSources: { ref: new Blob([]) },
+        remoteFingerprints: { ref: fp },
+        analysis: { scale: 1 },
+        settings: { method: 'fitter' },
+      })
+    await client.detect(remote('a'))
+    const n = log.length
+    const again = await client.detect(remote('a'))
+    expect(log.length).toBe(n)
+    expect((again.run.diagnostics!.method as { reusedFit: boolean }).reusedFit).toBe(true)
+    const changed = await client.detect(remote('b'))
+    expect(log.length).toBe(n + 1) // the reference is decoded again
+    expect((changed.run.diagnostics!.method as { reusedFit: boolean }).reusedFit).toBe(false)
+    client.dispose()
+  })
   it('cancels via AbortSignal and when a newer request starts', async () => {
     const client = createDetectorClient(fakeWorker(fakeDecoder([])))
     const ac = new AbortController()

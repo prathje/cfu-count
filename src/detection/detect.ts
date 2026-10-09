@@ -66,7 +66,7 @@ export function prepareKey(input: Pick<DetectInput, 'imageId' | 'imageFingerprin
 }
 
 const seedKey = (input: Pick<DetectInput, 'seeds'>) =>
-  JSON.stringify(input.seeds.map((s) => [s.annotationId, s.imageId, Math.round(s.x * 10), Math.round(s.y * 10), s.patch ? [s.patch.image.width, s.patch.image.height, s.patch.scale] : 0]))
+  JSON.stringify(input.seeds.map((s) => [s.annotationId, s.imageId, Math.round(s.x * 10), Math.round(s.y * 10), s.patch ? [s.patch.image.width, s.patch.image.height, s.patch.scale, s.patch.originX, s.patch.originY, s.patch.sourceFingerprint ?? null] : 0]))
 const existingKey = (input: Pick<DetectInput, 'existing'>) => JSON.stringify(input.existing.map((e) => [e.id, Math.round(e.x * 10), Math.round(e.y * 10), e.r ?? null]))
 
 /**

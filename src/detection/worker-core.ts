@@ -125,7 +125,8 @@ export function createWorkerHandler(decoder: Decoder, post: (m: FromWorker, tran
       const y0 = Math.max(0, Math.floor((s.y - half) * k))
       const x1 = Math.min(ref.width, Math.ceil((s.x + half) * k))
       const y1 = Math.min(ref.height, Math.ceil((s.y + half) * k))
-      const patch: SeedPatch = { image: cutRgba(ref, x0, y0, x1 - x0, y1 - y0), scale: k, originX: x0 / k, originY: y0 / k }
+      const fp = req.remoteFingerprints?.[s.imageId]
+      const patch: SeedPatch = { image: cutRgba(ref, x0, y0, x1 - x0, y1 - y0), scale: k, originX: x0 / k, originY: y0 / k, ...(fp ? { sourceFingerprint: fp } : {}) }
       out.push({ ...s, patch })
     }
     return out
@@ -133,7 +134,7 @@ export function createWorkerHandler(decoder: Decoder, post: (m: FromWorker, tran
 
   function planKey(req: DetectRequest): string {
     const seeds = req.seeds.map((q) => [Math.round(q.x), Math.round(q.y)])
-    const remote = (req.remoteSeeds ?? []).map((q) => [q.imageId, Math.round(q.x), Math.round(q.y)])
+    const remote = (req.remoteSeeds ?? []).map((q) => [q.imageId, req.remoteFingerprints?.[q.imageId] ?? null, Math.round(q.x), Math.round(q.y)])
     return JSON.stringify([imageKey(req), seeds, remote, req.roi ?? null, req.analysis ?? null, req.settings?.edgeMarginFrac ?? null])
   }
 
