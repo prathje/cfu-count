@@ -1,4 +1,5 @@
 import { createMemo, createSignal, Show } from 'solid-js'
+import { unwrap } from 'solid-js/store'
 import { isConfirmed } from '../../state/core'
 import type { ViewportHandle } from '../../viewport/api'
 import { Viewport } from '../../viewport/Viewport'
@@ -39,7 +40,17 @@ export function WorkspaceContainer(props: WorkspaceContainerProps) {
 
   const order = createMemo(() => (state.project ? displayOrder(state.project) : []))
   const position = () => order().findIndex((i) => i.id === state.currentImageId) + 1
-  const confirmed = createMemo(() => editor.currentAnnotations().filter(isConfirmed))
+  // Plain (unwrapped) records: the viewport iterates every point per redraw, and store
+  // proxies would make it subscribe to each coordinate. Reading `updatedAt` here keeps
+  // this memo (and therefore the viewport) reactive to in-place edits.
+  const confirmed = createMemo(() =>
+    editor
+      .currentAnnotations()
+      .filter((a) => (void a.updatedAt, isConfirmed(a)))
+      .map((a) => unwrap(a)),
+  )
+  // Keep Fit clear of the floating toolbar (top) and the zoom footer (bottom).
+  const fitInsets = { top: 64, right: 16, bottom: 56, left: 16 }
   const tallies = createMemo<GroupTally[]>(() =>
     editor.groups().map((g) => ({
       id: g.id,
@@ -121,6 +132,7 @@ export function WorkspaceContainer(props: WorkspaceContainerProps) {
                 imageWidth={image().width}
                 imageHeight={image().height}
                 annotations={confirmed()}
+                fitInsets={fitInsets}
                 groups={editor.groups()}
                 activeGroupId={state.activeGroupId}
                 tool={state.tool}
