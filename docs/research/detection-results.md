@@ -4,6 +4,126 @@ Status: 2026-10-09. The detectors are implemented in `src/detection/` and the ev
 
 Read with: `docs/research/automated-counting.md` (options and the adopted plan) and `colony-fitting-method-brief.md` (the mainline method).
 
+> **Section 0 describes the retune after field feedback (same day, second phase) and supersedes conflicting statements in §1–§8.** Those sections describe the first version, which is the one deployed when the feedback came in.
+
+## 0. Retune after field feedback
+
+Field reports:
+- **Product owner, iPad**: "a cluster of 3 just became a single one"; later, "the current automated analysis undercounts by quite a lot".
+- **Integration agent**: about 70 % of suggestions on cream plates landed in review regions, whole streaks became one "12 or 13?" region, and slider re-runs took the full ~4 s.
+
+No ground truth arrived; numbers are counts, review shares and runtimes on the same 21 plates and agent-picked seeds as §4.
+
+### 0.1 What was wrong
+
+| Symptom | Cause (found on the plates and in fixtures) |
+| --- | --- |
+| Compact clusters merged ("3 → 1") | A **greedy local minimum**: the first greedy step takes one big disk over a compact triple; the split move only tries two disks, which cannot cover a triangle. Three prior-sized disks scored better by > 1 colony unit but were never reached. Reproduced exactly by a synthetic triangle at 30 % overlap (K = 1). Watershed merged compact triangles and squares because they have a single distance-transform peak. |
+| Undercount (missed colonies) | (1) Groups the greedy left empty **never tried K = 1**: a "clear single" shortcut capped the sweep at K = k₀ = 0 (22 groups on 1290 alone, up to 1.6 colony areas each). (2) The soft mask membership was relative to the *seeds'* brightness, so a colony at ~50 % of the seed contrast gained nothing from being covered. (3) A first disk paid the full edge cost for its boundary inside not-yet-explained foreground. (4) Disk pixels on the rim cost as much as explained pixels. (5) The size prior priced out colonies smaller than the (large, isolated) seeds. (6) Count penalty and mask threshold were set for precision. |
+| Review everywhere, whole streaks one region | The review UI marks a whole cluster as a review region if *any* of its suggestions is `review`; clusters were connected components, i.e. whole streaks. The raw objective gap scales with colony size (small colonies always "ambiguous"), and "colony or no colony" (K = 0 runner-up) was treated like "2 or 3?". |
+| Slider re-runs ≈ full run | The worker's decode cache held one image, so pass 1 evicted the final image and every re-run decoded twice and recalibrated; the mask and all fits depended on sensitivity, so nothing could be reused. |
+| iPad resolution | A 4 MP default cap (and a proposed 2.5 MP iPad cap) can push colonies below the ~8 px radius needed to see the seams between touching colonies. |
+
+### 0.2 What changed (`src/detection/`)
+
+- **Groups (sub-clusters) and a per-group K sweep.** After the greedy fit, disks joined by a wide neck (≥ 0.7 r at the narrowest point) form groups of ≤ 3 disks. Each group compares K = k₀−1 … max(k₀, area estimate)+1, each K initialised by farthest-point + k-means on the group's pixels and jointly refined. Groups are what the UI sees as clusters (`clusterId`, `bbox`, `chosenK`, `runnerUpK`, `alternative`), so review regions are local.
+- **Soft, intensity-aware mask term**, relative to the cluster's own brightness: uncovered pixels cost their membership m, covered pixels cost 1 − m, so the 1–2 px seams between touching colonies argue against a disk spanning them, and dim colonies count fully.
+- **Recall bias** (product decision: a false suggestion costs one tap, a missed colony a hand count):
+  - FP weight 0.5;
+  - boundary inside foreground at 0.25 weight;
+  - size prior with oversize ×2 and undersize ×0.5;
+  - λ 0.1 and mask threshold 0.35 × seed contrast at the default sensitivity.
+- **Review on the relative gap**: objective gap per contested colony (colonies that differ between the best and the runner-up explanation), threshold 0.03; a K = 0 runner-up never makes a review region (tap-to-reject handles it). Alternatives also carry `added` circles and `removed` primary indices (centres within 0.5·r, radii within ±35 %); the full set is kept.
+- **Re-runs re-score instead of refitting**:
+  - `DetectorCache` keeps the prepared image, the calibration (keyed by the seeds) and per-group configuration tables (K, disks, objective without count and prior terms).
+  - A sensitivity (λ) or size-tolerance (s) change re-scores the stored configurations. A group whose best K lands on the edge of its table is extended by one K (fit state is kept per cluster); clusters are never refitted.
+  - Mask and candidates no longer depend on sensitivity.
+  - Cache keys include the image fingerprint (new optional `imageFingerprint` input).
+- **Worker**:
+  - It memoises the analysis plan per image + seeds (re-runs skip pass 1) and keeps bounded LRU caches.
+  - Each reference image is decoded once per run.
+  - Cancellation is checked between decodes, and a transferred `ImageBitmap` is closed.
+  - Errors are typed (`DecodeError` → `decode-failed`, `RangeError` → `out-of-memory`).
+  - The client rejects pending work when the worker fails to load, crashes or sends an unreadable reply, and restarts it from the factory; `detect()` after `dispose()` rejects.
+- **Analysis resolution (product decision: best resolution, no iPad cap)**:
+  - No default pixel cap.
+  - The worker decodes only the plate (ROI bounding box + 4 %) at the scale that gives a typical colony 8 px (smallest expected ≥ 4 px). That keeps the image at 0.6–2.8 MP here.
+  - The fitter computes LoG candidates per cluster patch instead of holding a whole-image LoG stack.
+  - The effective scale, crop, typical radius and plan note are recorded in `run.diagnostics.analysis`. `analysis.maxPixels` remains an explicit override.
+- **Review findings folded in**: the patch from `/tmp/cfu-review` could not be applied directly (the permission system blocked applying an external patch); its fixes were re-implemented by hand. These cover the client lifecycle, bitmap close, cancel during reference crops, no `Math.max(...spread)` on candidate lists, and preparing the image once. On top: review clusters are reconciled after suggestion filtering, so "k or k+1?" counts what the user sees, and the ROI never crashes on a degenerate outline.
+- **Watershed** also takes markers from the core mask (compact triangles and squares now split).
+- **Regression fixtures** (`clusters.test.ts`): pairs, chains of 3/4, triangle and square at 0/15/30/40 % overlap, end to end through `detect()` for both objectives; a clear triple must be K = 3 with a relative gap ≥ 5× the review threshold; watershed must split the 15 % cases; a single colony stays one.
+
+### 0.3 Objective: the brief's formula vs the tuned objective
+
+`settings.objective`:
+- `'brief'` is exactly the product owner's formula: L_mask(M, M̂) + α L_boundary + β Σ((log r − μ)/s)² + λ K, with γ = ω = 0. The boundary term hides edges inside other disks; β applies to ½z² as in the tuned variant.
+- `'tuned'` (default) uses an area-proportional count λ Σ(r/r̃)², an asymmetric Huber prior (oversize ×2, undersize ×0.5), the appearance term γ and the overlap term ω.
+
+Both use the same mask, candidates, groups, K sweep and recall settings.
+
+| | tuned (default) | brief |
+| --- | --- | --- |
+| Synthetic clusters of 2–4, 0–40 % overlap | all correct; clear cases (≤ 15 %) decided | all counts correct; clear chain of 4 at 15 % sent to review |
+| Total suggestions, 21 plates | 4,709 | 5,093 |
+| Review share, cream plates | 5–13 % | 17–32 % |
+| Empty plates 1283–1285 | 0 / 0 / 0 | 0 / 0 / 3 (1285 all in review) |
+| What the extra brief suggestions are | – | mostly a second, overlapping circle on a single colony (35–46 per cream plate, e.g. 1268, 1282); some genuinely missed small colonies |
+
+On the question "does λ·K plus a quadratic prior fix under-splitting?": with the per-group K sweep, both variants split the fixtures and the "3 → 1" case. The under-splitting came from the search (greedy local minimum), not from the count shape. λ·K does over-split: without the overlap term, a second disk half-covering a colony is cheap.
+
+**Recommendation: keep `tuned` as the default.** The brief variant stays selectable for comparison and for evaluation once GT exists. Why each extra term is kept:
+- **Overlap ω**: real colonies rarely overlap deeply; without it, single colonies get two overlapping circles (the brief variant's main failure above).
+- **Appearance γ**: penalises disks dimmer than the seeds' lower bound and ring-shaped profiles. On these plates it is what keeps bubbles (dark centre, bright rim) out: of 6 large K = 0 groups inspected after the retune, 4 were bubbles.
+- **Area-proportional count**: λ should mean "a colony must explain this fraction of its own area"; a flat λ·K prices small colonies out (small disks explain little area) and makes duplicates as cheap as real colonies.
+- **Asymmetric prior**: oversized disks are the signature of merged colonies (the reported failure); undersized ones are common because users pick large, obvious colonies as seeds (brief §2 warns about this bias).
+
+Circles only; nothing here justified ellipses.
+
+### 0.4 Before / after, per plate
+
+"Deployed" = the version before this retune with its defaults (the `before` run); "new" = current defaults. Counts are new suggestions (excluding the 7–8 seeds). Review = share of suggestions inside review regions under the UI's rule (number of regions, largest region in colonies). Node 26, Apple M3 Max; both runs go through the same decode path except that "new" uses the plate crop.
+
+| plate | deployed | new | Δ | review deployed | review new | first run ms | slider re-run ms | r̃ px / scale |
+|---|---|---|---|---|---|---|---|---|
+| 1249 (hazy) | 140 | 187 | +47 (+34 %) | 93 % (6, 66) | 32 % (19, 5) | 1546 → 3522 | 1144 → 32 | 8.0 / 0.183 |
+| 1250 (hazy) | 86 | 142 | +56 (+65 %) | 93 % (6, 40) | 33 % (14, 6) | 1183 → 3177 | 1121 → 61 | 8.9 / 0.159 |
+| 1268 | 213 | 260 | +47 (+22 %) | 69 % (64, 13) | 5 % (7, 3) | 3496 → 3427 | 3260 → 56 | 8.0 / 0.310 |
+| 1269 | 221 | 266 | +45 (+20 %) | 57 % (46, 16) | 5 % (7, 3) | 3560 → 3488 | 3252 → 54 | 8.0 / 0.312 |
+| 1278 | 224 | 252 | +28 (+12 %) | 46 % (25, 15) | 13 % (12, 4) | 3309 → 3594 | 3091 → 67 | 8.0 / 0.342 |
+| 1279 | 226 | 257 | +31 (+14 %) | 63 % (32, 16) | 6 % (6, 5) | 3383 → 3532 | 3167 → 60 | 8.0 / 0.327 |
+| 1280 | 205 | 241 | +36 (+18 %) | 75 % (26, 25) | 12 % (11, 4) | 2008 → 3352 | 1854 → 49 | 8.0 / 0.277 |
+| 1281 (1 colony) | 1 | 1 | 0 | 0 % | 0 % | 1802 → 2676 | 1671 → 44 | 8.0 / 0.280 |
+| 1282 | 233 | 283 | +50 (+21 %) | 76 % (52, 21) | 8 % (9, 4) | 2282 → 3562 | 2077 → 51 | 8.0 / 0.285 |
+| 1283 (empty) | 0 | 0 | 0 | 0 % | 0 % | 1811 → 2812 | 1648 → 46 | 8.0 / 0.280 |
+| 1284 (empty) | 0 | 0 | 0 | 0 % | 0 % | 1779 → 2832 | 1647 → 43 | 8.0 / 0.280 |
+| 1285 (empty) | 0 | 0 | 0 | 0 % | 0 % | 1815 → 2636 | 1689 → 46 | 8.0 / 0.280 |
+| 1287 | 141 | 164 | +23 (+16 %) | 61 % (36, 8) | 7 % (7, 3) | 2052 → 3006 | 1908 → 49 | 8.0 / 0.286 |
+| 1290 | 212 | 274 | +62 (+29 %) | 74 % (56, 23) | 8 % (12, 3) | 3702 → 3527 | 3469 → 59 | 8.0 / 0.304 |
+| 1291 | 195 | 253 | +58 (+30 %) | 63 % (48, 11) | 5 % (8, 4) | 3562 → 3409 | 3422 → 50 | 8.0 / 0.305 |
+| 1292 (fluor.) | 286 | 350 | +64 (+22 %) | 99 % (3, 275) | 20 % (27, 5) | 4435 → 5111 | 4385 → 96 | 8.0 / 0.405 |
+| 1293 (fluor.) | 333 | 388 | +55 (+17 %) | 98 % (10, 305) | 26 % (35, 5) | 4489 → 5442 | 4356 → 146 | 8.0 / 0.424 |
+| 1294 (fluor.) | 315 | 410 | +95 (+30 %) | 94 % (6, 283) | 25 % (34, 5) | 4811 → 5806 | 4608 → 169 | 8.0 / 0.407 |
+| 1295 (fluor.) | 220 | 275 | +55 (+25 %) | 87 % (17, 138) | 20 % (21, 6) | 4264 → 4719 | 4203 → 117 | 8.0 / 0.407 |
+| 1296 (fluor.) | 320 | 408 | +88 (+28 %) | 93 % (11, 261) | 30 % (42, 6) | 4481 → 5216 | 4337 → 118 | 8.0 / 0.406 |
+| 1297 (fluor.) | 228 | 298 | +70 (+31 %) | 95 % (11, 99) | 27 % (26, 5) | 4318 → 4904 | 4147 → 123 | 8.0 / 0.407 |
+| **total** | **3,799** | **4,709** | **+910 (+24 %)** | | | | | |
+
+- On the cream plates the new fitter now counts as many as watershed and LoG (new W/A on 1268: 273/262, 1290: 304/297) instead of 10–30 % fewer. On fluorescent plates it is above both, as before.
+- Review regions are local everywhere: largest 3–6 colonies, against 66–305 before. Cream plates are at 5–13 % (target < 10 % met on 7 of the 9 cream plates with colonies; 1278 at 13 %, 1280 at 12 %). On capture001280 that is 11 regions of ≤ 4 colonies. The integration agent's 24 → 13 was measured with an intermediate uncommitted build.
+- Slider re-runs: 32–169 ms in Node (target < 1 s). The first run is somewhat slower (K sweeps; the "new" first run includes the preliminary pass, which the deployed column measured separately as ~3 s, see §4.3). iPad projection: about 1.5–2.5× Node, i.e. first run ~5–15 s on the fluorescent plates, re-runs well under 1 s. Not measured on hardware.
+- Memory: estimated peak raster footprint 19–148 MB (was up to 288 MB): the plate crop and per-cluster LoG.
+
+### 0.5 Remaining failure modes (no GT yet)
+
+- **Hazy, merged streaks (1249/1250) and the fluorescent plates still have 20–33 % of suggestions in review.** These are mostly genuine 2-vs-3 ambiguities inside streaks (regions of ≤ 6 colonies). Seed bias (large isolated seeds, smaller streak colonies) still drives instability there (§4.2); marking 2–3 streak colonies as seeds should help, untested without GT.
+- **Large, blurry colonies unlike the seeds** can still be split into several disks (fluorescent plates).
+- A few **small, dim colonies** remain missed when K = 0 wins narrowly; at higher sensitivity they appear.
+- **Bubbles** next to the size prior can now be suggested (recall bias); the reviewer rejects them with a tap.
+- **History dependence**: a group's table grows when a re-run extends it, so returning to a previous slider value can give a slightly different count (1293: 388 → 399 at the same settings after exploring). Benign, since extensions only add explanations, but a reload resets it.
+- **Weights are still tuned by eye** on a handful of plates and must be re-fixed on a development split once annotated zips arrive (`npm run eval -- --gt project.zip --seeds gt:5`). The product owner has been asked for zips of failing plates; none had arrived when this was written.
+
+
 ## 1. What the test photos look like
 
 21 JPEGs in `test_images/` (the task said 22; the folder holds 21). All are Nikon D750, 6016×4016, EXIF orientation 1, about 6.5 MB each. Findings that changed the plan:
@@ -91,7 +211,7 @@ Tuning history, kept because each fix addressed a failure seen on real plates:
 
 ### 2.6 Analysis scale
 
-`chooseAnalysisScale` picks max(4/r_min, 8/r̃) analysis px per original px, where r_min = exp(μ − 2s) and r̃ = exp(μ), capped at 4 MP. Without a prior it uses a 2048 px long side. The original plan, "smallest colony ≥ 3–4 px", gave r̃ ≈ 6 px on these plates. At that size the core mask covered whole merged groups and the fitter could not separate touching pairs. At r̃ = 8–10 px the seams appear.
+`chooseAnalysisScale` picks max(4/r_min, 8/r̃) analysis px per original px, where r_min = exp(μ − 2s) and r̃ = exp(μ). (Superseded: no default cap any more, and the worker analyses only the plate crop, see §0.2.) Without a prior it uses a 2048 px long side. The original plan, "smallest colony ≥ 3–4 px", gave r̃ ≈ 6 px on these plates. At that size the core mask covered whole merged groups and the fitter could not separate touching pairs. At r̃ = 8–10 px the seams appear.
 
 `--target-r 6` (1268/1280/1291) is about 40 % faster (fitter 1.7–2.0 s vs 2.1–3.6 s) and changes counts by 1–6 %. Without GT I can't say which is right. The default of 8 is a judgement call.
 
