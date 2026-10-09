@@ -59,6 +59,14 @@ radius; far zoomed out (scale < 0.5) the displayed radius shrinks smoothly to a
 3.5 px minimum (`viewport/marker-size.ts`), and number labels are placed around
 their marker to avoid collisions (`viewport/label-layout.ts`).
 
+`adjust` (an `ImageDisplayAdjust`, compared by value) and `compareOriginal` change
+only the image layer: `viewport/adjusted-layer.ts` caches display-adjusted copies of
+the pyramid, computed lazily by `adjust.worker.ts` (OffscreenCanvas; chunked
+main-thread fallback in `adjust-processor.ts`) with the pure LUT/matrix maths in
+`viewport/image-adjust.ts`. Markers are never filtered. The settings live on
+`ImageRecord.display` and are set with `images.setDisplay` (project.json only, not
+undoable, allowed while a group is locked).
+
 ## Data flow
 
 ```mermaid

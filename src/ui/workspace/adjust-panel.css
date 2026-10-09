@@ -87,6 +87,6 @@
 
 /* While comparing, fade the panel so more of the original is visible. */
 .popover.is-comparing {
-  opacity: 0.2;
+  opacity: 0.12;
   transition: opacity var(--t-fast) var(--ease);
 }

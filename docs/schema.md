@@ -74,6 +74,26 @@ ImageRecord:
 | `addedAt` | timestamp | |
 | `sampleId` | string? | reserved for multi-channel photos of one plate (unused in v1) |
 | `sourceMismatch` | object? | set by storage when the source bytes changed after annotation: `{detectedAt, message, remoteMd5?, remoteWidth?, remoteHeight?}` |
+| `display` | ImageDisplayAdjust? | display-only view setting (editor-owned); absent = unadjusted. See below |
+
+ImageDisplayAdjust (`src/model/display.ts`) changes only how the viewport shows the
+image layer. It never changes image bytes, annotation coordinates, counts, markers
+or detector input. Readers are lenient: a missing or invalid field takes its default,
+numbers are clamped, and an all-default value is dropped (never a load error).
+
+| Field | Type | Default | Range / meaning |
+| --- | --- | --- | --- |
+| `brightness` | number | 0 | −1…1; adds `brightness/2` to the 0…1 value |
+| `contrast` | number | 0 | −1…1; slope `2^(2·contrast)` around mid-grey |
+| `gamma` | number | 1 | 0.2…5; output `v^(1/gamma)` (> 1 lightens midtones) |
+| `saturation` | number | 1 | 0…3; colour view only (0 = grey) |
+| `invert` | boolean | false | swap light and dark |
+| `channel` | `"rgb" \| "red" \| "green" \| "blue" \| "luma"` | `"rgb"` | single channels and `luma` (Rec. 709) are shown as grey |
+| `autoContrast` | boolean | false | stretch the 0.5 %–99.5 % percentiles of the displayed values (histogram of the smallest pyramid level) to full range |
+
+Order: channel matrix (channel view, saturation) → auto-contrast stretch →
+brightness → contrast → clamp → gamma → invert. Changing it saves `project.json`
+only.
 
 Drive link (`storage.kind = "drive"`):
 

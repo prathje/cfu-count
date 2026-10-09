@@ -110,6 +110,12 @@ Both are fast enough for one query per tap or hover move, so a linear scan would
   - Single canvas: 4096x4096 = 16.7 Mpx on older iOS; WebKit raised it to 8192x8192 in March 2024 (276145@main), probably shipping in Safari 18 (not verified).
   - Total canvas memory: older iOS capped it (`ramSize()/4`, "Total canvas memory use exceeds the maximum limit (384 MB)", `getContext` returning null). WebKit removed the cap in June 2023 (265628@main, likely Safari 17), so exceeding memory now risks the tab being killed.
   - Our worst case on iPad is two ~5.7 Mpx layers (about 45 MB) plus small sprites, the decoded original image (a 24 MP photo is about 96 MB, held by the app) and the pyramid (about 32 MB).
+- **Display adjustments** (brightness, contrast, gamma, saturation, invert, channel view, auto contrast; `viewport/adjusted-layer.ts`).
+  - *Not* done with `CanvasRenderingContext2D.filter`: Safari ships it only behind the off-by-default "Canvas Filters" preference (status `testable`, `defaultValue: false`), and OffscreenCanvas `filter` is unsupported (§3, item 14). CSS filters also cannot express gamma or single-channel views without SVG filters.
+  - Instead each pixel goes through a 3x3 channel matrix and one 256-entry LUT (`viewport/image-adjust.ts`, unit-tested), run in a module worker on an `OffscreenCanvas` (Safari 16.4+): the main thread only crops with `createImageBitmap(source, sx, sy, sw, sh)` and transfers the bitmap; the worker returns `transferToImageBitmap()`. Without worker OffscreenCanvas 2D the same code runs on the main thread in 256 kpx slices separated by `setTimeout(0)`.
+  - Lazy and cached: only the level the view draws is adjusted; levels over 8 Mpx (the 24 MP original) are never processed whole, only the visible 1024 px tiles (2 px padding, drawn with 1 px overlap so edges don't show) over the adjusted half-resolution level, within a 16 Mpx LRU budget (~64 MB). When more than that is visible the half-resolution level is sharp enough. Pan/zoom never recompute cached results.
+  - After a change, the coarsest level (≤ 1024 px long side) is redone at once, also mid-drag, as a live preview; finer levels and tiles wait until settings are unchanged for 150 ms, and results of superseded settings are discarded. The previous settings stay on screen until the new ones have pixels.
+  - Measured (headless Chrome 154, macOS, M-series, 6016x4016 JPEG, worker path, including the crop and transfers): coarsest level 0.38 Mpx 6–8 ms; histogram 5–10 ms; fit-zoom level 1.5 Mpx 9–24 ms; half-resolution level 6 Mpx 60–68 ms; full-resolution tile 1 Mpx ~10 ms. A 40-step slider drag produced no long tasks (> 50 ms) on the main thread. *Not measured on an iPad.*
 
 ## 3. Platform facts and sources
 
@@ -139,6 +145,10 @@ Both are fast enough for one query per tap or hover move, so a linear scan would
     - [WebKit 265628@main](https://github.com/WebKit/WebKit/commit/6bd11f3792f05b4e58e5647bf173212879fa62cc) and [bug 195325](https://bugs.webkit.org/show_bug.cgi?id=195325) removed the total canvas memory cap.
     - PQINA explains the [area limit](https://pqina.nl/blog/canvas-area-exceeds-the-maximum-limit/) and the [memory limit](https://pqina.nl/blog/total-canvas-memory-use-exceeds-the-maximum-limit/).
     - `createImageBitmap`, including the resize options, is supported from Safari 15 ([BCD](https://github.com/mdn/browser-compat-data/blob/main/api/_globals/createImageBitmap.json)).
+
+14. **Canvas filters and workers (display adjustments).**
+    - `CanvasRenderingContext2D.filter`: Chrome 52, Firefox 49; Safari only behind the "Canvas Filters" flag ([MDN BCD](https://github.com/mdn/browser-compat-data/blob/main/api/CanvasRenderingContext2D.json)). WebKit's `CanvasFiltersEnabled` preference is `status: testable`, `defaultValue: false` ([UnifiedWebPreferences.yaml](https://github.com/WebKit/WebKit/blob/main/Source/WTF/Scripts/Preferences/UnifiedWebPreferences.yaml)), so shipping Safari ignores the property. `OffscreenCanvasRenderingContext2D.filter` is unsupported in Safari ([BCD](https://github.com/mdn/browser-compat-data/blob/main/api/OffscreenCanvasRenderingContext2D.json)). Checked October 2026.
+    - `OffscreenCanvas` with a 2D context and `transferToImageBitmap` are supported from Safari 16.4 ([BCD](https://github.com/mdn/browser-compat-data/blob/main/api/OffscreenCanvas.json)).
 
 ## 4. What was tested
 
