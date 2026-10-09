@@ -11,6 +11,7 @@ import {
   scaleLimits,
   screenToImage,
   viewCenter,
+  viewForRect,
   wheelDeltaToPixels,
   wheelZoomFactor,
   zoomAt,
@@ -164,5 +165,25 @@ describe('wheel', () => {
     expect(wheelZoomFactor(100, 'zoom')).toBeLessThan(1)
     expect(wheelZoomFactor(-100, 'zoom')).toBeGreaterThan(1)
     expect(wheelZoomFactor(1e9, 'pinch')).toBeCloseTo(Math.exp(-3))
+  })
+})
+
+describe('viewForRect', () => {
+  const viewport = { width: 800, height: 600 }
+  const limits = { min: 0.05, max: 32 }
+  it('keeps the zoom when the rect already fits and centres it', () => {
+    const v = viewForRect({ x: 1000, y: 1000, width: 40, height: 40 }, { scale: 2, offsetX: 0, offsetY: 0 }, viewport, limits)
+    expect(v.scale).toBe(2)
+    expect(imageToScreen(v, 1020, 1020)).toEqual({ x: 400, y: 300 })
+  })
+  it('zooms in when far out and zooms out when the rect is too big', () => {
+    const tiny = viewForRect({ x: 0, y: 0, width: 40, height: 40 }, { scale: 0.1, offsetX: 0, offsetY: 0 }, viewport, limits)
+    expect(tiny.scale).toBeCloseTo(5)
+    const big = viewForRect({ x: 0, y: 0, width: 2000, height: 2000 }, { scale: 4, offsetX: 0, offsetY: 0 }, viewport, limits)
+    expect(big.scale).toBeCloseTo(0.1)
+  })
+  it('centres in the area left by insets', () => {
+    const v = viewForRect({ x: 100, y: 100, width: 10, height: 10 }, { scale: 1, offsetX: 0, offsetY: 0 }, viewport, limits, { top: 100, right: 0, bottom: 0, left: 0 })
+    expect(imageToScreen(v, 105, 105)).toEqual({ x: 400, y: 350 })
   })
 })

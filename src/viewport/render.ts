@@ -403,3 +403,207 @@ export function drawAnnotationLayer(
   ctx.globalAlpha = 1
   return stats
 }
+
+// ---------------------------------------------------------------------------
+// Suggestion overlay (pending detector output; read-only, never counted)
+// ---------------------------------------------------------------------------
+
+/** Smallest on-screen radius (CSS px) of a suggestion ring, so it stays visible far zoomed out. */
+export const SUGGESTION_MIN_RADIUS = 3
+/** Above this on-screen radius rings are stroked directly instead of blitted from a sprite. */
+const SUGGESTION_SPRITE_MAX_RADIUS = 64
+const REJECTED_COLOR = 'rgba(214,214,214,0.9)'
+const REVIEW_OUTLINE = '#f5a524'
+const TOO_LARGE_OUTLINE = '#e5484d'
+
+/** On-screen radius (CSS px) of a suggestion: its fitted radius to scale, never below the minimum. */
+export function suggestionScreenRadius(r: number, scale: number): number {
+  return Math.max(SUGGESTION_MIN_RADIUS, r * scale)
+}
+
+/** Quantise a radius so a few dozen sprites cover every zoom level. */
+function quantiseRadius(r: number): number {
+  return r < 16 ? Math.round(r * 2) / 2 : Math.round(r)
+}
+
+type SuggestionState = 'ok' | 'review' | 'rejected'
+
+const suggestionSpriteCache = new Map<string, MarkerSprite>()
+const SUGGESTION_SPRITE_MAX = 160
+
+function strokeSuggestion(
+  c: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+  x: number,
+  y: number,
+  r: number,
+  color: string,
+  state: SuggestionState,
+) {
+  const circumference = 2 * Math.PI * r
+  const dash = Math.max(2, Math.min(7, circumference / (state === 'review' ? 16 : 10)))
+  // Dark halo first (solid), then the dashed colour ring: legible on light and dark agar.
+  c.setLineDash([])
+  c.beginPath()
+  c.arc(x, y, r, 0, Math.PI * 2)
+  c.strokeStyle = state === 'rejected' ? 'rgba(0,0,0,0.35)' : 'rgba(0,0,0,0.55)'
+  c.lineWidth = 3.25
+  c.stroke()
+  c.setLineDash([dash, dash * 0.75])
+  c.strokeStyle = state === 'rejected' ? REJECTED_COLOR : color
+  c.lineWidth = state === 'rejected' ? 1.25 : 1.75
+  c.stroke()
+  c.setLineDash([])
+  if (state === 'rejected') {
+    const k = Math.max(2, Math.min(5, r * 0.45))
+    c.beginPath()
+    c.moveTo(x - k, y - k)
+    c.lineTo(x + k, y + k)
+    c.moveTo(x + k, y - k)
+    c.lineTo(x - k, y + k)
+    c.strokeStyle = 'rgba(0,0,0,0.6)'
+    c.lineWidth = 3
+    c.stroke()
+    c.strokeStyle = REJECTED_COLOR
+    c.lineWidth = 1.4
+    c.stroke()
+  }
+}
+
+/** Dashed ring bitmap for a suggestion at an on-screen radius (CSS px), cached per style. */
+export function suggestionSprite(color: string, r: number, state: SuggestionState, dpr: number): MarkerSprite {
+  const key = `${color}|${r}|${state}|${dpr}`
+  const hit = suggestionSpriteCache.get(key)
+  if (hit) return hit
+  const cssSize = Math.ceil(2 * r + 6)
+  const px = Math.max(1, Math.ceil(cssSize * dpr))
+  const canvas = makeCanvas(px, px)
+  const c = canvas.getContext('2d') as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null
+  if (c) {
+    c.setTransform(dpr, 0, 0, dpr, 0, 0)
+    c.lineCap = 'round'
+    strokeSuggestion(c, px / 2 / dpr, px / 2 / dpr, r, color, state)
+  }
+  if (suggestionSpriteCache.size >= SUGGESTION_SPRITE_MAX) suggestionSpriteCache.clear()
+  const sprite = { canvas, cssSize, devicePx: px }
+  suggestionSpriteCache.set(key, sprite)
+  return sprite
+}
+
+export interface SuggestionLike {
+  x: number
+  y: number
+  r: number
+  state: SuggestionState
+}
+
+export interface ClusterLike {
+  bbox: readonly [number, number, number, number]
+  label: string
+  active: boolean
+  kind: 'review' | 'too-large'
+}
+
+function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
+  ctx.beginPath()
+  ctx.moveTo(x + r, y)
+  ctx.arcTo(x + w, y, x + w, y + h, r)
+  ctx.arcTo(x + w, y + h, x, y + h, r)
+  ctx.arcTo(x, y + h, x, y, r)
+  ctx.arcTo(x, y, x + w, y, r)
+  ctx.closePath()
+}
+
+/**
+ * Draw pending suggestions and review regions ON TOP of the annotation layer
+ * (does not clear it). Rings are blitted from cached sprites like markers, so
+ * thousands of suggestions stay cheap; review regions get an outline and,
+ * when large enough on screen (or selected), a question chip.
+ */
+export function drawSuggestionLayer(
+  ctx: CanvasRenderingContext2D,
+  suggestions: readonly SuggestionLike[],
+  clusters: readonly ClusterLike[],
+  color: string,
+  view: ViewState,
+  viewport: Size,
+  dpr: number,
+): number {
+  const { scale, offsetX, offsetY } = view
+  let drawn = 0
+  ctx.save()
+  ctx.globalAlpha = 1
+  // Review regions under the rings.
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+  const chips: { x: number; y: number; label: string; kind: ClusterLike['kind']; active: boolean }[] = []
+  for (const c of clusters) {
+    const pad = 5
+    const x = (c.bbox[0] - offsetX) * scale - pad
+    const y = (c.bbox[1] - offsetY) * scale - pad
+    const w = c.bbox[2] * scale + 2 * pad
+    const h = c.bbox[3] * scale + 2 * pad
+    if (x > viewport.width || y > viewport.height || x + w < 0 || y + h < -24) continue
+    const stroke = c.kind === 'too-large' ? TOO_LARGE_OUTLINE : REVIEW_OUTLINE
+    roundRect(ctx, x, y, w, h, Math.min(8, w / 2, h / 2))
+    if (c.active) {
+      ctx.fillStyle = 'rgba(245,165,36,0.12)'
+      ctx.fill()
+    }
+    ctx.setLineDash([])
+    ctx.strokeStyle = 'rgba(0,0,0,0.5)'
+    ctx.lineWidth = c.active ? 5 : 3.5
+    ctx.stroke()
+    ctx.setLineDash(c.active ? [] : [5, 4])
+    ctx.strokeStyle = stroke
+    ctx.lineWidth = c.active ? 2.5 : 1.5
+    ctx.stroke()
+    ctx.setLineDash([])
+    if (c.active || w >= 22) chips.push({ x, y, label: c.label, kind: c.kind, active: c.active })
+  }
+
+  // Rings: identity transform, whole-device-pixel blits (see drawAnnotationLayer).
+  ctx.setTransform(1, 0, 0, 1, 0, 0)
+  const margin = 4
+  for (const s of suggestions) {
+    const r = suggestionScreenRadius(s.r, scale)
+    const sx = (s.x - offsetX) * scale
+    const sy = (s.y - offsetY) * scale
+    if (sx < -r - margin || sy < -r - margin || sx > viewport.width + r + margin || sy > viewport.height + r + margin) continue
+    drawn++
+    if (r > SUGGESTION_SPRITE_MAX_RADIUS) {
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+      ctx.lineCap = 'round'
+      strokeSuggestion(ctx, sx, sy, r, color, s.state)
+      ctx.setTransform(1, 0, 0, 1, 0, 0)
+      continue
+    }
+    const sprite = suggestionSprite(color, quantiseRadius(r), s.state, dpr)
+    const half = sprite.devicePx / 2
+    ctx.drawImage(sprite.canvas, Math.round(sx * dpr - half), Math.round(sy * dpr - half))
+  }
+
+  // Chips last, above everything.
+  if (chips.length) {
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+    const fontPx = 12
+    ctx.font = labelFont(fontPx)
+    ctx.textBaseline = 'middle'
+    ctx.textAlign = 'left'
+    for (const chip of chips) {
+      const tw = ctx.measureText(chip.label).width
+      const w = tw + 14
+      const h = fontPx + 9
+      const x = Math.max(2, Math.min(viewport.width - w - 2, chip.x))
+      const y = chip.y - h - 3 < 2 ? chip.y + 3 : chip.y - h - 3
+      roundRect(ctx, x, y, w, h, h / 2)
+      ctx.fillStyle = chip.kind === 'too-large' ? '#fde8e8' : chip.active ? '#f5a524' : '#fff4d6'
+      ctx.fill()
+      ctx.strokeStyle = 'rgba(0,0,0,0.45)'
+      ctx.lineWidth = 1
+      ctx.stroke()
+      ctx.fillStyle = chip.kind === 'too-large' ? '#8f1d22' : '#4a2c00'
+      ctx.fillText(chip.label, x + 7, y + h / 2 + 0.5)
+    }
+  }
+  ctx.restore()
+  return drawn
+}

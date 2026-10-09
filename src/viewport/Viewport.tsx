@@ -12,7 +12,7 @@ import type { AnnotationGroup } from '../model/types'
 import type { ViewportHandle, ViewportProps, ViewState } from './api'
 import { GestureMachine, type GestureEffect, type PointerKind, type PointerSample } from './gesture'
 import { editBlock } from '../model/policy'
-import { resolveHover, resolveTap, type InteractionScene } from './interaction'
+import { resolveHover, resolveTap, suggestionAt, type InteractionScene, type SuggestionPoint } from './interaction'
 import { createPointIndex, type PointIndex } from './spatial-index'
 import { displayRadius } from './marker-size'
 import { displayKey } from '../model/display'
@@ -23,7 +23,9 @@ import {
   disposePyramid,
   drawAnnotationLayer,
   drawImageLayer,
+  drawSuggestionLayer,
   effectiveDpr,
+  suggestionScreenRadius,
   visibleImageRect,
   type ImageLayerTile,
   type ImageSourceLike,
@@ -37,6 +39,7 @@ import {
   panBy,
   resizeView,
   scaleLimits,
+  viewForRect,
   viewsEqual,
   wheelDeltaToPixels,
   wheelZoomFactor,
@@ -101,6 +104,8 @@ export function Viewport(props: ViewportProps) {
   // Spatial index over all annotations, rebuilt lazily on the first query after a change.
   let index: PointIndex | null = null
   let indexed: readonly unknown[] | null = null
+  // Same for pending suggestions (hit testing only while onSuggestionTap is set).
+  let suggestionIndex: { index: PointIndex<SuggestionPoint>; maxR: number } | null = null
   const machine = new GestureMachine()
   // Display-adjusted copies of the pyramid, computed lazily off the main thread.
   const adjusted = new AdjustedLayer({
@@ -156,8 +161,13 @@ export function Viewport(props: ViewportProps) {
       dirtyAnno = false
       const t0 = performance.now()
       const stats = drawAnnotationLayer(actx, props.annotations, props.groups, props.activeGroupId, view, viewport, dpr)
+      const sug = props.suggestions ?? []
+      const clusters = props.reviewClusters ?? []
+      const sugDrawn =
+        sug.length || clusters.length ? drawSuggestionLayer(actx, sug, clusters, props.suggestionColor ?? '#ffffff', view, viewport, dpr) : 0
       root.dataset.drawMs = (performance.now() - t0).toFixed(2)
       root.dataset.markersDrawn = String(stats.drawn)
+      root.dataset.suggestionsDrawn = String(sugDrawn)
     }
     updateHover()
     if (viewChanged) {
@@ -195,6 +205,10 @@ export function Viewport(props: ViewportProps) {
     zoomOut: () => zoomBy(1 / ZOOM_STEP),
     fit,
     setScale: (s) => setView(zoomToAt(view, viewport.width / 2, viewport.height / 2, s, limits())),
+    showRect: (x, y, width, height) => {
+      if (viewport.width === 0) return
+      setView(viewForRect({ x, y, width, height }, view, viewport, limits(), insets()))
+    },
   }
 
   function resize() {
@@ -303,6 +317,30 @@ export function Viewport(props: ViewportProps) {
     ),
   )
 
+  // Suggestion overlay: same identity contract as annotations.
+  createEffect(
+    on(
+      () => [props.suggestions, props.reviewClusters, props.suggestionColor] as const,
+      () => {
+        suggestionIndex = null
+        dirtyAnno = true
+        schedule()
+      },
+      { defer: true },
+    ),
+  )
+
+  /** Suggestion under a screen point, when suggestion taps are enabled. */
+  function suggestionHit(sx: number, sy: number, pointer: PointerKind): SuggestionPoint | null {
+    const list = props.suggestions
+    if (!props.onSuggestionTap || !list?.length) return null
+    if (!suggestionIndex) {
+      const pts: SuggestionPoint[] = list.map((s, index) => ({ x: s.x, y: s.y, r: s.r, index }))
+      suggestionIndex = { index: createPointIndex(pts), maxR: pts.reduce((m, p) => Math.max(m, p.r), 0) }
+    }
+    return suggestionAt(suggestionIndex.index, suggestionIndex.maxR, view, sx, sy, pointer)
+  }
+
   createEffect(() => {
     void props.tool, spaceHeld(), activeGroup()
     schedule() // refresh hover preview
@@ -341,6 +379,13 @@ export function Viewport(props: ViewportProps) {
 
   function updateHover() {
     if (!hover || spaceHeld() || machine.modeKind !== 'idle') return hideHover()
+    if (props.tool !== 'pan') {
+      const s = suggestionHit(hover.x, hover.y, hover.type)
+      if (s) {
+        const p = imageToScreen(view, s.x, s.y)
+        return showRing('cfu-viewport__hover--suggest', p.x, p.y, suggestionScreenRadius(s.r, view.scale) + 4)
+      }
+    }
     const h = resolveHover(scene(), props.tool, hover.x, hover.y, hover.type)
     if (h.kind === 'none') return hideHover()
     showRing(`cfu-viewport__hover--${h.kind}`, h.x, h.y, h.r, h.kind === 'add' ? h.color : undefined)
@@ -374,6 +419,8 @@ export function Viewport(props: ViewportProps) {
   // --------------------------------------------------------------- gestures
 
   function handleTap(sx: number, sy: number, pointerType: PointerKind) {
+    const s = suggestionHit(sx, sy, pointerType)
+    if (s) return props.onSuggestionTap?.(s.index)
     const intent = resolveTap(scene(), props.tool, sx, sy, pointerType)
     switch (intent.kind) {
       case 'add': {
@@ -417,9 +464,13 @@ export function Viewport(props: ViewportProps) {
           hover = null
           hideHover()
           break
-        case 'navTap':
-          if (props.tool !== 'pan') props.onBlocked?.('touch-navigates')
+        case 'navTap': {
+          // Reviewing suggestions never edits annotations, so a finger may toggle them.
+          const s = suggestionHit(e.x, e.y, 'touch')
+          if (s) props.onSuggestionTap?.(s.index)
+          else if (props.tool !== 'pan') props.onBlocked?.('touch-navigates')
           break
+        }
       }
     }
     setNavigating(machine.navigating)

@@ -1,5 +1,5 @@
 /**
- * Nearest-point queries over annotations in image coordinates, behind a small
+ * Nearest-point queries over points (annotations, suggestions) in image coordinates, behind a small
  * interface so the strategy can change without touching callers.
  *
  * Two implementations:
@@ -10,38 +10,44 @@
  */
 import type { Annotation } from '../model/types'
 
+/** Anything with an image position. */
+export interface IndexedPoint {
+  x: number
+  y: number
+}
+
 /** Result of a nearest-point query. */
-export interface HitResult {
-  annotation: Annotation
+export interface HitResult<T extends IndexedPoint = Annotation> {
+  annotation: T
   /** Euclidean distance in image px. */
   distance: number
 }
 
-/** Read-only nearest-neighbour query over a fixed set of annotations. */
-export interface PointIndex {
+/** Read-only nearest-neighbour query over a fixed set of points. */
+export interface PointIndex<T extends IndexedPoint = Annotation> {
   /**
    * Nearest annotation to (x, y) within `radius` image px that passes `filter`.
    * Ties resolve to the later annotation in the source array (drawn on top).
    */
-  nearest(x: number, y: number, radius: number, filter?: (a: Annotation) => boolean): HitResult | null
+  nearest(x: number, y: number, radius: number, filter?: (a: T) => boolean): HitResult<T> | null
 }
 
 /** Below this many points a linear scan is used (no build cost on every edit). */
 export const GRID_THRESHOLD = 2000
 
-export function createPointIndex(points: readonly Annotation[]): PointIndex {
-  return points.length < GRID_THRESHOLD ? new LinearIndex(points) : new GridIndex(points)
+export function createPointIndex<T extends IndexedPoint = Annotation>(points: readonly T[]): PointIndex<T> {
+  return points.length < GRID_THRESHOLD ? new LinearIndex<T>(points) : new GridIndex<T>(points)
 }
 
-export class LinearIndex implements PointIndex {
-  private readonly points: readonly Annotation[]
-  constructor(points: readonly Annotation[]) {
+export class LinearIndex<T extends IndexedPoint = Annotation> implements PointIndex<T> {
+  private readonly points: readonly T[]
+  constructor(points: readonly T[]) {
     this.points = points
   }
 
-  nearest(x: number, y: number, radius: number, filter?: (a: Annotation) => boolean): HitResult | null {
+  nearest(x: number, y: number, radius: number, filter?: (a: T) => boolean): HitResult<T> | null {
     const pts = this.points
-    let best: Annotation | null = null
+    let best: T | null = null
     let bestD2 = radius * radius
     for (let i = 0; i < pts.length; i++) {
       const a = pts[i]
@@ -59,8 +65,8 @@ export class LinearIndex implements PointIndex {
   }
 }
 
-export class GridIndex implements PointIndex {
-  private readonly points: readonly Annotation[]
+export class GridIndex<T extends IndexedPoint = Annotation> implements PointIndex<T> {
+  private readonly points: readonly T[]
   private readonly cell: number
   private readonly minX: number
   private readonly minY: number
@@ -70,7 +76,7 @@ export class GridIndex implements PointIndex {
   private readonly starts: Uint32Array
   private readonly items: Uint32Array
 
-  constructor(points: readonly Annotation[], cellSize = 64) {
+  constructor(points: readonly T[], cellSize = 64) {
     this.points = points
     this.cell = cellSize
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
@@ -107,7 +113,7 @@ export class GridIndex implements PointIndex {
     return cy * this.cols + cx
   }
 
-  nearest(x: number, y: number, radius: number, filter?: (a: Annotation) => boolean): HitResult | null {
+  nearest(x: number, y: number, radius: number, filter?: (a: T) => boolean): HitResult<T> | null {
     const c0x = Math.max(0, Math.floor((x - radius - this.minX) / this.cell))
     const c1x = Math.min(this.cols - 1, Math.floor((x + radius - this.minX) / this.cell))
     const c0y = Math.max(0, Math.floor((y - radius - this.minY) / this.cell))

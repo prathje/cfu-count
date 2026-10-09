@@ -40,6 +40,37 @@ export interface ViewportHandle {
   fit(): void
   /** Zoom to an absolute scale anchored at the viewport centre. */
   setScale(scale: number): void
+  /**
+   * Bring an image-px rectangle into view, centred in the area not covered by
+   * fitInsets. Keeps the current zoom when the rectangle already fits
+   * comfortably; otherwise zooms so it fills about a third of the view.
+   */
+  showRect(x: number, y: number, width: number, height: number): void
+}
+
+/**
+ * A pending (unaccepted) detector suggestion, drawn read-only as a dashed ring
+ * at its fitted radius. Suggestions are never annotations: they are not
+ * counted, not hit by Erase, and only reported through onSuggestionTap.
+ */
+export interface SuggestionMark {
+  x: number
+  y: number
+  /** Fitted colony radius in image px (drawn to scale, with a small on-screen minimum). */
+  r: number
+  /** ok = would be accepted by "Accept all OK"; review = in a cluster that needs a decision; rejected = tapped away. */
+  state: 'ok' | 'review' | 'rejected'
+}
+
+/** A region that needs a decision, outlined with a question chip ("2 or 3?"). */
+export interface ReviewClusterMark {
+  /** Image-px rectangle [x, y, w, h]. */
+  bbox: readonly [number, number, number, number]
+  /** Chip text, e.g. "2 or 3?" or "Count by hand". */
+  label: string
+  /** The cluster currently selected in the review panel (drawn emphasised). */
+  active: boolean
+  kind: 'review' | 'too-large'
 }
 
 export interface ViewportProps {
@@ -88,4 +119,19 @@ export interface ViewportProps {
   adjust?: ImageDisplayAdjust | null
   /** While true, show the unadjusted image (hold-to-compare). */
   compareOriginal?: boolean
+  /**
+   * Pending suggestions to draw over the image (immutable snapshot, compared by
+   * identity like `annotations`). Absent/empty = none.
+   */
+  suggestions?: readonly SuggestionMark[]
+  /** Ring colour for suggestions (normally the target group's colour). */
+  suggestionColor?: string
+  /** Review regions to outline (immutable snapshot). */
+  reviewClusters?: readonly ReviewClusterMark[]
+  /**
+   * When set, a completed tap (or a finger tap that would only navigate) ON a
+   * suggestion reports its index into `suggestions` instead of adding/erasing.
+   * Taps elsewhere keep the tool's behaviour (Add/Erase act on confirmed markers).
+   */
+  onSuggestionTap?(index: number): void
 }

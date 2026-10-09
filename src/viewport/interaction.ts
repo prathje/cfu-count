@@ -7,7 +7,7 @@ import type { Annotation, AnnotationGroup, ID } from '../model/types'
 import { editBlock } from '../model/policy'
 import type { BlockedReason, Tool, ViewState } from './api'
 import type { PointerKind } from './gesture'
-import type { PointIndex } from './spatial-index'
+import type { IndexedPoint, PointIndex } from './spatial-index'
 import { screenToImage } from './transform'
 import { displayRadius } from './marker-size'
 
@@ -128,4 +128,41 @@ export function resolveHover(
     }
   }
   return { kind: 'erase-miss', x: sx, y: sy, r: eraseHitRadiusPx(r, pointer) }
+}
+
+/**
+ * Minimum suggestion hit radius in screen CSS px. Smaller than the erase target:
+ * while reviewing, a tap NEAR (not on) a suggestion should still add a colony.
+ */
+export const SUGGESTION_HIT_RADIUS: Record<PointerKind, number> = { mouse: 7, pen: 12, touch: 16 }
+/** Must match render.ts SUGGESTION_MIN_RADIUS (kept here to avoid a render import). */
+const SUGGESTION_MIN_RADIUS_PX = 3
+
+/** A suggestion as the hit test sees it: position and fitted radius in image px. */
+export interface SuggestionPoint extends IndexedPoint {
+  r: number
+  /** Index into the viewport's `suggestions` prop. */
+  index: number
+}
+
+/**
+ * Suggestion under screen point (sx, sy): the nearest one whose drawn ring (or
+ * the input's minimum hit radius) contains the point, or null.
+ */
+export function suggestionAt(
+  index: PointIndex<SuggestionPoint>,
+  maxR: number,
+  view: ViewState,
+  sx: number,
+  sy: number,
+  pointer: PointerKind,
+): SuggestionPoint | null {
+  const p = screenToImage(view, sx, sy)
+  const minHit = Math.max(SUGGESTION_HIT_RADIUS[pointer], SUGGESTION_MIN_RADIUS_PX) / view.scale
+  const query = Math.max(maxR, minHit)
+  const hit = index.nearest(p.x, p.y, query, (s) => {
+    const reach = Math.max(s.r, minHit)
+    return Math.hypot(s.x - p.x, s.y - p.y) <= reach
+  })
+  return hit?.annotation ?? null
 }

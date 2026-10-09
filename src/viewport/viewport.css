@@ -54,6 +54,11 @@
   box-shadow: 0 0 0 2px #d13438, inset 0 0 0 1px rgba(0, 0, 0, 0.5);
 }
 
+.cfu-viewport__hover--suggest {
+  border: 2px solid #fff;
+  box-shadow: 0 0 0 2px #f5a524, inset 0 0 0 1px rgba(0, 0, 0, 0.5);
+}
+
 .cfu-viewport__hover--erase-miss {
   border: 1px dashed rgba(255, 255, 255, 0.85);
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);

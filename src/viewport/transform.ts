@@ -150,6 +150,30 @@ export function zoomToAt(
   return zoomAt(view, sx, sy, scale / view.scale, limits)
 }
 
+/**
+ * View that brings an image-px rectangle into the area not covered by insets.
+ * Keeps the current scale when the rectangle fits within half of that area;
+ * otherwise picks the scale at which it fills about a third of it. Clamped to
+ * the zoom limits.
+ */
+export function viewForRect(
+  rect: { x: number; y: number; width: number; height: number },
+  current: ViewState,
+  viewport: Size,
+  limits: ScaleLimits,
+  insets: Insets = NO_INSETS,
+): ViewState {
+  const area = availableRect(viewport, insets)
+  const w = Math.max(1, rect.width)
+  const h = Math.max(1, rect.height)
+  const fitsAt = (s: number) => w * s <= area.width / 2 && h * s <= area.height / 2
+  const target = Math.min(area.width / (3 * w), area.height / (3 * h))
+  const scale = clampScale(fitsAt(current.scale) && current.scale >= target / 4 ? current.scale : target, limits)
+  const cx = rect.x + rect.width / 2
+  const cy = rect.y + rect.height / 2
+  return { scale, offsetX: cx - (area.x + area.width / 2) / scale, offsetY: cy - (area.y + area.height / 2) / scale }
+}
+
 /** Move the content by (dx, dy) screen px (dragging right moves the image right). */
 export function panBy(view: ViewState, dx: number, dy: number): ViewState {
   return { scale: view.scale, offsetX: view.offsetX - dx / view.scale, offsetY: view.offsetY - dy / view.scale }

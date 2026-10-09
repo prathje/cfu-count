@@ -5,6 +5,7 @@ import {
   eraseHitRadiusPx,
   resolveHover,
   resolveTap,
+  suggestionAt,
   type InteractionScene,
 } from './interaction'
 import { createPointIndex } from './spatial-index'
@@ -119,5 +120,27 @@ describe('hover preview', () => {
   it('nothing on pan or blocked group', () => {
     expect(resolveHover(scene([], [g1], 'g1'), 'pan', 5, 6, 'mouse')).toEqual({ kind: 'none' })
     expect(resolveHover(scene([], [group('g1', { locked: true })], 'g1'), 'add', 5, 6, 'mouse')).toEqual({ kind: 'none' })
+  })
+})
+
+describe('suggestion hit testing', () => {
+  const pts = [
+    { x: 100, y: 100, r: 20, index: 0 },
+    { x: 150, y: 100, r: 20, index: 1 },
+    { x: 500, y: 500, r: 2, index: 2 },
+  ]
+  const idx = createPointIndex(pts)
+  const view = (scale: number) => ({ scale, offsetX: 0, offsetY: 0 })
+
+  it('hits the nearest suggestion whose ring contains the point', () => {
+    expect(suggestionAt(idx, 20, view(1), 110, 100, 'mouse')?.index).toBe(0)
+    expect(suggestionAt(idx, 20, view(1), 140, 100, 'mouse')?.index).toBe(1)
+    expect(suggestionAt(idx, 20, view(1), 100, 140, 'mouse')).toBeNull()
+  })
+
+  it('gives tiny rings a minimum, input-aware hit radius on screen', () => {
+    expect(suggestionAt(idx, 20, view(1), 506, 500, 'mouse')?.index).toBe(2)
+    expect(suggestionAt(idx, 20, view(1), 512, 500, 'mouse')).toBeNull()
+    expect(suggestionAt(idx, 20, view(1), 512, 500, 'touch')?.index).toBe(2)
   })
 })
