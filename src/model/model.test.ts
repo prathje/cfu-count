@@ -14,7 +14,7 @@ import {
   type AnnotationOp,
 } from './annotations'
 import { clampStyle, makeGroup, moveItem, uniqueName } from './groups'
-import { applyStorageOwned, displayOrder } from './project'
+import { applyStorageOwned, displayOrder, removedImages } from './project'
 import { editBlock as groupEditBlock } from './policy'
 import { GROUP_PALETTE, nextGroupColor } from './palette'
 
@@ -168,6 +168,13 @@ describe('displayOrder', () => {
     } as unknown as Project
     expect(displayOrder(project).map((i) => i.id)).toEqual(['3', '1', '2', '4'])
   })
+
+  it('leaves out removed images; removedImages lists them newest first', () => {
+    const img = (id: string, deletedAt?: string) => ({ id, imageGroupId: null, ...(deletedAt ? { deletedAt } : {}) }) as unknown as Project['images'][number]
+    const project = { imageGroups: [], images: [img('1', '2026-01-01'), img('2'), img('3', '2026-02-01')] } as unknown as Project
+    expect(displayOrder(project).map((i) => i.id)).toEqual(['2'])
+    expect(removedImages(project).map((i) => i.id)).toEqual(['3', '1'])
+  })
 })
 
 describe('confirmed definition (shared by UI and summary.csv)', () => {
@@ -204,16 +211,15 @@ describe('checkOps immutability', () => {
 describe('applyStorageOwned', () => {
   it('takes storage, revision, exclusions and image sources from storage; keeps editor fields', () => {
     const img = { id: 'i1', name: 'edited', imageGroupId: null, source: { kind: 'local' } } as unknown as Project['images'][number]
-    const editor = { name: 'Mine', revision: 1, storage: { kind: 'local' }, excludedDriveFileIds: [], images: [img] } as unknown as Project
+    const editor = { name: 'Mine', revision: 1, storage: { kind: 'local' }, images: [img] } as unknown as Project
     const stored = {
       name: 'Old',
       revision: 7,
       storage: { kind: 'drive', folderId: 'F', folderName: 'F' },
-      excludedDriveFileIds: ['x'],
       images: [{ ...img, name: 'old', source: { kind: 'drive', fileId: 'd1' }, sourceMismatch: { detectedAt: '', message: 'm' } }],
     } as unknown as Project
     const merged = applyStorageOwned(editor, stored)
-    expect(merged).toMatchObject({ name: 'Mine', revision: 7, storage: { kind: 'drive' }, excludedDriveFileIds: ['x'] })
+    expect(merged).toMatchObject({ name: 'Mine', revision: 7, storage: { kind: 'drive' } })
     expect(merged.images[0]).toMatchObject({ name: 'edited', source: { kind: 'drive', fileId: 'd1' }, sourceMismatch: { message: 'm' } })
   })
 })

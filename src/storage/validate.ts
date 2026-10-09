@@ -110,6 +110,7 @@ function validateImage(v: unknown, path: string): ImageRecord {
   str(o, 'fingerprint', path)
   str(o, 'addedAt', path)
   optStr(o, 'sampleId', path)
+  optStr(o, 'deletedAt', path)
   const src = obj(o.source, `${path}.source`)
   const kind = oneOf(src, 'kind', ['local', 'drive'] as const, `${path}.source`)
   if (kind === 'drive') {
@@ -170,10 +171,8 @@ export function validateProject(v: unknown, path = 'project.json', warnings?: st
       im.imageGroupId = null
     }
   }
-  if (o.excludedDriveFileIds === undefined) o.excludedDriveFileIds = []
-  arr(o, 'excludedDriveFileIds', path).forEach((id, i) => {
-    if (typeof id !== 'string') fail(`${path}.excludedDriveFileIds[${i}]`, 'expected a string')
-  })
+  // Retired: removed images are now kept as records with `deletedAt` (one concept).
+  delete o.excludedDriveFileIds
   o.storage = validateStorage(o.storage ?? { kind: 'local' }, `${path}.storage`)
   if (o.revision === undefined) o.revision = 0
   num(o, 'revision', path)

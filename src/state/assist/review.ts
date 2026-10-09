@@ -98,18 +98,18 @@ export function updateLayer(store: SuggestionStore, imageId: ID, fn: (l: Suggest
 }
 
 /**
- * Drop layers that can no longer be trusted: the image left the project, its
- * bytes no longer match (sourceMismatch), or the target group was deleted.
+ * Drop layers that can no longer be trusted: the image left the project (or was
+ * removed), its bytes no longer match (sourceMismatch), or the target group was deleted.
  */
 export function pruneStore(
   store: SuggestionStore,
-  images: readonly { id: ID; fingerprint: string; sourceMismatch?: unknown }[],
+  images: readonly { id: ID; fingerprint: string; sourceMismatch?: unknown; deletedAt?: string }[],
   groupIds: readonly ID[],
 ): SuggestionStore {
   let next = store
   for (const [imageId, layer] of store) {
     const image = images.find((i) => i.id === imageId)
-    const stale = !image || !!image.sourceMismatch || image.fingerprint !== layer.imageFingerprint || !groupIds.includes(layer.groupId)
+    const stale = !image || !!image.deletedAt || !!image.sourceMismatch || image.fingerprint !== layer.imageFingerprint || !groupIds.includes(layer.groupId)
     if (stale) next = dropLayer(next, imageId)
   }
   return next

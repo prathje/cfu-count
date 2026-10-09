@@ -1,11 +1,12 @@
 import { createSignal, For, Show } from 'solid-js'
 import type { ID, Project } from '../../model/types'
-import { imagesInGroup } from '../../model/project'
+import { activeImages, imagesInGroup, removedImages } from '../../model/project'
 import { Cloud, FolderPlus, Loader, Upload } from '../icons'
 import { Button, IconButton, InlineEdit } from '../primitives'
 import { plural } from '../format'
 import { ImageGroupSection } from './ImageGroupSection'
 import { ImageRow } from './ImageRow'
+import { RemovedSection } from './RemovedSection'
 import './sidebar.css'
 
 /** Left sidebar: project name, image groups with images, import actions. */
@@ -15,6 +16,8 @@ export interface SidebarProps {
   importing: number
   driveConnected: boolean
   imageCount(imageId: ID): number
+  /** Stored annotations of an image (all states), shown for removed images. */
+  annotationCount(imageId: ID): number
   thumbnail(imageId: ID): string | undefined
   requestThumbnail(imageId: ID): void
   onSelectImage(imageId: ID): void
@@ -29,6 +32,7 @@ export interface SidebarProps {
   onAssignImage(imageId: ID, imageGroupId: ID | null): void
   onRenameImage(imageId: ID): void
   onRemoveImage(imageId: ID): void
+  onRestoreImage(imageId: ID): void
 }
 
 export function Sidebar(props: SidebarProps) {
@@ -38,6 +42,9 @@ export function Sidebar(props: SidebarProps) {
   // The image group whose name is being edited (a new group starts here, text selected).
   const [renamingId, setRenamingId] = createSignal<ID | null>(null)
   const ungrouped = () => imagesInGroup(props.project, null)
+  const activeCount = () => activeImages(props.project).length
+  const removed = () => removedImages(props.project)
+  const removedCollapsed = () => collapsed()['__removed'] ?? true
 
   const row = (img: Project['images'][number]) => (
     <ImageRow
@@ -60,7 +67,7 @@ export function Sidebar(props: SidebarProps) {
         <div class="section-label">Project</div>
         <InlineEdit value={props.project.name} label="Project name" class="sidebar__project" onCommit={props.onRenameProject} />
         <div class="sidebar__meta">
-          {plural(props.project.images.length, 'image')}
+          {plural(activeCount(), 'image')}
           <Show when={props.project.imageGroups.length}>
             {' · '}
             {plural(props.project.imageGroups.length, 'group')}
@@ -112,8 +119,19 @@ export function Sidebar(props: SidebarProps) {
             {row}
           </ImageGroupSection>
         </Show>
-        <Show when={props.project.images.length === 0}>
+        <Show when={activeCount() === 0}>
           <p class="sidebar__empty">No images yet. Import plate photos to start counting.</p>
+        </Show>
+        <Show when={removed().length > 0}>
+          <RemovedSection
+            images={removed()}
+            collapsed={removedCollapsed()}
+            onToggle={() => setCollapsed((c) => ({ ...c, __removed: !removedCollapsed() }))}
+            thumbnail={props.thumbnail}
+            requestThumbnail={props.requestThumbnail}
+            annotationCount={props.annotationCount}
+            onRestore={props.onRestoreImage}
+          />
         </Show>
       </div>
       <div class="sidebar__foot">Drop image files anywhere to import · drag rows between groups</div>

@@ -26,7 +26,7 @@ function AppRoot(props: { choice: RepositoryChoice }) {
   const assist = createAssist({ editor, notify: toaster.push, createClient: () => createDetectorClient() })
   onCleanup(assist.dispose)
   const thumbnails = createThumbnailCache(() => (editor.state.project ? editor.images.blob : null))
-  const actions = createProjectActions(editor, dialogs, thumbnails, toaster.push)
+  const actions = createProjectActions(editor, dialogs, toaster.push)
   const services: AppServices = { editor, assist, toaster, dialogs, thumbnails, actions, isDemo }
 
   onMount(() => void editor.projects.init())

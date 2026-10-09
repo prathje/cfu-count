@@ -10,9 +10,13 @@
  *   confirmed_count            manual_count + automated_accepted_count
  * Automated annotations with reviewStatus "rejected" are not counted anywhere.
  * Hidden/locked are reported as metadata and never change counts.
+ * Images the user removed (ImageRecord.deletedAt) get no rows: they are not part of
+ * the project's results until restored. Their records and annotations stay in
+ * project.json and annotations/.
  */
 import type { AnnotationGroup, ID, ImageAnnotations, Project } from '../model/types'
 import { countBreakdownByGroup, emptyBreakdown } from '../model/annotations'
+import { activeImages } from '../model/project'
 
 export const CSV_COLUMNS = [
   'project_id',
@@ -62,7 +66,7 @@ export function encodeRow(cells: Cell[]): string {
 export function summaryRows(project: Project, annotations: Map<ID, ImageAnnotations>): Cell[][] {
   const groupNames = new Map(project.imageGroups.map((g) => [g.id, g.name]))
   const rows: Cell[][] = []
-  for (const image of project.images) {
+  for (const image of activeImages(project)) {
     const doc = annotations.get(image.id)
     const counts = countBreakdownByGroup(doc?.annotations)
     // Project groups first (display order), then groups only known to this document

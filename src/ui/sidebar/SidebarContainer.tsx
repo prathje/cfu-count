@@ -16,6 +16,7 @@ export function SidebarContainer() {
           importing={state.importing}
           driveConnected={driveConnected()}
           imageCount={images.confirmedCount}
+          annotationCount={images.annotationCount}
           thumbnail={thumbnails.url}
           requestThumbnail={thumbnails.request}
           onSelectImage={images.select}
@@ -29,6 +30,7 @@ export function SidebarContainer() {
           onAssignImage={images.assign}
           onRenameImage={(id) => void actions.renameImage(id)}
           onRemoveImage={(id) => void actions.removeImage(id)}
+          onRestoreImage={images.restore}
         />
       )}
     </Show>

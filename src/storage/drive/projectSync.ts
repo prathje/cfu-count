@@ -8,7 +8,7 @@
  * SyncState (`sync.drive`), never in the model.
  */
 import type { ID, ImageAnnotations, ImageRecord, Project } from '../../model/types'
-import { applyStorageOwned } from '../../model/project'
+import { applyStorageOwned, isRemoved } from '../../model/project'
 import { newId } from '../../model/ids'
 import type { DriveLinkMode, ImportResult, ProjectSnapshot } from '../api'
 import { DriveError, LocalStorageError, errorMessage } from '../errors'
@@ -123,7 +123,7 @@ export function createProjectSync(core: StorageCore) {
         checkpoint: (p, files, written) =>
           core.withLock(async () => {
             const latest = await local.requireProject(projectId)
-            const merged = applyStorageOwned(latest, { ...p, revision: latest.revision, excludedDriveFileIds: latest.excludedDriveFileIds })
+            const merged = applyStorageOwned(latest, { ...p, revision: latest.revision })
             const s = await local.getSync(projectId)
             s.drive = files
             s.dirtyImages = s.dirtyImages.filter((id) => !(written.includes(id) && unchangedSince(projectId, id)))
@@ -144,7 +144,6 @@ export function createProjectSync(core: StorageCore) {
           ...result.project,
           storage: { ...(result.project.storage as Extract<Project['storage'], { kind: 'drive' }>), account: session.accountEmail },
           revision: latest.revision,
-          excludedDriveFileIds: latest.excludedDriveFileIds,
         })
         const s = await local.getSync(projectId)
         s.drive = result.files
@@ -197,13 +196,18 @@ export function createProjectSync(core: StorageCore) {
   /** Download + register Drive images (skips files already in the project). Bytes go to the local cache. */
   async function importDriveFiles(project: Project, files: DriveFile[]): Promise<ImportResult> {
     const res: ImportResult = { added: [], rejected: [] }
-    const known = new Set(project.images.flatMap((i) => (i.source.kind === 'drive' ? [i.source.fileId] : [])))
+    const known = new Map(project.images.flatMap((i) => (i.source.kind === 'drive' ? [[i.source.fileId, i] as const] : [])))
+    const seen = new Set<string>()
     for (const f of files) {
-      if (known.has(f.id)) {
-        res.rejected.push({ name: f.name, reason: 'This Drive file is already in the project.' })
+      const existing = known.get(f.id)
+      if (existing || seen.has(f.id)) {
+        res.rejected.push({
+          name: f.name,
+          reason: existing && isRemoved(existing) ? `This Drive file was removed from the project as “${existing.name}”. Restore it from Recently removed.` : 'This Drive file is already in the project.',
+        })
         continue
       }
-      known.add(f.id)
+      seen.add(f.id)
       try {
         const { record, blob } = await importDriveImage(client, f, core.decoder, now)
         await core.localWrite(project.id, () => local.putBlob(project.id, record.id, blob))
@@ -315,7 +319,7 @@ export function createProjectSync(core: StorageCore) {
     }
     if (project.storage.kind === 'drive') project.storage.account = session.accountEmail
 
-    // The folder is the project: pull in visible images it does not reference (or exclude) yet.
+    // The folder is the project: pull in visible images it does not reference yet (removed images are still referenced).
     const extraFiles: DriveFile[] = []
     for (const p of extraPicks) {
       if (result.unreferencedImages.some((f) => f.id === p.id)) continue

@@ -5,15 +5,31 @@
 import type { ID, ImageAnnotations, ImageRecord, Project } from './types'
 import { SCHEMA_VERSION } from './types'
 
-/** Images of one image group (null = ungrouped, including dangling group ids), in import order. */
+/** The user removed this image from the project (soft delete; see ImageRecord.deletedAt). */
+export const isRemoved = (image: Pick<ImageRecord, 'deletedAt'>): boolean => !!image.deletedAt
+
+/** Images that are part of the project (not removed), in import order. */
+export function activeImages(project: Pick<Project, 'images'>): ImageRecord[] {
+  return project.images.filter((img) => !isRemoved(img))
+}
+
+/** Removed images, most recently removed first ("Recently removed"). */
+export function removedImages(project: Pick<Project, 'images'>): ImageRecord[] {
+  return project.images.filter(isRemoved).sort((a, b) => b.deletedAt!.localeCompare(a.deletedAt!))
+}
+
+/**
+ * Images of one image group (null = ungrouped, including dangling group ids), in
+ * import order. Removed images are left out.
+ */
 export function imagesInGroup(project: Project, imageGroupId: ID | null): ImageRecord[] {
   const known = new Set(project.imageGroups.map((g) => g.id))
-  return project.images.filter((img) =>
+  return activeImages(project).filter((img) =>
     imageGroupId === null ? img.imageGroupId === null || !known.has(img.imageGroupId) : img.imageGroupId === imageGroupId,
   )
 }
 
-/** Flat display order of all images: by image group order, then ungrouped (next/previous, default selection). */
+/** Flat display order of all images that are not removed: by image group order, then ungrouped (next/previous, default selection). */
 export function displayOrder(project: Project): ImageRecord[] {
   return [...project.imageGroups.flatMap((g) => imagesInGroup(project, g.id)), ...imagesInGroup(project, null)]
 }
@@ -56,7 +72,8 @@ export function docForSave(project: Project, image: ImageRecord, doc: ImageAnnot
 
 /**
  * Fields of a project that STORAGE owns (the editor never changes them):
- *   storage, revision, excludedDriveFileIds, and each image's source / sourceMismatch.
+ *   storage, revision, and each image's source / sourceMismatch.
+ * (`deletedAt` is editor-owned: removing and restoring images are edits.)
  * Returns `editor` with those fields taken from `stored`; everything else is the
  * editor's. Images that exist only on one side are left as the editor has them.
  * Used by the repository when the editor saves (stale storage fields are ignored)
@@ -68,7 +85,6 @@ export function applyStorageOwned(editor: Project, stored: Project): Project {
     ...editor,
     storage: stored.storage,
     revision: stored.revision,
-    excludedDriveFileIds: stored.excludedDriveFileIds,
     images: editor.images.map((img) => {
       const s = byId.get(img.id)
       if (!s) return img

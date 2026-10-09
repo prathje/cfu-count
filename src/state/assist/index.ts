@@ -408,7 +408,7 @@ export function createAssist(deps: AssistDeps): Assist {
     // place), so track the fields themselves, not just the array identity.
     createEffect(
       on(
-        () => [(state.project?.images ?? []).map((i) => ({ id: i.id, fingerprint: i.fingerprint, sourceMismatch: i.sourceMismatch })), groups.list()] as const,
+        () => [(state.project?.images ?? []).map((i) => ({ id: i.id, fingerprint: i.fingerprint, sourceMismatch: i.sourceMismatch, deletedAt: i.deletedAt })), groups.list()] as const,
         ([imgs, list]) => {
           const pruned = pruneStore(untrack(store), imgs, list.map((g) => g.id))
           if (pruned === untrack(store)) return

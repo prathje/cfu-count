@@ -1,20 +1,26 @@
 /** Images of the open project: selection, naming, grouping, import and removal. */
 import { batch, createMemo, type Accessor } from 'solid-js'
-import { produce, unwrap } from 'solid-js/store'
+import { unwrap } from 'solid-js/store'
 import type { ID, ImageDisplayAdjust, ImageRecord } from '../../model/types'
 import { storedDisplay } from '../../model/display'
 import { confirmedCount } from '../../model/annotations'
-import { displayOrder } from '../../model/project'
+import { displayOrder, isRemoved, removedImages } from '../../model/project'
 import type { ImportResult } from '../../storage/api'
 import { prefs } from '../prefs'
+import { now } from '../../model/ids'
 import { errorText, type EditorContext } from './context'
 
 export interface ImageCommands {
+  /** The selected image (never a removed one). */
   current: Accessor<ImageRecord | null>
-  /** All images in display order (image-group order, then ungrouped). */
+  /** All images that are not removed, in display order (image-group order, then ungrouped). */
   order: Accessor<readonly ImageRecord[]>
+  /** Removed images, most recently removed first ("Recently removed"). */
+  removed: Accessor<readonly ImageRecord[]>
   /** Confirmed annotation count of any image. */
   confirmedCount(imageId: ID): number
+  /** Number of annotations stored for an image (every origin and review state). */
+  annotationCount(imageId: ID): number
 
   select(imageId: ID | null): void
   selectAdjacent(delta: number): void
@@ -25,8 +31,13 @@ export interface ImageCommands {
   import(files: File[], imageGroupId?: ID | null): Promise<void>
   /** Pick images in Google Drive. Call synchronously from the click (may open a sign-in popup). */
   importFromDrive(imageGroupId?: ID | null): Promise<void>
-  /** Remove from the project. A Drive file is never deleted; it is excluded from future folder scans. */
-  remove(imageId: ID): Promise<void>
+  /**
+   * Remove from the project (soft delete: sets `deletedAt` in project.json). Nothing is
+   * erased: bytes, annotations and the Drive file stay, and `restore` brings it back.
+   */
+  remove(imageId: ID): void
+  /** Undo a removal: the image is back in its image group (or ungrouped) and selected. */
+  restore(imageId: ID): void
   /** Original bytes of an image in the open project. */
   blob(imageId: ID): Promise<Blob>
   /**
@@ -39,13 +50,17 @@ export interface ImageCommands {
 export function createImages(ctx: EditorContext): ImageCommands {
   const { state, setState, notify } = ctx
 
-  const current = createMemo<ImageRecord | null>(() => state.project?.images.find((i) => i.id === state.currentImageId) ?? null)
+  const current = createMemo<ImageRecord | null>(() => {
+    const img = state.project?.images.find((i) => i.id === state.currentImageId)
+    return img && !isRemoved(img) ? img : null
+  })
   const order = createMemo<readonly ImageRecord[]>(() => (state.project ? displayOrder(state.project) : []))
+  const removed = createMemo<readonly ImageRecord[]>(() => (state.project ? removedImages(state.project) : []))
 
   const setImages = (map: (images: ImageRecord[]) => ImageRecord[]) => setState('project', 'images', map(unwrap(state.project!.images)))
 
   function select(imageId: ID | null) {
-    if (imageId && !state.project?.images.some((i) => i.id === imageId)) return
+    if (imageId && !state.project?.images.some((i) => i.id === imageId && !isRemoved(i))) return
     setState('currentImageId', imageId)
     if (state.project && imageId) prefs.set(`lastImage:${state.project.id}`, imageId)
   }
@@ -81,7 +96,7 @@ export function createImages(ctx: EditorContext): ImageCommands {
     const fresh = added.filter((img) => !known.has(img.id)).map((img) => ({ ...img, imageGroupId: target }))
     batch(() => {
       if (fresh.length) setImages((imgs) => [...imgs, ...fresh])
-      if (!state.currentImageId || !state.project!.images.some((i) => i.id === state.currentImageId)) select(added[0].id)
+      if (!current()) select(added[0].id)
     })
     ctx.touchProject()
     notify({
@@ -125,16 +140,9 @@ export function createImages(ctx: EditorContext): ImageCommands {
     if (result) addImported(result, imageGroupId)
   }
 
-  async function remove(imageId: ID) {
-    const session = ctx.session()
-    if (!session || ctx.editsFrozen()) return
-    try {
-      await session.images.remove(imageId)
-    } catch (err) {
-      notify({ tone: 'error', message: 'Couldn’t remove image', detail: errorText(err) })
-      return
-    }
-    if (!state.project) return
+  function remove(imageId: ID) {
+    const image = state.project?.images.find((i) => i.id === imageId)
+    if (!image || isRemoved(image) || ctx.editsFrozen()) return
     batch(() => {
       if (state.currentImageId === imageId) {
         const list = order()
@@ -142,9 +150,24 @@ export function createImages(ctx: EditorContext): ImageCommands {
         const next = list[i + 1] ?? list[i - 1]
         setState('currentImageId', next && next.id !== imageId ? next.id : null)
       }
-      setImages((imgs) => imgs.filter((i) => i.id !== imageId))
-      setState('docs', produce((docs) => void delete docs[imageId]))
-      setState('history', produce((h) => void delete h[imageId]))
+      // Annotation documents and undo history stay: restoring brings everything back.
+      setImages((imgs) => imgs.map((img) => (img.id === imageId ? { ...img, deletedAt: now() } : img)))
+    })
+    ctx.touchProject()
+  }
+
+  function restore(imageId: ID) {
+    const image = state.project?.images.find((i) => i.id === imageId)
+    if (!image || !isRemoved(image) || ctx.editsFrozen()) return
+    batch(() => {
+      setImages((imgs) =>
+        imgs.map((img) => {
+          if (img.id !== imageId) return img
+          const { deletedAt: _removed, ...rest } = img
+          return rest
+        }),
+      )
+      select(imageId)
     })
     ctx.touchProject()
   }
@@ -171,7 +194,9 @@ export function createImages(ctx: EditorContext): ImageCommands {
   return {
     current,
     order,
+    removed,
     confirmedCount: (imageId) => confirmedCount(state.docs[imageId]?.annotations),
+    annotationCount: (imageId) => state.docs[imageId]?.annotations.length ?? 0,
     select,
     selectAdjacent,
     rename,
@@ -179,6 +204,7 @@ export function createImages(ctx: EditorContext): ImageCommands {
     import: importFiles,
     importFromDrive,
     remove,
+    restore,
     blob,
     setDisplay,
   }

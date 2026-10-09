@@ -51,11 +51,10 @@ their identity, never the file name.
 | `images` | ImageRecord[] | see below |
 | `annotationGroups` | AnnotationGroup[] | project-wide marker groups, in display order |
 | `storage` | `{kind:"local"}` or Drive link | see below |
-| `excludedDriveFileIds` | string[] | Drive file IDs of images the user removed from the project; folder scans never re-add them. Readers default it to `[]` |
 | `revision` | number | incremented on every local save |
 
-`storage`, `revision`, `excludedDriveFileIds` and each image's `source` /
-`sourceMismatch` are *storage-owned*: the editor never changes them, and the app
+`storage`, `revision` and each image's `source` / `sourceMismatch` are
+*storage-owned*: the editor never changes them, and the app
 merges them with `applyStorageOwned` (src/model/project.ts) when storage reports a
 change.
 
@@ -75,6 +74,19 @@ ImageRecord:
 | `sampleId` | string? | reserved for multi-channel photos of one plate (unused in v1) |
 | `sourceMismatch` | object? | set by storage when the source bytes changed after annotation: `{detectedAt, message, remoteMd5?, remoteWidth?, remoteHeight?}` |
 | `display` | ImageDisplayAdjust? | display-only view setting (editor-owned); absent = unadjusted. See below |
+| `deletedAt` | timestamp? | set when the user removed the image from the project (soft delete, editor-owned); absent = part of the project. See below |
+
+**Removed images (soft delete).** Removing an image only sets `deletedAt`. Nothing is
+erased: the record stays in `project.json`, its annotation document stays in
+`annotations/`, its bytes stay in the browser, the `.zip` export and the Drive folder,
+and a Drive file is never deleted. A removed image is left out of the image list,
+next/previous navigation, project image counts, `summary.csv` (no rows) and the
+reference plates offered by Find similar. Because its record still references its
+Drive file, a folder scan never imports that file again (picking it in the Drive
+Picker says to restore it instead). "Recently removed" in the sidebar lists removed
+images; Restore deletes the field. Archive export/import and Drive save/open keep
+the field. (Older files may contain `excludedDriveFileIds` from before soft delete;
+readers drop it.)
 
 ImageDisplayAdjust (`src/model/display.ts`) changes only how the viewport shows the
 image layer. It never changes image bytes, annotation coordinates, counts, markers
@@ -148,7 +160,6 @@ Example:
       "annotations": { "0d9a7c3e-5f0b-4c8e-a1d2-3e4f5a6b7c8d": "1AnNoTaTiOnDoC" }
     }
   },
-  "excludedDriveFileIds": [],
   "revision": 42
 }
 ```
@@ -255,7 +266,8 @@ UTF-8 with a byte-order mark (so Excel detects the encoding), CRLF line endings,
 RFC 4180 quoting. Any text cell that starts with `=`, `+`, `-`, `@`, TAB or CR gets a
 leading `'` so spreadsheets show it as text instead of running it as a formula.
 
-**One row per image × annotation group**, zero-count groups included. Groups that
+**One row per image × annotation group**, zero-count groups included. Removed
+images (`deletedAt` set) get no rows. Groups that
 appear in an image's annotations but no longer exist in the project get their own rows,
 so no annotation is silently dropped. There is no per-image total column; sum
 `confirmed_count` over an image's rows to get it, which avoids double-counting.

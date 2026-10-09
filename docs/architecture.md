@@ -32,12 +32,19 @@ project (`save`, `images.*`, `exportZip/Csv`, `drive.link/push/takeRemote`,
 one and its methods then reject. Drive actions start Google sign-in synchronously
 so Safari allows the popup.
 
-**Storage-owned fields.** Storage owns `project.storage`, `revision`,
-`excludedDriveFileIds` and each image's `source` / `sourceMismatch`. The editor
+**Storage-owned fields.** Storage owns `project.storage`, `revision` and each
+image's `source` / `sourceMismatch`. The editor
 never writes them; `session.save` keeps storage's values and `session.onUpdated`
 reports changes, which the editor merges with `applyStorageOwned`
 (`src/model/project.ts`, also used by the repository). Linking to Drive therefore
 never reloads the project, so edits made during the first upload survive.
+
+**Removing an image is a soft delete.** `images.remove` sets
+`ImageRecord.deletedAt` (an editor-owned edit saved with `project.json`) and
+`images.restore` clears it. Storage has no remove operation and never erases image
+bytes, annotation documents or Drive files. `model/project.ts` (`displayOrder`,
+`imagesInGroup`, `activeImages`, `removedImages`) is the one place that hides
+removed images from lists, navigation, counts and the CSV.
 
 **Drive bookkeeping** (output file IDs and the md5 last read/written per file, for
 conflict checks) lives in the local `SyncState`, not in the model.

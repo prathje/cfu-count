@@ -35,9 +35,9 @@ describe('seed selection', () => {
     expect(seedAnnotations(undefined, 'g1')).toEqual([])
   })
 
-  it('offers reference plates with enough examples, most first, skipping the current and changed images', () => {
-    const images = [img('cur'), img('a'), img('b'), img('c', { sourceMismatch: { detectedAt: at, message: 'replaced' } }), img('d')]
-    const docs = { cur: { annotations: manual(9) }, a: { annotations: manual(3) }, b: { annotations: manual(8) }, c: { annotations: manual(9) }, d: { annotations: manual(2) } }
+  it('offers reference plates with enough examples, most first, skipping the current, changed and removed images', () => {
+    const images = [img('cur'), img('a'), img('b'), img('c', { sourceMismatch: { detectedAt: at, message: 'replaced' } }), img('d'), img('e', { deletedAt: at })]
+    const docs = { cur: { annotations: manual(9) }, a: { annotations: manual(3) }, b: { annotations: manual(8) }, c: { annotations: manual(9) }, d: { annotations: manual(2) }, e: { annotations: manual(9) } }
     expect(referenceCandidates(images, docs, 'g1', 'cur')).toEqual([
       { imageId: 'b', name: 'b.jpg', count: 8 },
       { imageId: 'a', name: 'a.jpg', count: 3 },

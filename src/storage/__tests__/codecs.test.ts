@@ -82,6 +82,15 @@ describe('summary CSV', () => {
   })
 })
 
+describe('summary CSV and removed images', () => {
+  it('leaves out images the user removed', () => {
+    const p = project()
+    p.images[1].deletedAt = '2026-02-01T00:00:00.000Z'
+    const rows = parseCsv(buildSummaryCsv(p, new Map([['i2', doc(p, 'i2', [annotation('a1', 'g1')])]])))
+    expect(rows.slice(1).map((r) => r[4])).toEqual(['i1', 'i1'])
+  })
+})
+
 describe('archive round trip', () => {
   it('preserves project, annotations, origin and image bytes', async () => {
     const p = project()
@@ -100,6 +109,19 @@ describe('archive round trip', () => {
     expect(out.annotations.get('i1')!.annotations[1].origin).toBe('automated')
     expect(new Uint8Array(await out.images.get('i1')!.arrayBuffer())).toEqual(PNG_1x1)
     expect(out.warnings).toEqual(['The archive has no image file for "i2.png".'])
+  })
+
+  it('keeps a removed image, its bytes, annotations and the deletedAt flag', async () => {
+    const p = project()
+    p.images[0].fingerprint = await sha256Hex(PNG_1x1)
+    p.images[0].deletedAt = '2026-02-01T00:00:00.000Z'
+    const docs = new Map([['i1', doc(p, 'i1', [annotation('a1', 'g1')])]])
+    const out = await decodeArchive(await encodeArchive({ project: p, annotations: docs, images: new Map([['i1', new Blob([PNG_1x1], { type: 'image/png' })]]) }))
+    expect(out.project.images[0].deletedAt).toBe('2026-02-01T00:00:00.000Z')
+    expect(out.annotations.get('i1')).toEqual(docs.get('i1'))
+    expect(out.images.has('i1')).toBe(true)
+    const legacy = { ...structuredClone(p), excludedDriveFileIds: ['x'] }
+    expect('excludedDriveFileIds' in validateProject(legacy)).toBe(false)
   })
 
   it('round-trips detection runs and fitted geometry', async () => {

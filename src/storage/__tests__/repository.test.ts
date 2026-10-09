@@ -162,12 +162,11 @@ describe('repository: local working copy', () => {
   it('keeps storage-owned fields when the editor saves a stale copy', async () => {
     const s = await d.repo.create('P')
     const project = s.opened.project
-    await d.local.saveProject({ ...project, storage: { kind: 'drive', folderId: 'F', folderName: 'F' }, excludedDriveFileIds: ['x'] })
+    await d.local.saveProject({ ...project, storage: { kind: 'drive', folderId: 'F', folderName: 'F' } })
     await s.save({ ...project, name: 'Renamed' }, [])
     const stored = await d.local.getProject(project.id)
     expect(stored!.name).toBe('Renamed')
     expect(stored!.storage.kind).toBe('drive')
-    expect(stored!.excludedDriveFileIds).toEqual(['x'])
   })
 })
 
@@ -330,22 +329,23 @@ describe('repository: Google Drive', () => {
     expect(new Uint8Array(await blob.arrayBuffer())).toEqual(PNG_1x1)
   })
 
-  it('removing a Drive image keeps the Drive file and stops it from being re-imported', async () => {
-    const { s, project, updates } = await linkedProject(a)
+  it('a removed image (soft delete) keeps its Drive file, bytes and annotations and is not re-imported', async () => {
+    const { s, project } = await linkedProject(a)
     const folder = drive.findByName('root', 'Plates')!
     const img = project.images[0]
     const fileId = img.source.kind === 'drive' ? img.source.fileId : ''
-    await s.images.remove(img.id)
-    expect(updates.at(-1)!.excludedDriveFileIds).toEqual([fileId])
-    // The editor drops the record and saves; the exclusion survives (storage-owned).
-    await s.save({ ...project, images: [], excludedDriveFileIds: [] }, [])
+    const removedAt = '2026-02-01T00:00:00.000Z'
+    await s.save({ ...project, images: project.images.map((i) => (i.id === img.id ? { ...i, deletedAt: removedAt } : i)) }, [])
     await s.drive.push()
     expect(drive.files.has(fileId)).toBe(true)
+    expect(await a.local.getBlob(project.id, img.id)).toBeDefined()
     const b = device(drive)
     b.picker.folders.push({ id: folder.id, name: folder.name, mimeType: folder.mimeType })
     const opened = await b.repo.openFromDrive()
-    expect(opened.opened.project.images).toEqual([])
-    expect(opened.opened.project.excludedDriveFileIds).toEqual([fileId])
+    expect(opened.opened.project.images.map((i) => [i.id, i.deletedAt])).toEqual(project.images.map((i) => [i.id, i.id === img.id ? removedAt : undefined]))
+    expect(opened.opened.annotations.get(img.id)!.annotations).toHaveLength(1)
+    expect(opened.opened.warnings ?? []).toEqual([])
+    expect((await b.repo.list())[0].imageCount).toBe(project.images.length - 1)
   })
 
   it('asks the user to grant access to files it cannot see (drive.file), then reads them', async () => {

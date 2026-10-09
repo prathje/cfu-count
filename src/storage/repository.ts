@@ -11,7 +11,7 @@
  */
 import { SCHEMA_VERSION } from '../model/types'
 import type { ID, ImageRecord, Project } from '../model/types'
-import { applyStorageOwned } from '../model/project'
+import { activeImages, applyStorageOwned } from '../model/project'
 import { newId, now as isoNow } from '../model/ids'
 import type { DriveState, ImportResult, ProjectRepository, ProjectSession, ProjectSnapshot, ProjectSummary, SaveStatus } from './api'
 import { decodeArchive, encodeArchive } from './archive'
@@ -332,31 +332,6 @@ export function createProjectRepository(deps: RepositoryDeps): ProjectRepository
       return requireSync().fetchImage(projectId, image as ImageRecord & { source: { kind: 'drive' } })
     }
 
-    async function remove(imageId: ID): Promise<void> {
-      await localWrite(projectId, () =>
-        withLock(async () => {
-          const stored = await local.getProject(projectId)
-          await local.deleteImage(projectId, imageId)
-          if (!stored) return
-          const image = stored.images.find((i) => i.id === imageId)
-          const syncState = await local.getSync(projectId)
-          syncState.dirtyImages = syncState.dirtyImages.filter((i) => i !== imageId)
-          // Never delete a Drive file: remember it so the folder scan does not re-add it.
-          if (image?.source.kind === 'drive' && !stored.excludedDriveFileIds.includes(image.source.fileId)) {
-            const updated: Project = { ...stored, excludedDriveFileIds: [...stored.excludedDriveFileIds, image.source.fileId] }
-            if (stored.storage.kind === 'drive') {
-              syncState.projectDirty = true
-              edits.bump(projectId)
-            }
-            await local.saveProject(updated, [], syncState)
-            notifyUpdated(updated)
-          } else {
-            await local.putSync(syncState)
-          }
-        }),
-      )
-    }
-
     async function exportZip(): Promise<Blob> {
       const { project, annotations } = await readSnapshot(projectId)
       const images = new Map<ID, Blob>()
@@ -389,7 +364,6 @@ export function createProjectRepository(deps: RepositoryDeps): ProjectRepository
         import: guarded(importFiles),
         importFromDrive: withDrive(() => requireSync().importFromPicker(projectId)),
         blob: guarded(blob),
-        remove: guarded(remove),
       },
       exportZip: guarded(exportZip),
       exportCsv: guarded(exportCsv),
@@ -427,7 +401,7 @@ export function createProjectRepository(deps: RepositoryDeps): ProjectRepository
           id: p.id,
           name: p.name,
           updatedAt: p.updatedAt,
-          imageCount: p.images.length,
+          imageCount: activeImages(p).length,
           storage: p.storage.kind,
           ...(p.storage.kind === 'drive' ? { driveFolderName: p.storage.folderName } : {}),
         }))
@@ -446,7 +420,6 @@ export function createProjectRepository(deps: RepositoryDeps): ProjectRepository
         images: [],
         annotationGroups: [],
         storage: { kind: 'local' },
-        excludedDriveFileIds: [],
         revision: 1,
       }
       await localWrite(null, () => local.saveProject(project))

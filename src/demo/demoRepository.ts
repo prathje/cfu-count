@@ -13,7 +13,7 @@ import { SCHEMA_VERSION } from '../model/types'
 import { newId, now } from '../model/ids'
 import { makeManualAnnotation } from '../model/annotations'
 import { makeGroup } from '../model/groups'
-import { applyStorageOwned } from '../model/project'
+import { activeImages, applyStorageOwned } from '../model/project'
 import type { DriveState, ImportResult, ProjectRepository, ProjectSession, ProjectSnapshot, ProjectSummary, SaveStatus } from '../storage/api'
 import { decodeArchive, encodeArchive } from '../storage/archive'
 import { buildSummaryCsv } from '../storage/csv'
@@ -41,7 +41,6 @@ function blankProject(name: string): Project {
     images: [],
     annotationGroups: [],
     storage: { kind: 'local' },
-    excludedDriveFileIds: [],
     revision: 0,
   }
 }
@@ -210,11 +209,6 @@ export function createDemoRepository(): ProjectRepository {
           if (!blob) throw new Error('Image bytes are not available in this browser.')
           return blob
         },
-        async remove(imageId) {
-          live()
-          s.blobs.delete(imageId)
-          s.annotations.delete(imageId)
-        },
       },
       async exportZip() {
         const bytes = await encodeArchive({ project: s.project, annotations: s.annotations, images: s.blobs })
@@ -262,7 +256,7 @@ export function createDemoRepository(): ProjectRepository {
         id: project.id,
         name: project.name,
         updatedAt: project.updatedAt,
-        imageCount: project.images.length,
+        imageCount: activeImages(project).length,
         storage: project.storage.kind,
         driveFolderName: project.storage.kind === 'drive' ? project.storage.folderName : undefined,
       }))

@@ -221,7 +221,6 @@ export function project(extra: Partial<Project> = {}): Project {
     images: [image('i1', { imageGroupId: 'ig1' }), image('i2')],
     annotationGroups: [group('g1', 'Main colonies'), group('g2', 'Small', { hidden: true, locked: true })],
     storage: { kind: 'local' },
-    excludedDriveFileIds: [],
     revision: 1,
     ...extra,
   }

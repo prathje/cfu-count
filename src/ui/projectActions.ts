@@ -6,7 +6,6 @@
 import type { ID } from '../model/types'
 import type { Editor } from '../state/editor'
 import { downloadBlob, IMAGE_ACCEPT, pickFiles, safeFilename } from './download'
-import type { ThumbnailCache } from './images'
 import type { Dialogs } from './primitives'
 import type { Notify } from '../state/messages'
 import { plural } from './format'
@@ -30,18 +29,20 @@ export function defaultProjectName(date = new Date()): string {
   return `Plates ${date.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}`
 }
 
-/** Body of the "remove image" confirmation (exported for tests). */
+/**
+ * Body of the "remove image" confirmation (exported for tests). Removing is a soft
+ * delete: nothing is erased and the image can be restored. `annotationCount` counts
+ * every stored annotation of the image, not only confirmed ones.
+ */
 export function removeImageBody(annotationCount: number, fromDrive: boolean): string {
-  const parts = [
-    annotationCount
-      ? `Its ${annotationCount.toLocaleString()} ${annotationCount === 1 ? 'annotation is' : 'annotations are'} deleted too. This can’t be undone.`
-      : 'The image is removed from this project.',
-  ]
-  if (fromDrive) parts.push('The original file stays in Google Drive and won’t be re-imported.')
-  return parts.join(' ')
+  const kept = [
+    annotationCount ? `its ${annotationCount.toLocaleString()} ${annotationCount === 1 ? 'annotation' : 'annotations'}` : null,
+    fromDrive ? 'the file in Google Drive' : 'the image file',
+  ].filter(Boolean)
+  return `It’s hidden from the image list, counts and the CSV summary. Nothing is erased: ${kept.join(' and ')} ${kept.length > 1 ? 'are' : 'is'} kept, and you can restore it from “Recently removed” in the sidebar.`
 }
 
-export function createProjectActions(editor: Editor, dialogs: Dialogs, thumbnails: ThumbnailCache, notify: Notify): ProjectActions {
+export function createProjectActions(editor: Editor, dialogs: Dialogs, notify: Notify): ProjectActions {
   const { state } = editor
 
   async function ensureProject(): Promise<boolean> {
@@ -108,7 +109,7 @@ export function createProjectActions(editor: Editor, dialogs: Dialogs, thumbnail
       if (!blob || !state.project) return
       const name = `${safeFilename(state.project.name)} summary.csv`
       downloadBlob(blob, name)
-      notify({ tone: 'success', key: 'export', message: `Exported ${name}`, detail: `${plural(state.project.images.length, 'image')} · one row per image and annotation group` })
+      notify({ tone: 'success', key: 'export', message: `Exported ${name}`, detail: `${plural(editor.images.order().length, 'image')} · one row per image and annotation group` })
     },
 
     async renameImage(imageId) {
@@ -122,14 +123,14 @@ export function createProjectActions(editor: Editor, dialogs: Dialogs, thumbnail
       const img = state.project?.images.find((i) => i.id === imageId)
       if (!img) return
       const ok = await dialogs.confirm({
-        title: `Remove “${img.name}”?`,
-        body: removeImageBody(editor.images.confirmedCount(imageId), img.source.kind === 'drive'),
+        title: `Remove “${img.name}” from the project?`,
+        body: removeImageBody(editor.images.annotationCount(imageId), img.source.kind === 'drive'),
         confirmLabel: 'Remove image',
-        danger: true,
       })
       if (!ok) return
-      thumbnails.forget(imageId)
-      await editor.images.remove(imageId)
+      editor.images.remove(imageId)
+      if (!state.project?.images.find((i) => i.id === imageId)?.deletedAt) return
+      notify({ tone: 'success', key: 'remove-image', message: `Removed “${img.name}”`, detail: 'Find it under Recently removed in the sidebar.', action: { label: 'Restore', run: () => editor.images.restore(imageId) } })
     },
 
     async deleteImageGroup(id) {

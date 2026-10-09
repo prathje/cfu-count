@@ -142,7 +142,6 @@ export function createEditor(repo: ProjectRepository, deps: EditorDeps): Editor 
       batch(() => {
         setState('project', 'storage', merged.storage)
         setState('project', 'revision', merged.revision)
-        setState('project', 'excludedDriveFileIds', merged.excludedDriveFileIds)
         setState('project', 'images', reconcile(merged.images, { key: 'id' }))
       })
     }

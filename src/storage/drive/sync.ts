@@ -20,6 +20,7 @@
 import { SCHEMA_VERSION } from '../../model/types'
 import type { ID, ImageAnnotations, ImageRecord, Project, ProjectStorageLink } from '../../model/types'
 import { newId } from '../../model/ids'
+import { isRemoved } from '../../model/project'
 import { buildSummaryCsv } from '../csv'
 import { encodeJson, toSharedProject } from '../documents'
 import { DriveError, SchemaError } from '../errors'
@@ -289,8 +290,8 @@ export interface PullResult {
    */
   inaccessible: string[]
   /**
-   * Image files visible in the folder or images/ that the project neither references
-   * nor lists in `excludedDriveFileIds` (images the user removed).
+   * Image files visible in the folder or images/ that the project does not reference.
+   * Removed images (ImageRecord.deletedAt) keep their record, so they are never offered again.
    */
   unreferencedImages: DriveFile[]
   warnings: string[]
@@ -375,7 +376,7 @@ export async function pullFolder(client: DriveClient, folderId: string, now: () 
   const visibleById = new Map(visibleImages.map((f) => [f.id, f]))
   const images: ImageRecord[] = await mapLimit(remote.images, 4, async (image) => {
     if (image.source.kind !== 'drive') {
-      warnings.push(`"${image.name}" was never uploaded to Drive; its pixels are only on the device that added it.`)
+      if (!isRemoved(image)) warnings.push(`"${image.name}" was never uploaded to Drive; its pixels are only on the device that added it.`)
       return image
     }
     let file = visibleById.get(image.source.fileId)
@@ -390,11 +391,11 @@ export async function pullFolder(client: DriveClient, folderId: string, now: () 
         throw e
       }
     }
-    if (file.trashed) warnings.push(`The Drive image "${image.name}" is in the trash.`)
+    if (file.trashed && !isRemoved(image)) warnings.push(`The Drive image "${image.name}" is in the trash.`)
     return detectReplacement(image, file, now)
   })
 
-  const skip = new Set([...images.flatMap((i) => (i.source.kind === 'drive' ? [i.source.fileId] : [])), ...remote.excludedDriveFileIds])
+  const skip = new Set(images.flatMap((i) => (i.source.kind === 'drive' ? [i.source.fileId] : [])))
   const project = { ...remote, images, storage: link }
   return { folder, project, files, annotations, inaccessible: [...new Set(inaccessible)], unreferencedImages: visibleImages.filter((f) => !skip.has(f.id)), warnings }
 }
@@ -451,7 +452,6 @@ export function emptyDriveProject(folder: DriveFile, now: string, defaults: Pick
     images: [],
     annotationGroups: defaults.annotationGroups,
     storage: newDriveLink(folder.id, folder.name),
-    excludedDriveFileIds: [],
     revision: 0,
   }
 }

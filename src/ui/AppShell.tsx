@@ -195,7 +195,7 @@ export function AppShell() {
         </main>
       </div>
 
-      <Show when={dragging() && (state.phase !== 'ready' || (state.project?.images.length ?? 0) > 0)}>
+      <Show when={dragging() && (state.phase !== 'ready' || editor.images.order().length > 0)}>
         <div class="drop-overlay" aria-hidden="true">
           <div class="drop-overlay__card">
             <ImagePlus size={28} stroke-width={1.6} />

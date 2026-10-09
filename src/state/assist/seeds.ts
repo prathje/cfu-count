@@ -42,7 +42,7 @@ export function referenceCandidates(
 ): ReferenceCandidate[] {
   const out: ReferenceCandidate[] = []
   for (const img of images) {
-    if (img.id === currentImageId || img.sourceMismatch) continue
+    if (img.id === currentImageId || img.sourceMismatch || img.deletedAt) continue
     const count = seedAnnotations(docs[img.id]?.annotations, groupId).length
     if (count >= MIN_SEEDS) out.push({ imageId: img.id, name: img.name, count })
   }

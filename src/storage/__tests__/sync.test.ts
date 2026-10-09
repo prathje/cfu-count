@@ -191,15 +191,13 @@ describe('Drive sync engine', () => {
     expect(r.project!.images.find((i) => i.id === 'i2')!.sourceMismatch).toBeUndefined()
   })
 
-  it('does not offer images the user removed (excludedDriveFileIds) for re-import', async () => {
+  it('does not offer images the user removed (deletedAt) for re-import and keeps the flag', async () => {
     await push()
-    const imgDir = drive.findByName(folder, 'images')!.id
-    const removed = drive.addFile('removed.jpg', imgDir, new Uint8Array([0xff, 0xd8, 0xff, 2]), 'image/jpeg')
-    saved = { ...saved!, excludedDriveFileIds: [removed] }
+    saved = { ...saved!, images: saved!.images.map((i, n) => (n === 0 ? { ...i, deletedAt: '2026-02-01T00:00:00.000Z' } : i)) }
     await push()
     const r = await pullFolder(drive, folder, now)
     expect(r.unreferencedImages).toEqual([])
-    expect(r.project!.excludedDriveFileIds).toEqual([removed])
+    expect(r.project!.images[0].deletedAt).toBe('2026-02-01T00:00:00.000Z')
   })
 
   it('returns project null for a folder without project.json', async () => {

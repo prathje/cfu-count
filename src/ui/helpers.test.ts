@@ -63,13 +63,14 @@ describe('saveStatusLabel', () => {
 })
 
 describe('dialog wording', () => {
-  it('tells the user a Drive file is kept when removing an image', () => {
-    expect(removeImageBody(0, false)).toBe('The image is removed from this project.')
-    expect(removeImageBody(2, true)).toMatch(/2 annotations.*stays in Google Drive/)
+  it('says removing an image erases nothing and can be restored', () => {
+    expect(removeImageBody(0, false)).toMatch(/Nothing is erased: the image file is kept.*restore it from “Recently removed”/)
+    expect(removeImageBody(2, true)).toMatch(/its 2 annotations and the file in Google Drive are kept/)
+    expect(removeImageBody(1, false)).toMatch(/its 1 annotation and the image file are kept/)
+    expect(removeImageBody(3, false)).not.toMatch(/can’t be undone|deleted/)
   })
   it('explains a decode size mismatch', () => {
     expect(sizeMismatchMessage({ width: 100, height: 80 }, { width: 80, height: 100 })).toMatch(/80×100.*100×80/)
-    expect(removeImageBody(1, false)).toBe('Its 1 annotation is deleted too. This can’t be undone.')
   })
 })
 

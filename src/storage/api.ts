@@ -92,8 +92,8 @@ export interface ProjectRepository {
 }
 
 /**
- * The open project. Storage owns `project.storage`, `project.revision`,
- * `project.excludedDriveFileIds` and each image's `source` / `sourceMismatch`
+ * The open project. Storage owns `project.storage`, `project.revision`
+ * and each image's `source` / `sourceMismatch`
  * (see model/project.ts `applyStorageOwned`): `save` keeps storage's values for
  * these, and `onUpdated` reports every change storage makes to them.
  */
@@ -119,11 +119,8 @@ export interface ProjectSession {
     importFromDrive(): Promise<ImportResult>
     /** Original bytes from the local cache, fetching from Drive if needed. */
     blob(imageId: ID): Promise<Blob>
-    /**
-     * Forget an image's bytes and annotation document in this browser. A Drive file is
-     * never deleted: its ID is added to `excludedDriveFileIds` so it is not re-imported.
-     */
-    remove(imageId: ID): Promise<void>
+    // There is no remove: removing an image is a soft delete the editor records in
+    // project.json (ImageRecord.deletedAt). Storage never erases image bytes or documents.
   }
 
   /** Download as a .zip (same layout as the Drive folder). */

@@ -31,7 +31,6 @@ function project(id = 'p1'): Project {
     images: [img('i1', 'ig1'), img('i2', null)],
     annotationGroups: [],
     storage: { kind: 'local' },
-    excludedDriveFileIds: [],
     revision: 0,
   }
 }
@@ -69,7 +68,6 @@ function mockRepo() {
         }),
         importFromDrive: vi.fn(async () => ({ added: [], rejected: [] })),
         blob: vi.fn(async () => new Blob()),
-        remove: vi.fn(async () => {}),
       },
       exportZip: vi.fn(async () => new Blob()),
       exportCsv: vi.fn(async () => new Blob()),
@@ -285,6 +283,33 @@ describe('editor', () => {
     expect(await editor.projects.flush()).toBe(true)
   })
 
+  it('removing an image is a soft delete that keeps its annotations; restore brings it back', async () => {
+    const { editor, session } = await setup()
+    editor.annotations.add(1, 1)
+    editor.images.remove('i1')
+    expect(editor.state.currentImageId).toBe('i2')
+    expect(editor.images.order().map((i) => i.id)).toEqual(['i2'])
+    expect(editor.images.removed().map((i) => i.id)).toEqual(['i1'])
+    expect(editor.state.docs['i1'].annotations).toHaveLength(1)
+    editor.images.select('i1') // removed images cannot be selected
+    expect(editor.state.currentImageId).toBe('i2')
+    await editor.projects.flush()
+    const saved = session().save.mock.calls.at(-1)! as [Project, unknown[]]
+    expect(saved[0].images.find((i) => i.id === 'i1')!.deletedAt).toEqual(expect.any(String))
+    editor.images.restore('i1')
+    expect(editor.state.currentImageId).toBe('i1')
+    expect('deletedAt' in editor.state.project!.images[0]).toBe(false)
+    expect(editor.annotations.total()).toBe(1)
+    expect(editor.annotations.undo()).toBe(true) // history survived the round trip
+  })
+
+  it('storage updates keep the editor-owned removal flag', async () => {
+    const { editor, session } = await setup()
+    editor.images.remove('i2')
+    session().emitUpdated({ ...project(), storage: { kind: 'drive', folderId: 'F', folderName: 'F' } })
+    expect(editor.images.removed().map((i) => i.id)).toEqual(['i2'])
+  })
+
   it('reassigning images keeps annotations; deleting an image group ungroups images', async () => {
     const { editor } = await setup()
     editor.annotations.add(5, 5)
@@ -374,10 +399,8 @@ describe('editor', () => {
     const updated = project()
     updated.storage = { kind: 'drive', folderId: 'f', folderName: 'Folder' }
     updated.images[0].sourceMismatch = { detectedAt: '', message: 'Replaced' }
-    updated.excludedDriveFileIds = ['gone']
     session().emitUpdated(updated)
     expect(editor.state.project!.storage.kind).toBe('drive')
-    expect(editor.state.project!.excludedDriveFileIds).toEqual(['gone'])
     expect(editor.state.project!.name).toBe('Renamed')
     expect(editor.state.project!.images[0].sourceMismatch?.message).toBe('Replaced')
     expect(editor.annotations.total()).toBe(1)

@@ -173,14 +173,6 @@ export class LocalStore {
     return row?.blob
   }
 
-  /** Delete one image's blob and annotation document. */
-  deleteImage(projectId: ID, imageId: ID): Promise<void> {
-    return this.run('remove the image', ['blobs', 'annotations'], 'readwrite', (tx) => {
-      tx.objectStore('blobs').delete([projectId, imageId])
-      tx.objectStore('annotations').delete([projectId, imageId])
-    })
-  }
-
   deleteProject(projectId: ID): Promise<void> {
     return this.run('delete the project', ['projects', 'annotations', 'blobs', 'sync'], 'readwrite', async (tx) => {
       tx.objectStore('projects').delete(projectId)
