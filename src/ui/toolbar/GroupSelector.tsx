@@ -1,7 +1,7 @@
 import { createSignal, For, Show } from 'solid-js'
 import type { AnnotationGroup, ID } from '../../model/types'
 import { ChevronDown, ChevronUp, EyeOff, Lock, Plus, Trash, Check, Pencil } from '../icons'
-import { Popover, InlineEdit, IconButton, createPopoverState } from '../primitives'
+import { Popover, InlineEdit, Button, createPopoverState } from '../primitives'
 import { GroupSwatch } from '../shared/GroupSwatch'
 
 /** Active annotation-group selector with inline group management (no side panel). */
@@ -86,6 +86,11 @@ export function GroupSelector(props: GroupSelectorProps) {
                   }
                 }}
               >
+                <span class="group-option__check" aria-hidden="true">
+                  <Show when={g.id === props.activeId}>
+                    <Check size={15} stroke-width={2.4} />
+                  </Show>
+                </span>
                 <GroupSwatch color={g.color} render={g.render} muted={g.hidden} size={16} />
                 <span class="group-option__name">{g.name}</span>
                 <span class="group-option__flags">
@@ -105,9 +110,9 @@ export function GroupSelector(props: GroupSelectorProps) {
                 <span class="group-option__count" aria-label={`${count(g.id)} on this image`}>
                   {count(g.id).toLocaleString()}
                 </span>
-                <span class="group-option__key" aria-hidden="true">
-                  <Show when={g.id === props.activeId} fallback={i() < 9 ? i() + 1 : ''}>
-                    <Check size={15} />
+                <span class="group-option__key">
+                  <Show when={i() < 9}>
+                    <kbd aria-label={`Shortcut ${i() + 1}`}>{i() + 1}</kbd>
                   </Show>
                 </span>
               </li>
@@ -127,9 +132,9 @@ export function GroupSelector(props: GroupSelectorProps) {
 
         <Show when={active()}>
           {(g) => (
-            <div class="group-manage">
+            <div class="group-manage" classList={{ 'is-editing': renaming() }}>
               <div class="group-manage__label">Selected group</div>
-              <div class="group-manage__row">
+              <div class="group-manage__name-row">
                 <GroupSwatch color={g().color} render={g().render} size={16} />
                 <InlineEdit
                   value={g().name}
@@ -139,30 +144,43 @@ export function GroupSelector(props: GroupSelectorProps) {
                   onEditingChange={setRenaming}
                   onCommit={(name) => props.onRename(g().id, name)}
                 />
-                <IconButton icon={Pencil} label="Rename group" size="sm" onClick={() => setRenaming(true)} />
-                <IconButton
-                  icon={ChevronUp}
-                  label="Move group up"
+              </div>
+              <div class="group-manage__actions">
+                <Show when={!renaming()}>
+                  <Button size="sm" variant="ghost" icon={Pencil} onClick={() => setRenaming(true)}>
+                    Rename
+                  </Button>
+                </Show>
+                <Button size="sm" variant="ghost" icon={ChevronUp} aria-label="Move group up" disabled={activeIndex() <= 0} onClick={() => props.onMove(g().id, -1)}>
+                  Up
+                </Button>
+                <Button
                   size="sm"
-                  disabled={activeIndex() <= 0}
-                  onClick={() => props.onMove(g().id, -1)}
-                />
-                <IconButton
+                  variant="ghost"
                   icon={ChevronDown}
-                  label="Move group down"
-                  size="sm"
+                  aria-label="Move group down"
                   disabled={activeIndex() >= props.groups.length - 1}
                   onClick={() => props.onMove(g().id, 1)}
-                />
-                <IconButton
-                  icon={Trash}
-                  label={g().locked ? 'Delete group (unlock first)' : props.groups.length <= 1 ? 'Delete group (a project needs one group)' : 'Delete group'}
+                >
+                  Down
+                </Button>
+                <span class="group-manage__spacer" />
+                <Button
                   size="sm"
-                  variant="danger"
+                  variant="ghost"
+                  icon={Trash}
+                  class="group-manage__delete"
                   disabled={g().locked || props.groups.length <= 1}
                   onClick={() => props.onDelete(g().id)}
-                />
+                >
+                  Delete
+                </Button>
               </div>
+              <Show when={g().locked || props.groups.length <= 1}>
+                <p class="field__hint group-manage__hint">
+                  {g().locked ? 'Unlock this group to delete it.' : 'A project needs at least one annotation group.'}
+                </p>
+              </Show>
             </div>
           )}
         </Show>

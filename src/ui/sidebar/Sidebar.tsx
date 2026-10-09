@@ -21,7 +21,8 @@ export interface SidebarProps {
   onImportFiles(imageGroupId: ID | null): void
   onImportDrive(imageGroupId: ID | null): void
   onRenameProject(name: string): void
-  onCreateImageGroup(): void
+  /** Creates a group and returns its id; the new group opens in rename mode. */
+  onCreateImageGroup(): ID | null
   onRenameImageGroup(id: ID, name: string): void
   onDeleteImageGroup(id: ID): void
   onMoveImageGroup(id: ID, delta: number): void
@@ -34,6 +35,8 @@ export function Sidebar(props: SidebarProps) {
   const [collapsed, setCollapsed] = createSignal<Record<string, boolean>>({})
   const isCollapsed = (key: string) => !!collapsed()[key]
   const toggle = (key: string) => setCollapsed((c) => ({ ...c, [key]: !c[key] }))
+  // The image group whose name is being edited (a new group starts here, text selected).
+  const [renamingId, setRenamingId] = createSignal<ID | null>(null)
   const ungrouped = () => imagesInGroup(props.project, null)
 
   const row = (img: Project['images'][number]) => (
@@ -70,7 +73,7 @@ export function Sidebar(props: SidebarProps) {
           <Show when={props.driveConnected}>
             <IconButton icon={Cloud} label="Import from Google Drive" variant="subtle" onClick={() => props.onImportDrive(null)} />
           </Show>
-          <IconButton icon={FolderPlus} label="New image group" variant="subtle" onClick={() => props.onCreateImageGroup()} />
+          <IconButton icon={FolderPlus} label="New image group" variant="subtle" onClick={() => setRenamingId(props.onCreateImageGroup())} />
         </div>
       </div>
 
@@ -82,6 +85,8 @@ export function Sidebar(props: SidebarProps) {
               name={g.name}
               images={imagesInGroup(props.project, g.id)}
               collapsed={isCollapsed(g.id)}
+              renaming={renamingId() === g.id}
+              onRenamingChange={(on) => setRenamingId(on ? g.id : null)}
               canMoveUp={i() > 0}
               canMoveDown={i() < props.project.imageGroups.length - 1}
               onToggle={() => toggle(g.id)}

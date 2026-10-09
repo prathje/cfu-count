@@ -66,12 +66,14 @@ export function markerBox(sx: number, sy: number, r: number): Box {
 
 /** The four candidate label boxes around a marker, in preference order. */
 export function labelCandidates(sx: number, sy: number, r: number, w: number, h: number): Box[] {
-  const gap = r * 0.72 + 1.5
+  // Each box touches the marker diagonally (corner on the 45° point of the ring), tucked in by 2 px.
+  const gap = r * 0.72 + 1
+  const tuck = Math.min(2, h * 0.2)
   return [
-    { x: sx + gap, y: sy - gap - h * 0.6, w, h }, // upper-right (default)
-    { x: sx + gap, y: sy + gap - h * 0.4, w, h }, // lower-right
-    { x: sx - gap - w, y: sy - gap - h * 0.6, w, h }, // upper-left
-    { x: sx - gap - w, y: sy + gap - h * 0.4, w, h }, // lower-left
+    { x: sx + gap, y: sy - gap - h + tuck, w, h }, // upper-right (default)
+    { x: sx + gap, y: sy + gap - tuck, w, h }, // lower-right
+    { x: sx - gap - w, y: sy - gap - h + tuck, w, h }, // upper-left
+    { x: sx - gap - w, y: sy + gap - tuck, w, h }, // lower-left
   ]
 }
 

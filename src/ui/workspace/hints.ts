@@ -45,7 +45,7 @@ export function groupTallies(groups: readonly AnnotationGroup[], counts: Readonl
 
 /** Warning shown when the decoded picture's size differs from the size the marks were made on. */
 export function sizeMismatchMessage(recorded: { width: number; height: number }, decoded: { width: number; height: number }): string {
-  return `This browser decodes the image as ${decoded.width}×${decoded.height} px, but it was annotated at ${recorded.width}×${recorded.height} px. Markers may not line up; try another browser or re-import the original file.`
+  return `Markers may not line up: this browser shows the image at ${decoded.width}×${decoded.height} px, but it was counted at ${recorded.width}×${recorded.height} px. Try another browser, or re-import the original file.`
 }
 
 /** Toast text after an add that landed on top of an existing marker. */

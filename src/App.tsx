@@ -20,7 +20,7 @@ function AppRoot(props: { choice: RepositoryChoice }) {
   const editor = createEditor(repo, { notify: toaster.push, confirm: dialogs.confirm })
   onCleanup(editor.dispose)
   const thumbnails = createThumbnailCache(() => (editor.state.project ? editor.images.blob : null))
-  const actions = createProjectActions(editor, dialogs, thumbnails)
+  const actions = createProjectActions(editor, dialogs, thumbnails, toaster.push)
   const services: AppServices = { editor, toaster, dialogs, thumbnails, actions, isDemo }
 
   onMount(() => void editor.projects.init())

@@ -71,7 +71,7 @@ export function NoProject(props: NoProjectProps) {
         </div>
         <h1 class="start-card__title">Count colonies, plate by plate</h1>
         <p class="start-card__text">
-          A project holds your plate photos, organised into image groups you name yourself. Everything runs in this browser.
+          A project holds your plate photos, organised into image groups you name yourself. Runs in your browser — no server.
         </p>
         <div class="start-card__actions">
           <Button variant="primary" size="lg" icon={Plus} onClick={() => props.onCreate()}>

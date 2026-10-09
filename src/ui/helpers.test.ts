@@ -69,6 +69,7 @@ describe('dialog wording', () => {
   })
   it('explains a decode size mismatch', () => {
     expect(sizeMismatchMessage({ width: 100, height: 80 }, { width: 80, height: 100 })).toMatch(/80×100.*100×80/)
+    expect(removeImageBody(1, false)).toBe('Its 1 annotation is deleted too. This can’t be undone.')
   })
 })
 

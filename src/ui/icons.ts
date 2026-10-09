@@ -61,3 +61,8 @@ export { default as LogOut } from 'lucide-solid/icons/log-out'
 export { default as ArrowRightLeft } from 'lucide-solid/icons/arrow-right-left'
 export { default as ChevronLeft } from 'lucide-solid/icons/chevron-left'
 export { default as Keyboard } from 'lucide-solid/icons/keyboard'
+
+import CircleIcon from 'lucide-solid/icons/circle'
+import { mergeProps } from 'solid-js'
+/** Solid filled circle (the "filled dot" marker style). */
+export const CircleFilled: IconComponent = (props) => CircleIcon(mergeProps(props, { fill: 'currentColor' }))

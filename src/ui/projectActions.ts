@@ -8,6 +8,8 @@ import type { Editor } from '../state/editor'
 import { downloadBlob, IMAGE_ACCEPT, pickFiles, safeFilename } from './download'
 import type { ThumbnailCache } from './images'
 import type { Dialogs } from './primitives'
+import type { Notify } from '../state/messages'
+import { plural } from './format'
 
 export interface ProjectActions {
   newProject(): Promise<void>
@@ -32,14 +34,14 @@ export function defaultProjectName(date = new Date()): string {
 export function removeImageBody(annotationCount: number, fromDrive: boolean): string {
   const parts = [
     annotationCount
-      ? `Its ${annotationCount.toLocaleString()} ${annotationCount === 1 ? 'annotation' : 'annotations'} are removed too. This can’t be undone.`
+      ? `Its ${annotationCount.toLocaleString()} ${annotationCount === 1 ? 'annotation is' : 'annotations are'} deleted too. This can’t be undone.`
       : 'The image is removed from this project.',
   ]
-  if (fromDrive) parts.push('The file stays in Google Drive and won’t be added back automatically.')
+  if (fromDrive) parts.push('The original file stays in Google Drive and won’t be re-imported.')
   return parts.join(' ')
 }
 
-export function createProjectActions(editor: Editor, dialogs: Dialogs, thumbnails: ThumbnailCache): ProjectActions {
+export function createProjectActions(editor: Editor, dialogs: Dialogs, thumbnails: ThumbnailCache, notify: Notify): ProjectActions {
   const { state } = editor
 
   async function ensureProject(): Promise<boolean> {
@@ -95,12 +97,18 @@ export function createProjectActions(editor: Editor, dialogs: Dialogs, thumbnail
 
     async downloadArchive() {
       const blob = await editor.projects.exportArchive()
-      if (blob && state.project) downloadBlob(blob, `${safeFilename(state.project.name)}.zip`)
+      if (!blob || !state.project) return
+      const name = `${safeFilename(state.project.name)}.zip`
+      downloadBlob(blob, name)
+      notify({ tone: 'success', key: 'export', message: `Downloaded ${name}`, detail: 'Images, annotations and summary. Open it again with Import project (.zip).' })
     },
 
     async downloadCsv() {
       const blob = await editor.projects.exportCsv()
-      if (blob && state.project) downloadBlob(blob, `${safeFilename(state.project.name)} summary.csv`)
+      if (!blob || !state.project) return
+      const name = `${safeFilename(state.project.name)} summary.csv`
+      downloadBlob(blob, name)
+      notify({ tone: 'success', key: 'export', message: `Exported ${name}`, detail: `${plural(state.project.images.length, 'image')} · one row per image and annotation group` })
     },
 
     async renameImage(imageId) {

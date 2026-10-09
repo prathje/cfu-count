@@ -125,7 +125,7 @@ export function FloatingToolbar(props: FloatingToolbarProps) {
           disabled={!g()}
           onClick={style.toggle}
         />
-        <Popover open={style.open()} anchor={style.anchor()} onClose={style.close} label="Group style" width={312}>
+        <Popover open={style.open()} anchor={style.anchor()} onClose={style.close} label="Group style" width={328}>
           {stylePanel()}
         </Popover>
       </Show>
@@ -199,7 +199,7 @@ export function FloatingToolbar(props: FloatingToolbarProps) {
               class={more.open() ? 'is-open' : ''}
               onClick={more.toggle}
             />
-            <Popover open={more.open()} anchor={more.anchor()} onClose={more.close} label="More tools" width={320} placement="bottom-end">
+            <Popover open={more.open()} anchor={more.anchor()} onClose={more.close} label="More tools" width={328} placement="bottom-end">
               <div class="more-history">
                 <Button icon={Undo} disabled={!props.canUndo} onClick={() => props.onUndo()}>
                   Undo

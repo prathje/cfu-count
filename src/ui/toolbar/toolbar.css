@@ -226,13 +226,22 @@
 
 .group-option__key {
   display: inline-flex;
-  justify-content: center;
-  width: 18px;
-  font-size: var(--fs-xs);
-  color: var(--c-text-3);
+  justify-content: flex-end;
+  width: 22px;
+  flex: none;
 }
 
-.group-option[aria-selected='true'] .group-option__key {
+.group-option__key kbd {
+  min-width: 20px;
+  text-align: center;
+}
+
+.group-option__check {
+  display: inline-flex;
+  justify-content: center;
+  width: 16px;
+  margin-right: -4px;
+  flex: none;
   color: var(--c-accent);
 }
 
@@ -251,17 +260,58 @@
   margin-bottom: 4px;
 }
 
-.group-manage__row {
+/* Line 1: swatch + full-width name (or rename field). */
+.group-manage__name-row {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 8px;
+  min-height: 32px;
 }
 
 .group-manage__name {
   flex: 1;
   min-width: 0;
-  margin-left: 4px !important;
+  margin-left: -2px !important;
   font-weight: 600;
+}
+
+/* Line 2: actions as compact labelled buttons. */
+.group-manage__actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin: 4px -6px 0;
+}
+
+.group-manage__actions .btn {
+  height: 36px;
+  padding: 0 8px;
+  color: var(--c-text-2);
+}
+
+@media (pointer: coarse) {
+  .group-manage__actions .btn {
+    height: 44px;
+  }
+}
+
+.group-manage__hint {
+  margin-top: 2px;
+  text-align: right;
+}
+
+.group-manage__spacer {
+  flex: 1;
+}
+
+.group-manage__actions .group-manage__delete:not(:disabled) {
+  color: var(--c-danger);
+}
+
+@media (hover: hover) {
+  .group-manage__actions .group-manage__delete:hover:not(:disabled) {
+    background: var(--c-danger-soft);
+  }
 }
 
 /* Style panel */
@@ -274,8 +324,26 @@
 
 .style-panel__head {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 10px;
+}
+
+/* Align the swatch with the title's first line. */
+.style-panel__head .swatch {
+  margin-top: 1px;
+}
+
+.field-block__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--s-2);
+}
+
+.field-block__value {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--c-text);
 }
 
 .style-panel__fields {
@@ -330,20 +398,27 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 5px;
 }
 
 .color-chip {
-  width: 26px;
-  height: 26px;
+  position: relative;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  padding: 0;
   border: 0;
   border-radius: 50%;
   background: var(--chip);
   box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.2);
+  cursor: pointer;
   transition: transform var(--t-fast) var(--ease);
 }
 
 @media (pointer: coarse) {
+  .color-grid {
+    gap: 8px;
+  }
   .color-chip {
     width: 36px;
     height: 36px;
@@ -351,7 +426,7 @@
 }
 
 @media (hover: hover) {
-  .color-chip:hover:not(:disabled) {
+  .color-chip:hover:not(:disabled):not(.is-disabled) {
     transform: scale(1.08);
   }
 }
@@ -363,41 +438,36 @@
     0 0 0 4px var(--c-text);
 }
 
-.color-chip:disabled {
+.color-chip:disabled,
+.color-chip.is-disabled {
   opacity: 0.5;
+  cursor: default;
 }
 
-.color-custom {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 28px;
-  padding: 0 8px 0 4px;
-  border: 1px solid var(--c-border-strong);
-  border-radius: var(--r-pill);
-  font-size: var(--fs-sm);
-  color: var(--c-text-2);
-  cursor: pointer;
+/* Custom colour: a rainbow ring around the current custom colour (white when none). */
+.color-chip--custom {
+  background: conic-gradient(#e5484d, #f5a524, #f0e442, #30a46c, #0091ff, #8e4ec6, #e5484d);
+  box-shadow: none;
 }
 
-.color-custom input {
-  width: 20px;
-  height: 20px;
-  padding: 0;
-  border: 0;
+.color-chip--custom::after {
+  content: '';
+  position: absolute;
+  inset: 4px;
   border-radius: 50%;
-  background: none;
-  cursor: pointer;
+  background: var(--chip);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.18);
 }
 
-.color-custom input::-webkit-color-swatch-wrapper {
-  padding: 0;
+.color-chip--custom.is-checked {
+  box-shadow:
+    0 0 0 2px var(--c-surface),
+    0 0 0 4px var(--c-text);
 }
 
-.color-custom input::-webkit-color-swatch {
-  border: 1px solid rgba(0, 0, 0, 0.2);
-  border-radius: 50%;
+.color-chip--custom:focus-within {
+  outline: 2px solid var(--c-focus);
+  outline-offset: 2px;
 }
 
 .more-history {

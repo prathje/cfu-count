@@ -1,6 +1,6 @@
 import { createEffect, createSignal, For, on, onCleanup, Show } from 'solid-js'
 import type { SourceMismatch } from '../../model/types'
-import { AlertTriangle, ChevronDown, ChevronUp, EyeOff, Lock } from '../icons'
+import { AlertTriangle, ChevronLeft, ChevronRight, EyeOff, Lock } from '../icons'
 import { IconButton } from '../primitives'
 import { GroupSwatch } from '../shared/GroupSwatch'
 import { plural } from '../format'
@@ -51,17 +51,9 @@ export function ImageHeader(props: ImageHeaderProps) {
 
   return (
     <header class="image-header">
-      <div class="image-header__nav">
-        <IconButton icon={ChevronUp} label="Previous image" size="sm" disabled={props.position <= 1} onClick={() => props.onPrevious()} />
-        <IconButton icon={ChevronDown} label="Next image" size="sm" disabled={props.position >= props.of} onClick={() => props.onNext()} />
-      </div>
       <div class="image-header__title">
         <div class="image-header__context">
           <span>{props.imageGroupName ?? 'Ungrouped'}</span>
-          <span aria-hidden="true">·</span>
-          <span>
-            Image {props.position} of {props.of}
-          </span>
           <span aria-hidden="true" class="hide-narrow">·</span>
           <span class="hide-narrow">
             {props.width.toLocaleString()} × {props.height.toLocaleString()} px
@@ -71,6 +63,18 @@ export function ImageHeader(props: ImageHeaderProps) {
           {props.imageName}
         </h1>
       </div>
+      <nav class="pager" aria-label="Images in this project">
+        <IconButton icon={ChevronLeft} label="Previous image" shortcut="[" class="pager__btn" disabled={props.position <= 1} onClick={() => props.onPrevious()} />
+        <span class="pager__label" aria-live="off">
+          <span class="pager__long">
+            Image {props.position} of {props.of}
+          </span>
+          <span class="pager__short" aria-hidden="true">
+            {props.position}/{props.of}
+          </span>
+        </span>
+        <IconButton icon={ChevronRight} label="Next image" shortcut="]" class="pager__btn" disabled={props.position >= props.of} onClick={() => props.onNext()} />
+      </nav>
       <Show when={props.tallies.length > 1}>
         <ul class="tallies" aria-label="Confirmed colonies per annotation group">
           <For each={props.tallies}>

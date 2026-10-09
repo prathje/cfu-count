@@ -1,4 +1,4 @@
-import { createSignal, For, Show, type JSX } from 'solid-js'
+import { createEffect, createSignal, For, Show, type JSX } from 'solid-js'
 import type { ID, ImageRecord } from '../../model/types'
 import { ChevronDown, ChevronUp, ChevronRight, ImagePlus, MoreHorizontal, Pencil, Trash } from '../icons'
 import { InlineEdit, MenuItem, MenuSection, Popover, createPopoverState } from '../primitives'
@@ -11,6 +11,9 @@ export interface ImageGroupSectionProps {
   name: string
   images: readonly ImageRecord[]
   collapsed: boolean
+  /** Name is being edited (controlled by the sidebar so a new group can open in rename mode). */
+  renaming?: boolean
+  onRenamingChange?(renaming: boolean): void
   canMoveUp?: boolean
   canMoveDown?: boolean
   onToggle(): void
@@ -26,13 +29,21 @@ export interface ImageGroupSectionProps {
 export function ImageGroupSection(props: ImageGroupSectionProps) {
   const menu = createPopoverState()
   const [over, setOver] = createSignal(false)
-  const [renaming, setRenaming] = createSignal(false)
+  const renaming = () => !!props.renaming
+  const setRenaming = (on: boolean) => props.onRenamingChange?.(on)
   const listId = `imgs-${props.groupId ?? 'ungrouped'}`
+
+  let section: HTMLElement | undefined
+  // Bring a group that enters rename mode (e.g. just created) into view.
+  createEffect(() => {
+    if (renaming()) queueMicrotask(() => section?.scrollIntoView({ block: 'nearest' }))
+  })
 
   const accepts = (e: DragEvent) => !!e.dataTransfer?.types.includes(IMAGE_DRAG_TYPE)
 
   return (
     <section
+      ref={section}
       class="img-group"
       classList={{ 'is-drop-target': over(), 'is-ungrouped': props.groupId === null }}
       aria-label={props.name}

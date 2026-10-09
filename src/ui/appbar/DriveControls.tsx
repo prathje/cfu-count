@@ -1,7 +1,7 @@
 import { Match, Show, Switch as SolidSwitch } from 'solid-js'
 import type { ProjectStorageLink } from '../../model/types'
 import type { DriveLinkMode, DriveState, SaveStatus } from '../../storage/api'
-import { AlertTriangle, Check, Cloud, CloudAlert, CloudCheck, CloudOff, CloudUpload, FolderOpen, FolderPlus, HardDrive, Loader, LogOut, RefreshCw, type IconComponent } from '../icons'
+import { AlertTriangle, Check, Cloud, CloudAlert, CloudCheck, CloudOff, CloudUpload, Download, FolderOpen, FolderPlus, HardDrive, Loader, LogOut, RefreshCw, type IconComponent } from '../icons'
 import { Button, Popover, createPopoverState } from '../primitives'
 import { driveLabel, saveStatusLabel, type StatusTone } from '../format'
 
@@ -14,6 +14,8 @@ export interface DriveActions {
   onSaveNow(): void
   onKeepMine(): void
   onTakeDrive(): void
+  /** Download the open project as a .zip (the backup path when Drive is unavailable). */
+  onDownloadArchive(): void
 }
 
 /** Shared inputs of the save pill and Drive button. */
@@ -157,21 +159,26 @@ function DrivePanel(props: SyncInfo & DriveActions & { onAction(): void }) {
         {(c) => (
           <div class="conflict">
             <p>
-              Someone (or another device) changed {c().files.length === 1 ? 'a file' : `${c().files.length} files`} in the Drive folder after this
-              browser last read it. Choose which version to keep — the other is not lost.
+              The copy in Google Drive changed since this browser last saved it — from another device or a colleague. Choose which version to
+              keep.
             </p>
+            <div class="conflict__files-label">{c().files.length === 1 ? 'Changed file' : `Changed files (${c().files.length})`}</div>
             <ul class="conflict__files">
               {c().files.slice(0, 4).map((f) => (
                 <li>{f}</li>
               ))}
+              {c().files.length > 4 ? <li>…and {c().files.length - 4} more</li> : null}
             </ul>
             <div class="conflict__actions">
               <Button variant="primary" onClick={act(props.onKeepMine)}>
-                Keep mine
+                Keep this browser’s version
               </Button>
-              <Button onClick={act(props.onTakeDrive)}>Take Drive version</Button>
+              <Button onClick={act(props.onTakeDrive)}>Use the Drive version</Button>
             </div>
-            <p class="field__hint">“Keep mine” overwrites the Drive copy. “Take Drive version” keeps your local copy as a separate backup project.</p>
+            <p class="field__hint">
+              Keeping this browser’s version replaces the files in the Drive folder. Using the Drive version keeps this browser’s copy as a separate
+              backup project.
+            </p>
           </div>
         )}
       </Show>
@@ -181,12 +188,26 @@ function DrivePanel(props: SyncInfo & DriveActions & { onAction(): void }) {
         <SolidSwitch>
           <Match when={props.drive.state === 'unconfigured'}>
             <p class="drive-panel__text">
-              Google Drive isn’t set up for this copy of the app. It needs a Google OAuth client ID configured at build time (see the setup
-              guide). Your work is saved in this browser and can be downloaded as a .zip.
+              Google Drive isn’t available in this copy of CFU Count. Your work is saved in this browser — use Download project (.zip) to back it up.
             </p>
+            <Show when={props.storage}>
+              <Button icon={Download} onClick={act(props.onDownloadArchive)}>
+                Download .zip
+              </Button>
+            </Show>
+            <details class="drive-panel__admin">
+              <summary>For administrators</summary>
+              <p>
+                Build the app with <code>VITE_GOOGLE_CLIENT_ID</code>, <code>VITE_GOOGLE_API_KEY</code> and <code>VITE_GOOGLE_APP_ID</code>, and add this
+                site’s address as an authorised JavaScript origin. See docs/google-drive-setup.md.
+              </p>
+            </details>
           </Match>
           <Match when={props.drive.state === 'disconnected'}>
-            <p class="drive-panel__text">Connect your Google account to save this project to a Drive folder and open it on other devices.</p>
+            <p class="drive-panel__text">
+              Save this project to a Google Drive folder to open it on another computer or share it with colleagues. Your work stays saved in
+              this browser either way.
+            </p>
             <Button variant="primary" icon={Cloud} onClick={act(props.onConnect)}>
               Connect Google Drive
             </Button>
@@ -198,10 +219,11 @@ function DrivePanel(props: SyncInfo & DriveActions & { onAction(): void }) {
           </Match>
           <Match when={props.drive.state === 'expired'}>
             <p class="drive-panel__text">
-              Your Google session{account() ? ` for ${account()}` : ''} expired. Changes are kept in this browser until you reconnect.
+              Google sign-in{account() ? ` for ${account()}` : ''} has expired, so changes aren’t reaching Drive. They are safe in this browser;
+              reconnect to continue saving to Drive.
             </p>
             <Button variant="primary" icon={RefreshCw} onClick={act(props.onConnect)}>
-              Reconnect
+              Reconnect Google Drive
             </Button>
           </Match>
           <Match when={props.drive.state === 'connected'}>
@@ -210,7 +232,7 @@ function DrivePanel(props: SyncInfo & DriveActions & { onAction(): void }) {
               <dd>{account() ?? 'Connected'}</dd>
               <dt>Folder</dt>
               <dd>
-                <Show when={linked()} fallback={<span class="muted">This project isn’t linked to Drive yet</span>}>
+                <Show when={linked()} fallback={<span class="muted">Not saved to Drive yet</span>}>
                   {(l) => (
                     <>
                       <FolderOpen size={14} aria-hidden="true" /> {l().folderName}
@@ -228,7 +250,7 @@ function DrivePanel(props: SyncInfo & DriveActions & { onAction(): void }) {
                       Save to a new Drive folder
                     </Button>
                     <Button icon={FolderOpen} onClick={act(() => props.onLink('pick-folder'))}>
-                      Choose existing folder…
+                      Save to an existing folder…
                     </Button>
                   </Show>
                 }
@@ -238,7 +260,7 @@ function DrivePanel(props: SyncInfo & DriveActions & { onAction(): void }) {
                 </Button>
               </Show>
               <Button variant="ghost" icon={FolderOpen} onClick={act(props.onOpenFromDrive)}>
-                Open project from Drive…
+                Open a project from Drive…
               </Button>
               <Button variant="ghost" icon={LogOut} onClick={act(props.onDisconnect)}>
                 Disconnect

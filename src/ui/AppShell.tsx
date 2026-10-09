@@ -30,6 +30,18 @@ export function AppShell() {
   createEffect(on(narrow, (n) => setSidebarOpen(!n), { defer: true }))
   // Selecting an image on a narrow screen closes the drawer.
   createEffect(on(() => state.currentImageId, () => narrow() && setSidebarOpen(false), { defer: true }))
+  // Drawer: Escape closes it (popovers and dialogs handle their own Escape first).
+  const drawerOpen = () => narrow() && sidebarOpen() && state.phase === 'ready'
+  const onDrawerKey = (e: KeyboardEvent) => {
+    if (e.key !== 'Escape' || e.defaultPrevented || !drawerOpen() || document.querySelector('dialog[open]')) return
+    setSidebarOpen(false)
+    document.querySelector<HTMLElement>('[aria-controls="sidebar"]')?.focus({ preventScroll: true })
+  }
+  window.addEventListener('keydown', onDrawerKey)
+  onCleanup(() => window.removeEventListener('keydown', onDrawerKey))
+  /** App-bar popovers open over the page: close the drawer so they never stack on top of it. */
+  const dismissDrawer = () => drawerOpen() && setSidebarOpen(false)
+
   // Project switch: drop cached thumbnails.
   createEffect(on(() => state.project?.id, () => thumbnails.clear(), { defer: true }))
 
@@ -85,6 +97,7 @@ export function AppShell() {
     onSaveNow: () => void drive.save(),
     onKeepMine: () => void drive.save(true),
     onTakeDrive: () => void drive.takeRemote(),
+    onDownloadArchive: () => void actions.downloadArchive(),
   }
   const sync = (): SyncInfo => ({
     status: editor.saveStatus(),
@@ -102,6 +115,7 @@ export function AppShell() {
         compact={phone()}
         isDemo={isDemo}
         project={
+          <div class="contents" onClick={dismissDrawer}>
           <ProjectMenu
             projectName={state.project?.name ?? null}
             projectId={state.project?.id ?? null}
@@ -118,9 +132,18 @@ export function AppShell() {
             onDelete={() => void actions.deleteProject()}
             onShowShortcuts={() => setHelpOpen(true)}
           />
+          </div>
         }
-        status={<SaveStatusPill {...sync()} {...driveActions} compact={phone()} />}
-        drive={<DriveButton {...sync()} {...driveActions} compact={narrow()} />}
+        status={
+          <div class="contents" onClick={dismissDrawer}>
+            <SaveStatusPill {...sync()} {...driveActions} compact={phone()} />
+          </div>
+        }
+        drive={
+          <div class="contents" onClick={dismissDrawer}>
+            <DriveButton {...sync()} {...driveActions} compact={narrow()} />
+          </div>
+        }
       />
 
       <div class="app__body">

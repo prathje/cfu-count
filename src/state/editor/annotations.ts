@@ -103,7 +103,10 @@ export function createAnnotations(ctx: EditorContext, groups: GroupCommands): An
       tone: 'warning',
       key: 'blocked',
       message: editBlockMessage(reason, group),
-      detail: reason === 'hidden' ? 'Hidden groups can’t be edited, so no change happens out of sight.' : undefined,
+      detail:
+        reason === 'hidden'
+          ? 'Hidden groups can’t be edited, so no change happens out of sight.'
+          : 'Locked groups can’t be added to or erased. Visibility still works.',
       action: fixFor(reason, group),
     })
   }

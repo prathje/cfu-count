@@ -223,9 +223,10 @@ export function createEditor(repo: ProjectRepository, deps: EditorDeps): Editor 
 
       async guardUnsaved(action) {
         if (await saver.flush()) return true
+        const verb = action.charAt(0).toLowerCase() + action.slice(1)
         return confirm({
-          title: 'Discard changes that couldn’t be saved?',
-          body: `Your latest changes could not be saved in this browser (${errorText(saver.lastError())}). ${action} would discard them. Choose “Keep editing” to stay and retry, or download a .zip of the project first.`,
+          title: 'Discard unsaved changes?',
+          body: `Your latest changes couldn’t be saved in this browser, so ${verb} would lose them. Keep editing to try again, or download a .zip of the project first. (${errorText(saver.lastError())})`,
           confirmLabel: 'Discard changes',
           cancelLabel: 'Keep editing',
           danger: true,

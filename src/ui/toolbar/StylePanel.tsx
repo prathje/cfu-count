@@ -2,7 +2,7 @@ import { For, Show } from 'solid-js'
 import type { AnnotationGroup } from '../../model/types'
 import { LABEL_SIZE_RANGE, type GroupStylePatch } from '../../model/groups'
 import { GROUP_PALETTE, colorName } from '../../model/palette'
-import { Circle, CircleDot, Lock, LockOpen } from '../icons'
+import { Circle, CircleFilled, Lock, LockOpen } from '../icons'
 import { Button, SegmentedControl, Slider, Switch } from '../primitives'
 import { GroupSwatch } from '../shared/GroupSwatch'
 
@@ -15,6 +15,7 @@ export interface StylePanelProps {
 
 export function StylePanel(props: StylePanelProps) {
   const locked = () => props.group.locked
+  const isCustom = () => !GROUP_PALETTE.some((c) => c.value === props.group.color.toLowerCase())
   return (
     <div class="style-panel">
       <div class="style-panel__head">
@@ -45,7 +46,7 @@ export function StylePanel(props: StylePanelProps) {
             value={props.group.render}
             disabled={locked()}
             options={[
-              { value: 'dot', label: 'Filled dot', icon: CircleDot },
+              { value: 'dot', label: 'Filled dot', icon: CircleFilled },
               { value: 'circle', label: 'Circle outline', icon: Circle },
             ]}
             onChange={(render) => props.onChange({ render })}
@@ -69,14 +70,19 @@ export function StylePanel(props: StylePanelProps) {
           min={2}
           max={24}
           disabled={locked()}
-          format={(v) => `${v} px on screen`}
+          format={(v) => `${v} px radius · on screen`}
           onInput={(size) => props.onChange({ size })}
         />
-        <p class="field__hint">Display size stays constant while zooming. It is not a measured colony size.</p>
+        <p class="field__hint">Stays the same size while you zoom in (slightly smaller when far zoomed out). A display size, not a measured colony size.</p>
 
         <div class="field-block">
-          <span class="field__label">Colour</span>
-          <div class="color-grid" role="radiogroup" aria-label="Group colour">
+          <div class="field-block__head">
+            <span class="field__label" id="colour-label">
+              Colour
+            </span>
+            <span class="field-block__value">{colorName(props.group.color)}</span>
+          </div>
+          <div class="color-grid" role="radiogroup" aria-labelledby="colour-label">
             <For each={GROUP_PALETTE}>
               {(c) => (
                 <button
@@ -92,18 +98,24 @@ export function StylePanel(props: StylePanelProps) {
                 />
               )}
             </For>
-            <label class="color-custom" title="Custom colour">
+            <label
+              class="color-chip color-chip--custom"
+              classList={{ 'is-disabled': locked(), 'is-checked': isCustom() }}
+              title="Custom colour"
+              style={{ '--chip': isCustom() ? props.group.color : '#ffffff' }}
+            >
               <input
                 type="color"
+                class="sr-only"
+                role="radio"
+                aria-checked={isCustom()}
                 value={props.group.color}
                 disabled={locked()}
                 aria-label="Custom colour"
                 onInput={(e) => props.onChange({ color: e.currentTarget.value })}
               />
-              <span>Custom</span>
             </label>
           </div>
-          <span class="field__hint">{colorName(props.group.color)}</span>
         </div>
 
         <Switch
@@ -119,11 +131,11 @@ export function StylePanel(props: StylePanelProps) {
           min={LABEL_SIZE_RANGE.min}
           max={LABEL_SIZE_RANGE.max}
           disabled={locked() || !props.group.labels}
-          format={(v) => `${v} px`}
+          format={(v) => (props.group.labels ? `${v} px text` : 'Off')}
           onInput={(labelSize) => props.onChange({ labelSize })}
         />
         <Show when={!props.group.labels && !locked()}>
-          <p class="field__hint">Turn labels on to use the label size.</p>
+          <p class="field__hint">Turn on Labels to set the number size.</p>
         </Show>
       </fieldset>
     </div>

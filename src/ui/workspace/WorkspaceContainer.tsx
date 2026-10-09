@@ -113,6 +113,30 @@ export function WorkspaceContainer(props: WorkspaceContainerProps) {
               onNext={() => images.selectAdjacent(1)}
             />
             <div class="stage" ref={setStage} {...{ [CANVAS_GUARD_ATTR]: '' }}>
+              {/* DOM order = visual/tab order: toolbar, image, footer. */}
+              <div class="toolbar-dock">
+                <FloatingToolbar
+                  mode={mode()}
+                  groups={groups.list()}
+                  counts={annotations.counts()}
+                  activeGroup={groups.active()}
+                  tool={state.tool}
+                  canUndo={annotations.canUndo()}
+                  canRedo={annotations.canRedo()}
+                  mod={MOD}
+                  onSelectGroup={view.setActiveGroup}
+                  onCreateGroup={() => groups.create()}
+                  onRenameGroup={groups.rename}
+                  onDeleteGroup={(id) => void actions.deleteAnnotationGroup(id)}
+                  onMoveGroup={groups.move}
+                  onToggleHidden={() => state.activeGroupId && groups.toggleHidden(state.activeGroupId)}
+                  onToggleLocked={() => state.activeGroupId && groups.toggleLocked(state.activeGroupId)}
+                  onStyleChange={(patch) => state.activeGroupId && groups.setStyle(state.activeGroupId, patch)}
+                  onTool={view.setTool}
+                  onUndo={annotations.undo}
+                  onRedo={annotations.redo}
+                />
+              </div>
               <Viewport
                 image={readyImage(bitmap())?.source ?? null}
                 imageWidth={image().width}
@@ -157,29 +181,6 @@ export function WorkspaceContainer(props: WorkspaceContainerProps) {
                   </div>
                 )}
               </Show>
-              <div class="toolbar-dock">
-                <FloatingToolbar
-                  mode={mode()}
-                  groups={groups.list()}
-                  counts={annotations.counts()}
-                  activeGroup={groups.active()}
-                  tool={state.tool}
-                  canUndo={annotations.canUndo()}
-                  canRedo={annotations.canRedo()}
-                  mod={MOD}
-                  onSelectGroup={view.setActiveGroup}
-                  onCreateGroup={() => groups.create()}
-                  onRenameGroup={groups.rename}
-                  onDeleteGroup={(id) => void actions.deleteAnnotationGroup(id)}
-                  onMoveGroup={groups.move}
-                  onToggleHidden={() => state.activeGroupId && groups.toggleHidden(state.activeGroupId)}
-                  onToggleLocked={() => state.activeGroupId && groups.toggleLocked(state.activeGroupId)}
-                  onStyleChange={(patch) => state.activeGroupId && groups.setStyle(state.activeGroupId, patch)}
-                  onTool={view.setTool}
-                  onUndo={annotations.undo}
-                  onRedo={annotations.redo}
-                />
-              </div>
               <ViewportFooter
                 scale={bitmap().status === 'ready' ? scale() : null}
                 visible={annotations.split().visible}
