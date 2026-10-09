@@ -140,4 +140,13 @@ export interface ViewportProps {
    * Taps elsewhere keep the tool's behaviour (Add/Erase act on confirmed markers).
    */
   onSuggestionTap?(index: number): void
+  /**
+   * Eyedropper mode: while true, a completed tap/click (mouse, pen or finger) or
+   * Enter on the focused viewport (picks the view centre) reports an image point
+   * through onPick instead of adding/erasing or toggling suggestions. Panning and
+   * zooming work as usual (one finger pans); points outside the image are ignored.
+   * The cursor is a crosshair. The viewport never leaves pick mode by itself.
+   */
+  pickMode?: boolean
+  onPick?(x: number, y: number): void
 }

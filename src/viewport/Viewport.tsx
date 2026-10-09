@@ -38,6 +38,7 @@ import {
   fitView,
   imageToScreen,
   panBy,
+  screenToImage,
   resizeView,
   scaleLimits,
   viewForRect,
@@ -127,6 +128,7 @@ export function Viewport(props: ViewportProps) {
   )
   const cursor = createMemo(() => {
     if (navigating()) return 'grabbing'
+    if (props.pickMode && !spaceHeld()) return 'crosshair'
     if (props.tool === 'pan' || spaceHeld()) return 'grab'
     if (editBlock(activeGroup())) return 'not-allowed'
     return props.tool === 'erase' ? ERASER_CURSOR : 'crosshair'
@@ -346,7 +348,7 @@ export function Viewport(props: ViewportProps) {
   }
 
   createEffect(() => {
-    void props.tool, spaceHeld(), activeGroup()
+    void props.tool, spaceHeld(), activeGroup(), props.pickMode
     schedule() // refresh hover preview
   })
 
@@ -382,7 +384,7 @@ export function Viewport(props: ViewportProps) {
   }
 
   function updateHover() {
-    if (!hover || spaceHeld() || machine.modeKind !== 'idle') return hideHover()
+    if (!hover || spaceHeld() || machine.modeKind !== 'idle' || props.pickMode) return hideHover()
     if (props.tool !== 'pan') {
       const s = suggestionHit(hover.x, hover.y, hover.type)
       if (s) {
@@ -422,7 +424,14 @@ export function Viewport(props: ViewportProps) {
 
   // --------------------------------------------------------------- gestures
 
+  /** Pick mode: report an image point inside the image; never annotates. */
+  function pick(sx: number, sy: number) {
+    const p = screenToImage(view, sx, sy)
+    if (p.x >= 0 && p.y >= 0 && p.x < props.imageWidth && p.y < props.imageHeight) props.onPick?.(p.x, p.y)
+  }
+
   function handleTap(sx: number, sy: number, pointerType: PointerKind) {
+    if (props.pickMode) return pick(sx, sy)
     const s = suggestionHit(sx, sy, pointerType)
     if (s) return props.onSuggestionTap?.(s.index)
     const intent = resolveTap(scene(), props.tool, sx, sy, pointerType)
@@ -469,6 +478,10 @@ export function Viewport(props: ViewportProps) {
           hideHover()
           break
         case 'navTap': {
+          if (props.pickMode) {
+            pick(e.x, e.y) // a finger tap picks too (one finger still pans)
+            break
+          }
           // Reviewing suggestions never edits annotations, so a finger may toggle them.
           const s = suggestionHit(e.x, e.y, 'touch')
           if (s) props.onSuggestionTap?.(s.index)
@@ -496,7 +509,11 @@ export function Viewport(props: ViewportProps) {
     }
   }
 
-  const ctx = () => ({ tool: props.tool, touchAnnotates: props.touchAnnotates, spaceHeld: spaceHeld() })
+  // Pick mode: pen/mouse taps as in Add, fingers navigate and tap (navTap) to pick.
+  const ctx = () =>
+    props.pickMode
+      ? { tool: 'add' as const, touchAnnotates: false, spaceHeld: spaceHeld() }
+      : { tool: props.tool, touchAnnotates: props.touchAnnotates, spaceHeld: spaceHeld() }
 
   function onPointerDown(e: PointerEvent) {
     // Suppress compatibility mouse events, text selection and native drag.
@@ -613,6 +630,10 @@ export function Viewport(props: ViewportProps) {
         break
       case 'ArrowDown':
         setView(panBy(view, 0, -step))
+        break
+      case 'Enter':
+        if (!props.pickMode) handled = false
+        else pick(viewport.width / 2, viewport.height / 2) // keyboard: pick at the view centre
         break
       default:
         handled = false
